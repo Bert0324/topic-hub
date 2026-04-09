@@ -1,4 +1,5 @@
 import { SetupContext } from './setup-context';
+import { SkillContext } from './skill-context';
 
 export interface UserIdentity {
   userId: string;
@@ -33,10 +34,12 @@ export interface SkillCommand {
 export interface AuthSkillManifest {
   name: string;
   version: string;
+  ai?: boolean;
 }
 
 export interface AuthSkill {
   manifest: AuthSkillManifest;
+  init?(ctx: SkillContext): void;
   authorize(params: AuthorizeParams): Promise<AuthResult>;
   getCommands?(): SkillCommand[];
   runSetup?(ctx: SetupContext): Promise<void>;

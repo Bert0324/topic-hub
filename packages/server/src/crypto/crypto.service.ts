@@ -1,20 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
-
-const DEV_KEY = 'a'.repeat(64);
+import { SecretManager } from './secret-manager';
 
 @Injectable()
 export class CryptoService {
   private readonly key: Buffer;
 
-  constructor() {
-    const envKey = process.env.ENCRYPTION_KEY;
-
-    if (!envKey && process.env.NODE_ENV === 'production') {
-      throw new Error('ENCRYPTION_KEY must be set in production');
-    }
-
-    this.key = Buffer.from(envKey ?? DEV_KEY, 'hex');
+  constructor(private readonly secretManager: SecretManager) {
+    this.key = this.secretManager.getEncryptionKey();
   }
 
   encrypt(plaintext: string): string {

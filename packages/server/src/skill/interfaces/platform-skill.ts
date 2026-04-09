@@ -1,5 +1,6 @@
 import { SetupContext } from './setup-context';
 import { CardData } from './type-skill';
+import { SkillContext } from './skill-context';
 
 export type PlatformCapability = 'group_management' | 'push' | 'commands';
 
@@ -9,6 +10,7 @@ export interface PlatformSkillManifest {
   version: string;
   capabilities: PlatformCapability[];
   webhookPath?: string;
+  ai?: boolean;
 }
 
 export interface CreateGroupParams {
@@ -41,6 +43,7 @@ export interface CommandResult {
 
 export interface PlatformSkill {
   manifest: PlatformSkillManifest;
+  init?(ctx: SkillContext): void;
   createGroup?(params: CreateGroupParams): Promise<GroupResult>;
   inviteToGroup?(params: {
     tenantId: string;

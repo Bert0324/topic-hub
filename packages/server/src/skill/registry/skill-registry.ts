@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Optional, Inject } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ReturnModelType } from '@typegoose/typegoose';
 import { SkillCategory } from '../../common/enums';
@@ -9,6 +9,7 @@ import { PlatformSkill } from '../interfaces/platform-skill';
 import { AuthSkill } from '../interfaces/auth-skill';
 import { AdapterSkill } from '../interfaces/adapter-skill';
 import { SkillLoader } from './skill-loader';
+import { AiService } from '../../ai/ai.service';
 
 type AnySkill = TypeSkill | PlatformSkill | AuthSkill | AdapterSkill;
 
@@ -32,6 +33,7 @@ export class SkillRegistry implements OnModuleInit {
     private readonly tenantConfigModel: ReturnModelType<
       typeof TenantSkillConfig
     >,
+    @Optional() @Inject(AiService) private readonly aiService: AiService | null,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -126,6 +128,7 @@ export class SkillRegistry implements OnModuleInit {
           .exec();
 
         this.register(skill, registration as unknown as SkillRegistration);
+        this.initSkill(skill);
       } catch (err) {
         this.logger.error(`Failed to load skill: ${manifest.name}`, err);
       }
@@ -160,6 +163,23 @@ export class SkillRegistry implements OnModuleInit {
         return { sourceSystem: manifest.sourceSystem };
       default:
         return {};
+    }
+  }
+
+  private initSkill(skill: AnySkill): void {
+    if (typeof (skill as any).init !== 'function') return;
+
+    const manifest = skill.manifest as any;
+    const wantsAi = manifest.ai === true;
+    const aiService = wantsAi ? this.aiService : null;
+
+    try {
+      (skill as any).init({ aiService });
+      if (wantsAi && aiService) {
+        this.logger.log(`Skill ${manifest.name} initialized with AiService`);
+      }
+    } catch (err) {
+      this.logger.error(`Failed to init skill ${manifest.name}`, err);
     }
   }
 }

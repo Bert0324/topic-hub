@@ -45,6 +45,10 @@ Topic Hub 本身只是一个引擎。所有具体能力都通过 Skill 插件提
 
 不装 Auth Skill？所有人都有全部权限。不装 Adapter？手动创建 Topic 就好。**按需组合，不用的不装。**
 
+### AI 增强 Skill
+
+Skill 可选择性地使用 AI。当 `AI_ENABLED=true` 时，在 manifest 中声明 `ai: true` 的 Skill 会收到 `AiService`，可以在生命周期钩子中调用（例如自动分析告警、生成摘要等）。AI 提供商可插拔——默认为火山引擎 Ark（豆包大模型），通过环境变量配置。AI 不可用时 Skill 平滑降级，核心操作不受影响。
+
 ### Tenant（租户）
 
 一套部署服务多个团队。每个团队有独立的数据、独立的 Skill 配置、独立的 IM 应用凭证。团队之间互不可见。
@@ -164,6 +168,16 @@ topichub-admin tenant create --name "Team Name"   # 创建租户
 topichub-admin tenant list                        # 查看租户列表
 ```
 
+### AI 管理
+
+```bash
+topichub-admin ai status             # 查看 AI 提供商状态
+topichub-admin ai enable             # 为当前租户启用 AI
+topichub-admin ai disable            # 为当前租户禁用 AI
+topichub-admin ai config --show      # 查看 AI 配置和速率限制
+topichub-admin ai usage              # 查看 AI 用量统计
+```
+
 ### 其他
 
 ```bash
@@ -253,6 +267,42 @@ topichub-admin skill enable incident-type
 /topichub create incident --severity P0 --affected-service payments
 ```
 
+### AI 增强 Skill 示例
+
+在 manifest 中添加 `ai: true`，实现 `init()` 接收 `AiService`：
+
+```typescript
+export default {
+  manifest: {
+    name: 'smart-alert-type',
+    topicType: 'smart-alert',
+    version: '1.0.0',
+    ai: true,  // 声明使用 AI
+    // ... fieldSchema, cardTemplate 等
+  },
+
+  init(ctx) {
+    this.ai = ctx.aiService;  // AI 不可用时为 null
+  },
+
+  async onTopicCreated(ctx) {
+    if (!this.ai) return;  // 平滑降级
+    const response = await this.ai.complete({
+      tenantId: ctx.tenantId,
+      skillName: this.manifest.name,
+      input: [
+        { role: 'system', content: [{ type: 'input_text', text: '分析这个告警。' }] },
+        { role: 'user', content: [{ type: 'input_text', text: JSON.stringify(ctx.topic.metadata) }] },
+      ],
+    });
+    if (response) {
+      // 使用 response.content 获取 AI 生成的内容
+    }
+  },
+  // ...
+};
+```
+
 ---
 
 ## 部署
@@ -276,6 +326,13 @@ docker compose up -d
 | `SKILLS_DIR` | `./skills` | Skill 目录 |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `TOKEN_EXPIRY_DAYS` | `30` | Admin Token 有效期（天） |
+| `AI_ENABLED` | `false` | 启用 AI（`true` / `false`） |
+| `AI_PROVIDER` | `ark` | AI 提供商（`ark` = 火山引擎） |
+| `AI_API_URL` | `https://ark.cn-beijing.volces.com/api/v3` | AI API 地址（内部部署改为内网地址） |
+| `AI_API_KEY` | — | AI API Bearer Token |
+| `AI_MODEL` | `doubao-seed-2-0-pro-260215` | 模型标识符 |
+| `AI_TIMEOUT_MS` | `10000` | AI 请求超时（毫秒） |
+| `AI_RATE_LIMIT_GLOBAL` | `1000` | 平台级 AI 每小时请求上限 |
 
 ### 生产清单
 

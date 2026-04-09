@@ -19,6 +19,7 @@ import { WebhookController } from './webhook.controller';
   imports: [CoreModule, SkillModule, TenantModule],
   controllers: [CommandController, WebhookController],
   providers: [
+    CommandController,
     CommandParser,
     CommandRouter,
     CreateHandler,
