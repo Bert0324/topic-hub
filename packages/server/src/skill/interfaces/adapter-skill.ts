@@ -1,4 +1,5 @@
 import { SetupContext } from './setup-context';
+import { SkillContext } from './skill-context';
 
 export interface AdapterSkillManifest {
   name: string;
@@ -6,6 +7,7 @@ export interface AdapterSkillManifest {
   version: string;
   webhookPath: string;
   supportedEvents: string[];
+  ai?: boolean;
 }
 
 export interface TopicEventPayload {
@@ -20,6 +22,7 @@ export interface TopicEventPayload {
 
 export interface AdapterSkill {
   manifest: AdapterSkillManifest;
+  init?(ctx: SkillContext): void;
   transformWebhook(
     payload: unknown,
     headers: Record<string, string>,

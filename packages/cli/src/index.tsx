@@ -26,6 +26,11 @@ async function main() {
       await handleHealthCommand();
       break;
     }
+    case 'ai': {
+      const { handleAiCommand } = await import('./commands/ai/index.js');
+      await handleAiCommand(subcommand, restArgs);
+      break;
+    }
     case 'auth': {
       const { saveAdminToken } = await import('./auth/auth.js');
       if (args[1]) {
@@ -57,7 +62,7 @@ async function main() {
     }
     default:
       console.log('Usage: topichub-admin <command> [subcommand] [args]');
-      console.log('Commands: skill, tenant, stats, health, auth, login, logout');
+      console.log('Commands: skill, tenant, stats, health, ai, auth, login, logout');
   }
 }
 

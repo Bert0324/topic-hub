@@ -45,6 +45,10 @@ Topic Hub is just an engine. All actual capabilities come from **Skill** plugins
 
 No Auth Skill installed? Everyone has full access. No Adapter? Just create Topics manually. **Mix and match — only install what you need.**
 
+### AI-Powered Skills
+
+Skills can optionally use AI. When `AI_ENABLED=true`, Skills that declare `ai: true` in their manifest receive an `AiService` they can call in their lifecycle hooks (e.g., auto-analyzing alerts, generating summaries). The AI provider is pluggable — the default is Volcengine Ark (Doubao Seed model), configurable via environment variables. When AI is unavailable, Skills degrade gracefully — core operations are never blocked.
+
 ### Tenant
 
 One deployment serves many teams. Each team gets isolated data, independent Skill config, and their own IM app credentials. Teams are invisible to each other.
@@ -164,6 +168,16 @@ topichub-admin tenant create --name "Team Name"
 topichub-admin tenant list
 ```
 
+### AI management
+
+```bash
+topichub-admin ai status             # check AI provider health
+topichub-admin ai enable             # enable AI for your tenant
+topichub-admin ai disable            # disable AI for your tenant
+topichub-admin ai config --show      # view AI config and rate limit
+topichub-admin ai usage              # view AI usage stats
+```
+
 ### Utilities
 
 ```bash
@@ -253,6 +267,42 @@ Now users can type in IM:
 /topichub create incident --severity P0 --affected-service payments
 ```
 
+### AI-Powered Skill Example
+
+Add `ai: true` to your manifest and implement `init()` to receive `AiService`:
+
+```typescript
+export default {
+  manifest: {
+    name: 'smart-alert-type',
+    topicType: 'smart-alert',
+    version: '1.0.0',
+    ai: true,  // opt-in to AI
+    // ... fieldSchema, cardTemplate, etc.
+  },
+
+  init(ctx) {
+    this.ai = ctx.aiService;  // null if AI is unavailable
+  },
+
+  async onTopicCreated(ctx) {
+    if (!this.ai) return;  // graceful fallback
+    const response = await this.ai.complete({
+      tenantId: ctx.tenantId,
+      skillName: this.manifest.name,
+      input: [
+        { role: 'system', content: [{ type: 'input_text', text: 'Analyze this alert.' }] },
+        { role: 'user', content: [{ type: 'input_text', text: JSON.stringify(ctx.topic.metadata) }] },
+      ],
+    });
+    if (response) {
+      // use response.content for AI-generated insights
+    }
+  },
+  // ...
+};
+```
+
 ---
 
 ## Deployment
@@ -276,6 +326,13 @@ Starts MongoDB 7 + Topic Hub server at `http://localhost:3000`.
 | `SKILLS_DIR` | `./skills` | Skills directory |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `TOKEN_EXPIRY_DAYS` | `30` | Admin Token expiry in days |
+| `AI_ENABLED` | `false` | Enable AI for Skills (`true` / `false`) |
+| `AI_PROVIDER` | `ark` | AI provider (`ark` for Volcengine) |
+| `AI_API_URL` | `https://ark.cn-beijing.volces.com/api/v3` | AI API endpoint (change for internal deployments) |
+| `AI_API_KEY` | — | AI API Bearer token |
+| `AI_MODEL` | `doubao-seed-2-0-pro-260215` | AI model identifier |
+| `AI_TIMEOUT_MS` | `10000` | AI request timeout (ms) |
+| `AI_RATE_LIMIT_GLOBAL` | `1000` | Platform-wide AI requests/hour |
 
 ### Production checklist
 

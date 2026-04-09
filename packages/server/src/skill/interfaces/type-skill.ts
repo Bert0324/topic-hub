@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SkillContext } from './skill-context';
 
 export interface CustomArgDefinition {
   name: string;
@@ -48,6 +49,7 @@ export interface TypeSkillManifest {
   invitationRules?: InvitationRule[];
   customArgs?: CustomArgDefinition[];
   cardTemplate: CardTemplate;
+  ai?: boolean;
 }
 
 export interface ValidationResult {
@@ -64,6 +66,7 @@ export interface TopicContext {
 
 export interface TypeSkill {
   manifest: TypeSkillManifest;
+  init?(ctx: SkillContext): void;
   onTopicCreated?(ctx: TopicContext): Promise<void> | void;
   onTopicUpdated?(ctx: TopicContext): Promise<void> | void;
   onTopicStatusChanged?(

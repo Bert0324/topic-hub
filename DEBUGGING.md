@@ -45,6 +45,13 @@ cd packages/server && pnpm dev
 | `SKILLS_DIR` | `./skills` | Skill 自动发现目录 |
 | `ENCRYPTION_KEY` | 开发默认值 | AES-256 加密密钥（生产环境必须设置） |
 | `JWKS_CONFIGS` | 内置 Feishu/Slack | JWKS 端点配置（JSON） |
+| `AI_ENABLED` | `false` | AI 总开关 |
+| `AI_PROVIDER` | `ark` | AI 提供商（目前支持 `ark`） |
+| `AI_API_URL` | `https://ark.cn-beijing.volces.com/api/v3` | AI API 地址（内部部署改为内网地址） |
+| `AI_API_KEY` | — | AI API Bearer Token |
+| `AI_MODEL` | `doubao-seed-2-0-pro-260215` | 模型标识符 |
+| `AI_TIMEOUT_MS` | `10000` | 单次 AI 请求超时（毫秒） |
+| `AI_RATE_LIMIT_GLOBAL` | `1000` | 平台级每小时请求上限 |
 
 开发时推荐使用 pretty 日志：
 
@@ -163,6 +170,29 @@ curl -X POST http://localhost:3000/admin/skills \
 curl http://localhost:3000/admin/stats
 ```
 
+### AI 管理
+
+```bash
+# AI 提供商状态
+curl http://localhost:3000/admin/ai/status
+
+# 租户 AI 配置
+curl http://localhost:3000/admin/tenants/<tenant-id>/ai
+
+# 启用 AI
+curl -X PATCH http://localhost:3000/admin/tenants/<tenant-id>/ai \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true}'
+
+# 设置速率限制
+curl -X PATCH http://localhost:3000/admin/tenants/<tenant-id>/ai \
+  -H "Content-Type: application/json" \
+  -d '{"rateLimit": 50}'
+
+# 查看 AI 用量
+curl "http://localhost:3000/admin/tenants/<tenant-id>/ai/usage?hours=24"
+```
+
 ### 搜索
 
 ```bash
@@ -179,16 +209,28 @@ curl "http://localhost:3000/api/v1/topics/search?type=deploy&status=open"
 cd packages/cli
 
 # 各种命令
-pnpm start -- health
-pnpm start -- skill list
-pnpm start -- tenant create --name "Test"
-pnpm start -- stats
+pnpm start health
+pnpm start skill list
+pnpm start tenant create --name "Test"
+pnpm start stats
+
+# AI 命令
+pnpm start ai status
+pnpm start ai enable
+pnpm start ai disable
+pnpm start ai usage
+pnpm start ai config --show
 
 # 或设置别名
-alias thub='pnpm --filter cli start --'
+alias thub='pnpm --filter cli start'
 thub health
 thub skill list
+thub ai status
 ```
+
+> **注意：** 不要在 `pnpm start` 后面加 `--`。`pnpm start` 会自动将
+> 后续参数传给脚本，加了 `--` 反而会把它当作第一个参数传入，
+> 导致命令路由失败（显示 Usage 帮助信息）。
 
 ### 调试 CLI（断点）
 
@@ -284,6 +326,18 @@ db.skill_registrations.find().pretty()
 // 查看租户 Skill 配置
 db.tenant_skill_configs.find({ tenantId: "..." }).pretty()
 
+// 查看租户 AI 配置（特殊 skillName = '__ai__'）
+db.tenant_skill_configs.find({ skillName: "__ai__" }).pretty()
+
+// 查看 AI 用量记录
+db.ai_usage_records.find({ tenantId: "..." }).sort({ periodStart: -1 }).limit(10)
+
+// 按 Skill 统计 AI 用量
+db.ai_usage_records.aggregate([
+  { $match: { tenantId: "..." } },
+  { $group: { _id: "$skillName", total: { $sum: "$count" }, tokens: { $sum: "$totalTokens" } } }
+])
+
 // 按 group 查找 topic
 db.topics.find({ "groups.platform": "feishu", "groups.groupId": "oc_xxx" })
 
@@ -303,6 +357,7 @@ db.timeline_entries.deleteMany({})
 db.tenants.deleteMany({})
 db.skill_registrations.deleteMany({})
 db.tenant_skill_configs.deleteMany({})
+db.ai_usage_records.deleteMany({})
 ```
 
 ---
@@ -363,9 +418,10 @@ npx tsc --noEmit -p packages/server/tsconfig.json
 ```
 packages/
 ├── server/src/
+│   ├── ai/            ← AI 服务（AiService、Provider、用量追踪、熔断器）
 │   ├── core/          ← Topic + Timeline 实体和服务
 │   ├── tenant/        ← 多租户（Guard、Service）
-│   ├── skill/         ← Skill 系统（接口、注册、管线）
+│   ├── skill/         ← Skill 系统（接口、注册、管线、SkillContext）
 │   ├── command/       ← /topichub 命令解析和路由
 │   ├── ingestion/     ← 事件推送 API
 │   ├── search/        ← Topic 搜索
@@ -375,7 +431,7 @@ packages/
 │   ├── database/      ← MongoDB 连接
 │   └── common/        ← 枚举、日志、异常过滤器
 ├── cli/src/
-│   ├── commands/      ← CLI 命令（skill、tenant、stats、health）
+│   ├── commands/      ← CLI 命令（skill、tenant、stats、health、ai）
 │   ├── auth/          ← OAuth2 PKCE + OS Keychain
 │   └── api-client/    ← HTTP 客户端
 └── skills/            ← 已安装 Skill（空目录，通过 CLI 添加）

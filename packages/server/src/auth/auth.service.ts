@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { createHmac, randomBytes } from 'crypto';
+import { createHmac } from 'crypto';
 import { TenantService } from '../tenant/tenant.service';
+import { SecretManager } from '../crypto/secret-manager';
 import { JwksService } from './jwks.service';
 
 @Injectable()
@@ -10,9 +11,9 @@ export class AuthService {
   constructor(
     private readonly tenantService: TenantService,
     private readonly jwksService: JwksService,
+    private readonly secretManager: SecretManager,
   ) {
-    this.tokenSecret =
-      process.env.TOKEN_SECRET ?? randomBytes(32).toString('hex');
+    this.tokenSecret = this.secretManager.getTokenSecret();
   }
 
   async validateAdminToken(

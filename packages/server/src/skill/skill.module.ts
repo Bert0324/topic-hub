@@ -8,10 +8,12 @@ import { SkillRegistry } from './registry/skill-registry';
 import { SkillConfigService } from './config/skill-config.service';
 import { SkillPipeline } from './pipeline/skill-pipeline';
 import { CryptoModule } from '../crypto/crypto.module';
+import { AiModule } from '../ai/ai.module';
 
 @Module({
   imports: [
     CryptoModule,
+    AiModule,
     MongooseModule.forFeature([
       {
         name: SkillRegistration.name,
