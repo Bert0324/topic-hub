@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { SkillRegistry } from '../registry/skill-registry';
 import { SkillConfigService } from '../config/skill-config.service';
+import { SkillAiRuntime } from './skill-ai-runtime';
 import { TopicContext } from '../interfaces/type-skill';
 import { UserIdentity } from '../interfaces/auth-skill';
 
@@ -11,6 +12,7 @@ export class SkillPipeline {
   constructor(
     private readonly registry: SkillRegistry,
     private readonly configService: SkillConfigService,
+    @Optional() private readonly skillAiRuntime: SkillAiRuntime | null,
   ) {}
 
   async execute(
@@ -42,6 +44,7 @@ export class SkillPipeline {
 
     await this.runAuthCheck(tenantId, operation, ctx, userIdentity);
     await this.runTypeSkillHook(tenantId, operation, topicData, ctx, extra);
+    await this.runSkillAi(tenantId, operation, topicData, actorStr, extra);
     await this.runPlatformSkills(tenantId, operation, topicData, ctx);
   }
 
@@ -116,6 +119,43 @@ export class SkillPipeline {
       this.logger.error(
         `Type skill ${typeSkill.manifest.name} hook ${String(hookName)} failed`,
         err,
+      );
+    }
+  }
+
+  private async runSkillAi(
+    tenantId: string,
+    operation: string,
+    topicData: any,
+    actor: string,
+    extra?: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this.skillAiRuntime) return;
+
+    const topicType = topicData?.type;
+    if (!topicType) return;
+
+    const typeSkill = this.registry.getTypeSkillForType(topicType);
+    if (!typeSkill) return;
+
+    const enabled = await this.configService.isEnabledForTenant(
+      tenantId,
+      typeSkill.manifest.name,
+    );
+    if (!enabled) return;
+
+    try {
+      await this.skillAiRuntime.executeIfApplicable(
+        tenantId,
+        typeSkill.manifest.name,
+        operation,
+        topicData,
+        actor,
+        extra,
+      );
+    } catch (err) {
+      this.logger.error(
+        `Skill AI runtime failed for ${typeSkill.manifest.name}: ${(err as Error).message}`,
       );
     }
   }

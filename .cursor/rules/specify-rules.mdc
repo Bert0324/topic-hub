@@ -14,6 +14,8 @@ Auto-generated from all feature plans. Last updated: 2026-04-10
 - TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Typegoose + Mongoose (ODM), zod (validation), jsonwebtoken + jwks-rsa (JWT/JWKS verification) (001-topic-hub-app)
 - MongoDB 7 (new collections: `ai_classifications`, `topic_links`, `ai_usage_records`) (002-ai-driven-skills)
 - MongoDB 7 (new collection: `ai_usage_records`) (002-ai-driven-skills)
+- TypeScript 5.x, Node.js 20 LTS + NestJS 10, Typegoose + Mongoose 8, zod, gray-matter (new — YAML frontmatter parsing) (002-ai-driven-skills)
+- MongoDB 7 (existing collections: `topics`, `timeline_entries`, `skill_registrations`, `tenant_skill_configs`, `ai_usage_records`) (002-ai-driven-skills)
 
 - TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Prisma (ORM), zod (validation) (001-topic-hub-app)
 
@@ -33,9 +35,9 @@ npm test && npm run lint
 TypeScript 5.x, Node.js 20 LTS: Follow standard conventions
 
 ## Recent Changes
+- 002-ai-driven-skills: Added TypeScript 5.x, Node.js 20 LTS + NestJS 10, Typegoose + Mongoose 8, zod, gray-matter (new — YAML frontmatter parsing)
 - 002-ai-driven-skills: Added TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Typegoose + Mongoose (ODM), zod (validation)
 - 002-ai-driven-skills: Added TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Typegoose + Mongoose (ODM), zod (validation)
-- 002-ai-driven-skills: Added TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Typegoose + Mongoose (ODM), zod (validation), jsonwebtoken + jwks-rsa (JWT/JWKS verification)
 
 
 <!-- MANUAL ADDITIONS START -->

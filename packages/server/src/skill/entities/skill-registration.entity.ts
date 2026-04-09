@@ -1,5 +1,14 @@
 import { prop, modelOptions, Severity } from '@typegoose/typegoose';
+import mongoose from 'mongoose';
 import { SkillCategory } from '../../common/enums';
+
+export interface SkillMdData {
+  name: string;
+  description: string;
+  systemPrompt: string;
+  eventPrompts: Record<string, string>;
+  hasAiInstructions: boolean;
+}
 
 @modelOptions({
   schemaOptions: { collection: 'skill_registrations', timestamps: true },
@@ -20,4 +29,7 @@ export class SkillRegistration {
 
   @prop({ type: () => Object, default: {} })
   metadata!: Record<string, unknown>;
+
+  @prop({ type: () => mongoose.Schema.Types.Mixed, default: null })
+  skillMd!: SkillMdData | null;
 }

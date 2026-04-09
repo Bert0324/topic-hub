@@ -7,6 +7,7 @@ export interface SkillManifestInfo {
   version: string;
   mainPath: string;
   dir: string;
+  skillMdContent?: string;
 }
 
 @Injectable()
@@ -45,11 +46,22 @@ export class SkillLoader {
         const mainEntry = pkg.main ?? 'index.js';
         const mainPath = path.resolve(skillDir, mainEntry);
 
+        const skillMdPath = path.join(skillDir, 'SKILL.md');
+        let skillMdContent: string | undefined;
+        if (fs.existsSync(skillMdPath)) {
+          try {
+            skillMdContent = fs.readFileSync(skillMdPath, 'utf-8');
+          } catch (readErr) {
+            this.logger.warn(`Failed to read SKILL.md in ${skillDir}: ${(readErr as Error).message}`);
+          }
+        }
+
         results.push({
           name: pkg.name ?? entry.name,
           version: pkg.version ?? '0.0.0',
           mainPath,
           dir: skillDir,
+          skillMdContent,
         });
       } catch (err) {
         this.logger.error(`Failed to read package.json in ${skillDir}`, err);

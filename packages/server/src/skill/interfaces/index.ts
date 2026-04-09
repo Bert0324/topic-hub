@@ -4,3 +4,4 @@ export * from './type-skill';
 export * from './platform-skill';
 export * from './auth-skill';
 export * from './adapter-skill';
+export * from './skill-md';
