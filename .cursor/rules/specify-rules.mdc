@@ -1,0 +1,40 @@
+---
+description: Project Development Guidelines
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# topic-hub Development Guidelines
+
+Auto-generated from all feature plans. Last updated: 2026-04-09
+
+## Active Technologies
+- TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Typegoose + Mongoose (ODM), zod (validation) (001-topic-hub-app)
+- MongoDB 7 (001-topic-hub-app)
+- TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Typegoose + Mongoose (ODM), zod (validation), jsonwebtoken + jwks-rsa (JWT/JWKS verification) (001-topic-hub-app)
+
+- TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Prisma (ORM), zod (validation) (001-topic-hub-app)
+
+## Project Structure
+
+```text
+src/
+tests/
+```
+
+## Commands
+
+npm test && npm run lint
+
+## Code Style
+
+TypeScript 5.x, Node.js 20 LTS: Follow standard conventions
+
+## Recent Changes
+- 001-topic-hub-app: Added TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Typegoose + Mongoose (ODM), zod (validation), jsonwebtoken + jwks-rsa (JWT/JWKS verification)
+- 001-topic-hub-app: Added TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Typegoose + Mongoose (ODM), zod (validation)
+- 001-topic-hub-app: Added TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Typegoose + Mongoose (ODM), zod (validation)
+
+
+<!-- MANUAL ADDITIONS START -->
+<!-- MANUAL ADDITIONS END -->
