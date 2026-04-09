@@ -1,112 +1,118 @@
 # Tasks: AI-Driven Skills
 
 **Input**: Design documents from `/specs/002-ai-driven-skills/`
-**Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
+**Prerequisites**: plan.md (required), spec.md (required), research.md, data-model.md, contracts/
 
-**Tests**: Not explicitly requested. Test tasks are omitted. Tests should be added per the constitution's testing standards during implementation.
+**Tests**: Included — Constitution mandates tests for all features (§II Testing Standards).
 
-**Organization**: Tasks grouped by user story. US2 (Platform Admin Config) is ordered before US1 (Skill Uses AI) because the provider must be configured before Skills can use it.
+**Organization**: Tasks grouped by user story. US2 and US3 are already implemented in the codebase; their phases contain only verification tasks.
 
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependencies)
-- **[Story]**: Which user story (US1, US2, US3)
-- All paths relative to repository root
+- **[Story]**: Which user story this task belongs to (e.g., US1, US2, US3)
+- Include exact file paths in descriptions
+
+## Path Conventions
+
+- **Server**: `packages/server/src/`
+- **CLI**: `packages/cli/src/`
+- **Tests**: `packages/server/test/`
 
 ---
 
-## Phase 1: Setup
+## Phase 1: Setup (Shared Infrastructure)
 
-**Purpose**: Create directory structure for the AI module
+**Purpose**: Add new dependency and create shared type definitions
 
-- [x] T001 Create directory structure `packages/server/src/ai/`, `packages/server/src/ai/providers/`, `packages/server/src/ai/usage/`, `packages/server/src/ai/__tests__/` per plan.md
-- [x] T002 Create directory structure `packages/cli/src/commands/ai/` for CLI AI commands
+- [x] T001 Add `gray-matter` dependency to `packages/server/package.json` via `pnpm --filter @topichub/server add gray-matter` and add `@types/gray-matter` as devDependency
+- [x] T002 [P] Create SKILL.md type definitions in `packages/server/src/skill/interfaces/skill-md.ts` — export `ParsedSkillMd`, `SkillMdFrontmatter`, `TopicSnapshot`, `EventContext`, `SkillAiUserPrompt`, `SkillAiResult`, `KNOWN_LIFECYCLE_EVENTS`, `OPERATION_TO_EVENT` per contracts/ai-service-request.ts
+- [x] T003 [P] Add `AI_RESPONSE = 'ai_response'` to `TimelineActionType` enum in `packages/server/src/common/enums.ts`
+
+**Checkpoint**: Dependencies installed, shared types available, enum extended.
 
 ---
 
 ## Phase 2: Foundational (Blocking Prerequisites)
 
-**Purpose**: Core AI infrastructure that MUST be complete before ANY user story can proceed
+**Purpose**: Core SKILL.md parser and entity changes that MUST be complete before US1 implementation
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [x] T003 Define AI config schema with zod validation (env vars: `AI_ENABLED`, `AI_PROVIDER`, `AI_API_URL`, `AI_API_KEY`, `AI_MODEL`, `AI_TIMEOUT_MS`, `AI_RATE_LIMIT_GLOBAL`) in `packages/server/src/ai/ai-config.ts`
-- [x] T004 [P] Define `AiProvider` interface, `AiRequest`, `AiResponse`, `AiUsage`, `AiMessage`, `AiContentPart`, `AiProviderError` types in `packages/server/src/ai/providers/ai-provider.interface.ts` per contracts/ai-provider.md
-- [x] T005 [P] Implement `CircuitBreaker` class (closed/open/half-open states, configurable failure threshold and cooldown) in `packages/server/src/ai/circuit-breaker.ts`
-- [x] T006 Implement `ArkProvider` class implementing `AiProvider` — POST to `${apiUrl}/responses` with Bearer auth, map Ark response format (output[].type 'message'→content, 'reasoning'→reasoning, usage mapping) in `packages/server/src/ai/providers/ark-provider.ts`
-- [x] T007 Implement `AiService` orchestrator — checks `AI_ENABLED`, circuit breaker state, delegates to provider, returns `AiResponse | null` (never throws), logs calls per FR-010 in `packages/server/src/ai/ai.service.ts`
-- [x] T008 Create `AiModule` NestJS module — registers `AiService` as provider, creates `ArkProvider` via factory based on `AI_PROVIDER` env var, exports `AiService` in `packages/server/src/ai/ai.module.ts`
-- [x] T009 Import `AiModule` in `packages/server/src/app.module.ts`
+- [x] T004 Implement `SkillMdParser` in `packages/server/src/skill/registry/skill-md-parser.ts` — `parse(filePath: string): ParsedSkillMd | null` using gray-matter for frontmatter extraction, regex-based `## onXxx` heading extraction for event sections, zod validation for frontmatter (name: max 64 chars lowercase+hyphens, description: max 1024 chars non-empty). Preamble (content before first event heading) is included in the default systemPrompt. Event-specific prompts use preamble + section content. Unknown headings treated as regular content. Returns `null` on invalid/missing frontmatter with warning logged.
+- [x] T005 [P] Add `skillMd` field to `SkillRegistration` entity in `packages/server/src/skill/entities/skill-registration.entity.ts` — optional `@prop({ type: () => mongoose.Schema.Types.Mixed })` field typed as `SkillMdData | null`, containing `name`, `description`, `systemPrompt`, `eventPrompts` (Record<string,string>), `hasAiInstructions` (boolean). Default `null`.
+- [x] T006 [P] Write unit tests for `SkillMdParser` in `packages/server/test/unit/skill-md-parser.spec.ts` — test cases: valid SKILL.md with frontmatter + body, SKILL.md with event-specific sections (## onTopicCreated, ## onTopicUpdated), SKILL.md with preamble + event sections (verify preamble included in event prompts), empty body (hasAiInstructions=false), missing frontmatter (returns null), invalid frontmatter name (too long, wrong chars → null), unknown ## headings (treated as regular content), no SKILL.md file (returns null)
 
-**Checkpoint**: AiService is injectable and can make AI calls when configured. No Skills integration yet.
+**Checkpoint**: Foundation ready — SKILL.md parser tested and entity schema updated. US1 implementation can begin.
 
 ---
 
-## Phase 3: User Story 2 — Platform Admin Configures AI Provider (Priority: P1) 🎯 MVP
+## Phase 3: User Story 1 — Skill Uses AI via Natural-Language Instructions (Priority: P1) 🎯 MVP
 
-**Goal**: Platform admin can deploy with AI enabled via env vars and verify provider health
+**Goal**: When a Skill has a `SKILL.md`, the runtime auto-injects its NL instructions as the system prompt into `AiService.complete()` on lifecycle events. AI responses are appended to the topic timeline and stored in topic metadata.
 
-**Independent Test**: Set env vars, start server, verify `/health` reports `"ai": "available"`. Unset vars, verify `"ai": "disabled"`.
+**Independent Test**: Load a test-only Skill fixture with a `SKILL.md`, create a topic, verify the AI-generated response appears in the topic timeline as an `ai_response` entry and in `metadata._ai.{skillName}`.
 
-### Implementation for User Story 2
+### Tests for User Story 1 ⚠️
 
-- [x] T010 [US2] Modify `packages/server/src/health.controller.ts` to include AI provider status (`"available"`, `"unavailable"`, `"disabled"`) from `AiService.isAvailable()` in the health check response
-- [x] T011 [US2] Add `GET /admin/ai/status` endpoint returning provider config, availability, circuit state, and global usage — create `packages/server/src/ai/ai-admin.controller.ts` and register in `AiModule`
-- [x] T012 [P] [US2] Implement `topichub-admin ai status` CLI command — calls `GET /admin/ai/status` and renders provider info in `packages/cli/src/commands/ai/status.ts`
-- [x] T013 [US2] Add AI env vars (`AI_ENABLED`, `AI_PROVIDER`, `AI_API_URL`, `AI_API_KEY`, `AI_MODEL`, `AI_TIMEOUT_MS`, `AI_RATE_LIMIT_GLOBAL`) to `packages/server/src/ai/ai-config.ts` and update `.env.example` with commented AI section
-- [x] T014 [US2] Add AI environment variables to `docker-compose.yml` server service
+> **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-**Checkpoint**: `AI_ENABLED=true AI_API_KEY=xxx ./start-local.sh` → `/health` returns `"ai": "available"` → `topichub-admin ai status` shows provider info.
-
----
-
-## Phase 4: User Story 1 — Skill Uses AI in Lifecycle Hooks (Priority: P1)
-
-**Goal**: Skills can call `AiService.complete()` in their lifecycle hooks to make AI requests
-
-**Independent Test**: Load a test-only Skill fixture with `ai: true` in manifest, call `AiService.complete()` in `onTopicCreated`, verify AI response is received and usable.
+- [x] T007 [P] [US1] Write unit tests for `SkillAiRuntime` in `packages/server/test/unit/skill-ai-runtime.spec.ts` — test cases: (1) executeIfApplicable with valid ParsedSkillMd + mock AiService returns non-null → verify timeline entry created with AI_RESPONSE actionType and metadata updated under `_ai.{skillName}`, (2) executeIfApplicable when AiService returns null → verify no timeline entry or metadata update, (3) event-specific section selected when matching ## heading exists, (4) fallback to full body when no matching event section, (5) skill with no AI instructions (hasAiInstructions=false) → no AiService call, (6) system prompt constructed from SKILL.md content + user prompt from serialized topic snapshot + event context JSON
+- [x] T008 [P] [US1] Write integration test for SKILL.md pipeline in `packages/server/test/integration/skill-ai-pipeline.spec.ts` — test with mongodb-memory-server: (1) register a test skill with SKILL.md, create a topic, verify timeline contains ai_response entry and topic metadata has `_ai.testSkill`, (2) register a skill WITHOUT SKILL.md, create a topic, verify no ai_response timeline entry (zero impact), (3) when AiService is unavailable (AI_ENABLED=false), verify pipeline completes normally with no AI entries
 
 ### Implementation for User Story 1
 
-- [x] T015 [US1] Define `SkillContext` interface (with `aiService: AiService | null`) and add optional `ai?: boolean` field to all Skill manifest interfaces (`TypeSkillManifest`, `PlatformSkillManifest`, `AuthSkillManifest`, `AdapterSkillManifest`) in `packages/server/src/skill/interfaces/`
-- [x] T016 [US1] Add optional `init?(ctx: SkillContext): void` method to all Skill interfaces (`TypeSkill`, `PlatformSkill`, `AuthSkill`, `AdapterSkill`) in `packages/server/src/skill/interfaces/`
-- [x] T017 [US1] Import `AiModule` in `packages/server/src/skill/skill.module.ts`
-- [x] T018 [US1] Modify `SkillRegistry` in `packages/server/src/skill/registry/skill-registry.ts` to inject `AiService`, and call `skill.init({ aiService })` after loading each Skill — pass `AiService` for Skills with `manifest.ai === true`, pass `null` otherwise
-- [x] T019 [US1] Create a test-only Skill fixture in `packages/server/src/ai/__tests__/fixtures/test-ai-skill.ts` that declares `ai: true`, calls `AiService.complete()` in `onTopicCreated`, and stores the AI response for assertion
+- [x] T009 [US1] Extend `SkillLoader.scanDirectory()` in `packages/server/src/skill/registry/skill-loader.ts` — after reading `package.json`, check if `SKILL.md` exists in the skill directory. If found, read its contents. Add `skillMdPath?: string` and `skillMdContent?: string` to `SkillManifestInfo` interface. Return these alongside existing fields.
+- [x] T010 [US1] Extend `SkillRegistry` in `packages/server/src/skill/registry/skill-registry.ts` — (1) inject `SkillMdParser`, (2) in `loadAll()` after loading skill: if `manifest.skillMdContent` exists, call `SkillMdParser.parse()` and store result, (3) add in-memory cache `Map<string, ParsedSkillMd>` for parsed SKILL.md content (keyed by skill name), (4) persist `skillMd` field to `SkillRegistration` document on upsert, (5) add `getSkillMd(skillName: string): ParsedSkillMd | null` method for runtime lookup
+- [x] T011 [US1] Implement `SkillAiRuntime` in `packages/server/src/skill/pipeline/skill-ai-runtime.ts` — injectable NestJS service with method `async executeIfApplicable(tenantId: string, skillName: string, operation: string, topicData: any, actor: string, extra?: Record<string, unknown>): Promise<void>`. Steps: (1) look up ParsedSkillMd via SkillRegistry.getSkillMd(), (2) if null or hasAiInstructions=false → return, (3) map operation to event name via OPERATION_TO_EVENT, (4) select system prompt: eventPrompts[eventName] ?? systemPrompt, (5) build TopicSnapshot from topicData (serialize _id, dates to ISO strings), (6) build EventContext, (7) construct AiServiceRequest with system message (SKILL.md content) + user message (JSON of {event, topic}), (8) call AiService.complete(), (9) if response non-null: create TimelineEntry with actionType=AI_RESPONSE, actor=`ai:{skillName}`, payload={skillName, content, model, usage}; update topic metadata at `_ai.{skillName}` with {content, model, timestamp}
+- [x] T012 [US1] Register `SkillAiRuntime` and `SkillMdParser` as providers in `packages/server/src/skill/skill.module.ts` — add both to providers array. SkillAiRuntime depends on SkillRegistry, AiService, and needs access to Topic/TimelineEntry models (import CoreModule or inject models directly).
+- [x] T013 [US1] Integrate `SkillAiRuntime` into `SkillPipeline` in `packages/server/src/skill/pipeline/skill-pipeline.ts` — (1) inject `SkillAiRuntime` via constructor, (2) in `execute()`, after `runTypeSkillHook()` call `runSkillAi()`, (3) implement `private async runSkillAi(tenantId, operation, topicData, actor, extra)` that resolves the type skill name from topicData.type, then calls `skillAiRuntime.executeIfApplicable()`. Wrap in try/catch — AI failures MUST NOT break the pipeline (log error, continue).
+- [x] T014 [US1] Create SKILL.md-based test fixture in `packages/server/src/ai/__tests__/fixtures/` — add a `test-ai-skill-md/` directory containing: `SKILL.md` (frontmatter with name: `test-ai-nl`, description, body with NL instructions for onTopicCreated + onTopicUpdated sections), minimal `package.json`, and minimal `index.js` (TypeSkill with manifest.ai: true, topicType: `test-ai-nl`, renderCard, validateMetadata — no code-based AI calls). This fixture validates the SKILL.md-driven flow end-to-end.
 
-**Checkpoint**: A Skill declaring `ai: true` receives `AiService` via `init()` and can call `complete()` in its hooks. Skills without `ai: true` are unaffected.
+**Checkpoint**: User Story 1 complete. A Skill with SKILL.md has its NL instructions auto-injected as system prompt on lifecycle events. AI responses appear in topic timeline and metadata. Skills without SKILL.md are unaffected.
 
 ---
 
-## Phase 5: User Story 3 — Tenant Admin Enables AI for Tenant (Priority: P2)
+## Phase 4: User Story 2 — Platform Admin Configures AI Provider (Priority: P1) — Already Implemented
 
-**Goal**: Per-tenant AI enablement, rate limiting, usage tracking, and CLI management commands
+**Goal**: Platform admin configures AI via env vars. Health endpoint reports AI status.
 
-**Independent Test**: Enable AI for tenant A, disable for tenant B. Verify Skill AI calls succeed for A (returning AI response), return `null` for B. Verify rate limit enforcement.
+**Status**: ✅ Already implemented in codebase. `AiModule`, `AiService`, `ArkProvider`, `ai-config.ts`, `health.controller.ts`, and `AiAdminController` all exist and function correctly.
 
-### Implementation for User Story 3
+**Independent Test**: Set AI env vars, start server, verify `/health` reports `"ai": "available"`. Disable AI, verify `"ai": "disabled"`.
 
-- [x] T020 [US3] Create `AiUsageRecord` Typegoose entity with indexes per data-model.md in `packages/server/src/ai/usage/ai-usage.entity.ts`
-- [x] T021 [US3] Implement `AiUsageService` — rate limit check (aggregate count for current hour), increment usage (atomic `$inc` upsert), usage report query (by tenant, by skill, by time range) in `packages/server/src/ai/usage/ai-usage.service.ts`
-- [x] T022 [US3] Register `AiUsageRecord` Mongoose model and `AiUsageService` provider in `packages/server/src/ai/ai.module.ts`
-- [x] T023 [US3] Extend `AiService.complete()` in `packages/server/src/ai/ai.service.ts` to check tenant AI enablement (via `TenantSkillConfig` with reserved `skillName='__ai__'`) and per-tenant rate limit (via `AiUsageService`) before calling the provider — return `null` when disabled or rate-limited
-- [x] T024 [US3] Add tenant AI endpoints to `packages/server/src/ai/ai-admin.controller.ts`: `GET /admin/tenants/:tid/ai` (config), `PATCH /admin/tenants/:tid/ai` (enable/disable/rate-limit), `GET /admin/tenants/:tid/ai/usage` (usage stats)
-- [x] T025 [P] [US3] Implement `topichub-admin ai enable` command in `packages/cli/src/commands/ai/enable.ts` — calls `PATCH /admin/tenants/:tid/ai` with `{ enabled: true }`
-- [x] T026 [P] [US3] Implement `topichub-admin ai disable` command in `packages/cli/src/commands/ai/disable.ts` — calls `PATCH /admin/tenants/:tid/ai` with `{ enabled: false }`
-- [x] T027 [P] [US3] Implement `topichub-admin ai usage` command in `packages/cli/src/commands/ai/usage.ts` — calls `GET /admin/tenants/:tid/ai/usage` and renders table per contracts/cli-commands.md
+### Verification for User Story 2
 
-**Checkpoint**: `topichub-admin ai enable` → Skill AI calls succeed for that tenant. Rate limit enforced at configured threshold. `topichub-admin ai usage` shows per-Skill breakdown.
+- [x] T015 [US2] Verify health endpoint works with SKILL.md-based skills loaded — manual or integration test: start server with AI env vars + a SKILL.md skill in `SKILLS_DIR`, confirm `GET /health` returns `{ status: "ok", ai: "available" }` and `GET /admin/ai/status` returns provider info
+- [x] T016 [P] [US2] Write unit test for AiService in `packages/server/test/unit/ai-service.spec.ts` — test cases: (1) complete() returns null when AI_ENABLED=false, (2) complete() returns null when circuit breaker open, (3) complete() returns null when tenant AI disabled, (4) complete() returns AiResponse on success with usage recorded, (5) complete() returns null on provider error with circuit breaker incremented
+
+**Checkpoint**: US2 verified — platform AI configuration works correctly with SKILL.md skills.
+
+---
+
+## Phase 5: User Story 3 — Tenant Admin Enables AI for Tenant (Priority: P2) — Already Implemented
+
+**Goal**: Per-tenant AI enablement, rate limiting, usage tracking.
+
+**Status**: ✅ Already implemented. `AiService.isTenantAiEnabled()`, `getTenantRateLimit()`, `AiUsageService`, and admin API endpoints all exist.
+
+**Independent Test**: Enable AI for tenant A, disable for tenant B. Verify SKILL.md-driven AI calls succeed for A and return null for B.
+
+### Verification for User Story 3
+
+- [x] T017 [US3] Write integration test for per-tenant AI gating with SKILL.md in `packages/server/test/integration/tenant-ai-gating.spec.ts` — test with mongodb-memory-server: (1) tenant with AI enabled → SKILL.md AI call succeeds, timeline entry created, (2) tenant with AI disabled → SKILL.md AI call returns null, no timeline entry, (3) tenant rate limit exceeded → returns null, logs warning, (4) usage record created after successful SKILL.md AI call
+
+**Checkpoint**: US3 verified — per-tenant AI controls work correctly with SKILL.md-driven calls.
 
 ---
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-**Purpose**: Documentation, config files, and cleanup
+**Purpose**: Code quality, documentation, final validation
 
-- [x] T028 [P] Update `.env.example` with all AI environment variables (commented, with defaults and descriptions)
-- [x] T029 [P] Update `docker-compose.yml` to include AI env vars with `${AI_API_URL:-}` passthrough
-- [x] T030 [P] Update `packages/server/src/database/database.module.ts` to register `AiUsageRecord` model if not already handled by `AiModule`
-- [x] T031 Run quickstart.md validation — verify the documented setup flow works end-to-end
+- [x] T018 Run linter and type-checker across `packages/server/` — fix any errors introduced by new code: `pnpm --filter @topichub/server run lint`
+- [x] T019 [P] Verify all existing tests still pass — `pnpm --filter @topichub/server run test` (no regressions from pipeline changes)
+- [x] T020 [P] Run quickstart.md validation — follow steps in `specs/002-ai-driven-skills/quickstart.md` to verify end-to-end flow with a real or mocked AI endpoint
 
 ---
 
@@ -114,80 +120,91 @@
 
 ### Phase Dependencies
 
-- **Setup (Phase 1)**: No dependencies — start immediately
-- **Foundational (Phase 2)**: Depends on Phase 1 — BLOCKS all user stories
-- **US2 (Phase 3)**: Depends on Phase 2 — platform config is prerequisite for US1
-- **US1 (Phase 4)**: Depends on Phase 2 — can run in parallel with US2 if needed, but US2 completing first is recommended
-- **US3 (Phase 5)**: Depends on Phase 2 — extends AiService with tenant checks and rate limiting
-- **Polish (Phase 6)**: Depends on all user stories being complete
+- **Setup (Phase 1)**: No dependencies — can start immediately
+- **Foundational (Phase 2)**: Depends on Setup completion — BLOCKS all user stories
+- **US1 (Phase 3)**: Depends on Foundational (Phase 2) — main new implementation work
+- **US2 (Phase 4)**: Depends on US1 completion (verification that existing code works with new SKILL.md layer)
+- **US3 (Phase 5)**: Depends on US1 completion (verification that per-tenant gating works with SKILL.md)
+- **Polish (Phase 6)**: Depends on all user story phases being complete
 
 ### User Story Dependencies
 
-- **US2 (P1)**: Can start after Phase 2. No dependency on other stories. First to complete — validates AI provider connectivity.
-- **US1 (P1)**: Can start after Phase 2. Independent of US2 at the code level (AiService works even without health endpoint). Recommended to follow US2 for logical flow.
-- **US3 (P2)**: Can start after Phase 2. Independent of US1/US2 at the code level. Extends AiService with tenant-level checks.
+- **User Story 1 (P1)**: Can start after Foundational (Phase 2) — **this is the core new work**
+- **User Story 2 (P1)**: Already implemented — verification after US1 is complete
+- **User Story 3 (P2)**: Already implemented — verification after US1 is complete
 
-### Within Each User Story
+### Within User Story 1
 
-- Models before services
-- Services before endpoints/controllers
-- Core implementation before CLI commands
-- Commit after each task or logical group
+- T007, T008 (tests) SHOULD be written first and FAIL before implementation
+- T009 (SkillLoader) before T010 (SkillRegistry) — loader provides content for registry
+- T010 (SkillRegistry) before T011 (SkillAiRuntime) — runtime reads from registry cache
+- T011 (SkillAiRuntime) before T013 (pipeline integration) — runtime must exist before pipeline calls it
+- T012 (SkillModule) can run after T011 — wires providers
+- T014 (test fixture) can run in parallel with T011-T013
 
 ### Parallel Opportunities
 
-- T004 and T005 can run in parallel (different files, no dependencies)
-- T012 (CLI status) can run in parallel with T010-T011 (server endpoints)
-- T025, T026, T027 (CLI commands) can all run in parallel
-- T028, T029, T030 (polish) can all run in parallel
-- US1 and US3 can run in parallel after Phase 2 (if team capacity allows)
+- Phase 1: T002 and T003 can run in parallel
+- Phase 2: T005 and T006 can run in parallel (after T004)
+- Phase 3: T007 and T008 (tests) can run in parallel; T014 (fixture) can run in parallel with T011-T013
+- Phase 4-5: T015, T016, T017 can all run in parallel once US1 is complete
+- Phase 6: T018, T019, T020 can run in parallel
 
 ---
 
-## Parallel Example: Foundational Phase
+## Parallel Example: User Story 1
 
 ```bash
-# These can run simultaneously:
-Task T004: "Define AiProvider interface in packages/server/src/ai/providers/ai-provider.interface.ts"
-Task T005: "Implement CircuitBreaker in packages/server/src/ai/circuit-breaker.ts"
-```
+# Step 1: Write tests first (parallel)
+Task: T007 "Unit tests for SkillAiRuntime in packages/server/test/unit/skill-ai-runtime.spec.ts"
+Task: T008 "Integration test for SKILL.md pipeline in packages/server/test/integration/skill-ai-pipeline.spec.ts"
 
-## Parallel Example: User Story 3 CLI
+# Step 2: Implementation (sequential due to dependencies)
+Task: T009 "Extend SkillLoader to detect SKILL.md"
+Task: T010 "Extend SkillRegistry to cache SKILL.md"
+Task: T011 "Implement SkillAiRuntime"
+Task: T012 "Register providers in SkillModule"
+Task: T013 "Integrate into SkillPipeline"
 
-```bash
-# These can run simultaneously (different files):
-Task T025: "topichub-admin ai enable in packages/cli/src/commands/ai/enable.ts"
-Task T026: "topichub-admin ai disable in packages/cli/src/commands/ai/disable.ts"
-Task T027: "topichub-admin ai usage in packages/cli/src/commands/ai/usage.ts"
+# Step 3: Test fixture (parallel with T011-T013)
+Task: T014 "Create SKILL.md-based test fixture"
 ```
 
 ---
 
 ## Implementation Strategy
 
-### MVP First (US2 Only)
+### MVP First (User Story 1 Only)
 
-1. Complete Phase 1: Setup
-2. Complete Phase 2: Foundational
-3. Complete Phase 3: US2 — Platform Admin Configures AI Provider
-4. **STOP and VALIDATE**: `AI_ENABLED=true` → health check → `ai status` CLI
-5. Deploy/demo: "AI provider is connected and configurable"
+1. Complete Phase 1: Setup (T001-T003)
+2. Complete Phase 2: Foundational (T004-T006)
+3. Complete Phase 3: User Story 1 (T007-T014)
+4. **STOP and VALIDATE**: Run tests, verify SKILL.md-based AI pipeline works end-to-end
+5. Deploy/demo if ready
 
-### Full Delivery
+### Incremental Delivery
 
-1. Setup + Foundational → AI infrastructure ready
-2. US2 → Platform config validated → **MVP demo**
-3. US1 → Skills can use AI → Test with Skill fixture
-4. US3 → Tenant control → Rate limiting validated → **Feature complete**
-5. Polish → Docs, config, cleanup
+1. Phase 1 + Phase 2 → Foundation ready
+2. Add US1 → Test independently → Deploy (MVP!)
+3. Verify US2 → Confirm platform config works with SKILL.md layer
+4. Verify US3 → Confirm per-tenant controls work with SKILL.md layer
+5. Polish → Lint, type-check, quickstart validation
+
+### Key Implementation Notes
+
+- **Zero breaking changes**: Skills without SKILL.md work identically to before
+- **Code-based AI calls still work**: Skills using `manifest.ai: true` + `init({ aiService })` + explicit `AiService.complete()` calls in hooks are unaffected — both models coexist
+- **AI infrastructure already built**: AiService, ArkProvider, circuit breaker, rate limiting, usage tracking, admin API, health endpoint — all exist and need no changes
+- **New code is concentrated**: 2 new files (SkillMdParser, SkillAiRuntime), 1 new type file, 4 modified files (SkillLoader, SkillRegistry, SkillPipeline, SkillModule), 1 enum change
+- **One new dependency**: `gray-matter` for YAML frontmatter parsing
 
 ---
 
 ## Notes
 
 - [P] tasks = different files, no dependencies
-- [Story] label maps task to specific user story
-- `null` return pattern: AiService.complete() NEVER throws — returns `null` for all unavailable states
-- No bundled Skills — test fixtures are test-only, not installed in `skills/`
-- Per-tenant AI config reuses existing `tenant_skill_configs` collection with reserved `skillName='__ai__'`
-- Total: 31 tasks across 6 phases
+- [Story] label maps task to specific user story for traceability
+- Each user story should be independently completable and testable
+- Verify tests fail before implementing
+- Commit after each task or logical group
+- Stop at any checkpoint to validate story independently

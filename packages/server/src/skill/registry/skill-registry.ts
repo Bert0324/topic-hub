@@ -8,7 +8,9 @@ import { TypeSkill } from '../interfaces/type-skill';
 import { PlatformSkill } from '../interfaces/platform-skill';
 import { AuthSkill } from '../interfaces/auth-skill';
 import { AdapterSkill } from '../interfaces/adapter-skill';
+import { ParsedSkillMd } from '../interfaces/skill-md';
 import { SkillLoader } from './skill-loader';
+import { SkillMdParser } from './skill-md-parser';
 import { AiService } from '../../ai/ai.service';
 
 type AnySkill = TypeSkill | PlatformSkill | AuthSkill | AdapterSkill;
@@ -22,9 +24,11 @@ interface RegisteredSkill {
 export class SkillRegistry implements OnModuleInit {
   private readonly logger = new Logger(SkillRegistry.name);
   private readonly skills = new Map<string, RegisteredSkill>();
+  private readonly skillMdCache = new Map<string, ParsedSkillMd>();
 
   constructor(
     private readonly loader: SkillLoader,
+    private readonly skillMdParser: SkillMdParser,
     @InjectModel(SkillRegistration.name)
     private readonly registrationModel: ReturnModelType<
       typeof SkillRegistration
@@ -95,6 +99,10 @@ export class SkillRegistry implements OnModuleInit {
     return config?.enabled === true;
   }
 
+  getSkillMd(skillName: string): ParsedSkillMd | null {
+    return this.skillMdCache.get(skillName) ?? null;
+  }
+
   async loadAll(): Promise<void> {
     const manifests = this.loader.scanDirectory();
     this.logger.log(`Found ${manifests.length} skill(s) to load`);
@@ -112,6 +120,22 @@ export class SkillRegistry implements OnModuleInit {
 
         const category = this.resolveCategory(skill);
 
+        const parsedMd = this.skillMdParser.parse(manifest.dir);
+        let skillMdData = null;
+        if (parsedMd) {
+          this.skillMdCache.set(skillManifest.name, parsedMd);
+          skillMdData = {
+            name: parsedMd.frontmatter.name,
+            description: parsedMd.frontmatter.description,
+            systemPrompt: parsedMd.systemPrompt,
+            eventPrompts: Object.fromEntries(parsedMd.eventPrompts),
+            hasAiInstructions: parsedMd.hasAiInstructions,
+          };
+          this.logger.log(
+            `Skill ${skillManifest.name} loaded with SKILL.md (AI instructions: ${parsedMd.hasAiInstructions})`,
+          );
+        }
+
         const registration = await this.registrationModel
           .findOneAndUpdate(
             { name: skillManifest.name },
@@ -121,6 +145,7 @@ export class SkillRegistry implements OnModuleInit {
               version: manifest.version,
               modulePath: manifest.mainPath,
               metadata: this.extractMetadata(skill, category),
+              skillMd: skillMdData,
             },
             { upsert: true, new: true },
           )
@@ -137,6 +162,7 @@ export class SkillRegistry implements OnModuleInit {
 
   async reload(): Promise<void> {
     this.skills.clear();
+    this.skillMdCache.clear();
     await this.loadAll();
   }
 

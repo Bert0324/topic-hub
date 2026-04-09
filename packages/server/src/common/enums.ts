@@ -18,6 +18,7 @@ export enum TimelineActionType {
   COMMENT = 'comment',
   REOPENED = 'reopened',
   METADATA_UPDATED = 'metadata_updated',
+  AI_RESPONSE = 'ai_response',
 }
 
 export enum SkillCategory {
