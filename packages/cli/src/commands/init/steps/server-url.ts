@@ -17,18 +17,20 @@ export async function promptServerUrl(currentValue?: string): Promise<string> {
     },
   });
 
-  // Validate connection
+  const baseUrl = serverUrl.replace(/\/+$/, '');
+
+  // Validate connection (health is under the configured base path, not server root)
   process.stdout.write('  Connecting... ');
   try {
-    const res = await fetch(`${serverUrl}/health`, { signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = (await res.json()) as { version?: string };
     console.log(`✓ Connected (v${data.version ?? 'unknown'})`);
   } catch (err) {
     console.log('✗ Failed');
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`Cannot reach server at ${serverUrl}: ${msg}`);
+    throw new Error(`Cannot reach server at ${baseUrl}: ${msg}`);
   }
 
-  return serverUrl;
+  return baseUrl;
 }

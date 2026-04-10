@@ -23,6 +23,10 @@ export class CodexExecutor implements AgentExecutor {
 
     const args = ['exec', fullPrompt, '--json', '--ephemeral'];
 
+    if (options.extraArgs?.length) {
+      args.push(...options.extraArgs);
+    }
+
     if (options.mcpConfigPath) {
       args.push('--mcp-config', options.mcpConfigPath);
     }

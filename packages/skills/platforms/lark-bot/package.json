@@ -1,0 +1,22 @@
+{
+  "name": "lark-bot",
+  "version": "1.0.0",
+  "description": "Lark (Feishu) custom bot integration — push notifications via webhook",
+  "main": "./src/index.ts",
+  "topichub": {
+    "category": "platform",
+    "platform": "lark",
+    "capabilities": ["push"],
+    "webhookPath": "/webhook/lark",
+    "auth": {
+      "type": "api_key"
+    }
+  },
+  "dependencies": {
+    "@topichub/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.39",
+    "typescript": "^5.5.0"
+  }
+}

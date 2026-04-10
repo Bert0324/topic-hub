@@ -7,6 +7,7 @@ export const LocalConfigSchema = z.object({
   serverUrl: z.string().url(),
   tenantId: z.string().min(1),
   executor: ExecutorType,
+  executorArgs: z.array(z.string()).optional(),
   skillsDir: z.string().min(1),
 });
 
