@@ -8,6 +8,13 @@ export MONGODB_URI="mongodb://localhost:27017/topichub"
 export LOG_FORMAT="pretty"
 export PORT="3000"
 
+# ── OpenClaw Bridge (Discord) ──────────────────────────────
+# Replace with your actual Discord channel ID before running.
+DISCORD_CHANNEL_ID="1492073611065036862"
+export TOPICHUB_BRIDGE_WEBHOOK_URL="http://127.0.0.1:${PORT}/webhooks/openclaw"
+export TOPICHUB_BRIDGE_DISCORD_BOT_TOKEN="MTQ5MjA3ODQ4NDQwMTQyMjM5OQ.GIKUHm.1p0BiwRHMQWYYsJOp7fENuHR9aDcpFR1dZ6fXE"
+export TOPICHUB_OPENCLAW_TENANT_MAPPING="{\"${DISCORD_CHANNEL_ID}\":{\"tenantId\":\"tenant_local\",\"platform\":\"discord\"}}"
+
 # ── Auth / Crypto ──────────────────────────────────────────
 # MASTER_SECRET not needed for local dev (uses built-in fallback)
 # export MASTER_SECRET=""
@@ -31,4 +38,5 @@ AI_MODEL="doubao-seed-2-0-pro-260215"
 # ── Skills ─────────────────────────────────────────────────
 # export SKILLS_DIR=""
 
+pnpm --filter @topichub/core run build
 pnpm --filter @topichub/server run dev

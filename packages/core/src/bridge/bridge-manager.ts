@@ -96,9 +96,7 @@ export class BridgeManager {
   }
 
   private resolveOpenClawBin(): string {
-    const resolved = require.resolve('openclaw/package.json');
-    const pkgDir = require('node:path').dirname(resolved);
-    const binPath = require('node:path').join(pkgDir, 'openclaw.mjs');
+    const binPath = require.resolve('openclaw/cli-entry');
     const fs = require('node:fs');
     if (!fs.existsSync(binPath)) {
       throw new Error(
@@ -109,17 +107,76 @@ export class BridgeManager {
     return binPath;
   }
 
+  /**
+   * Remove any broken nested node_modules inside the openclaw package directory.
+   * pnpm sometimes leaves empty directories without package.json, which causes
+   * Node.js ESM resolution to find the directory but fail to load it (instead
+   * of falling back to the properly-linked copy one level up).
+   */
+  private ensureOpenClawNestedModulesClean(openClawBinPath: string): void {
+    const path = require('node:path');
+    const fs = require('node:fs');
+
+    const openClawDir = path.dirname(openClawBinPath);
+    const nestedNM = path.join(openClawDir, 'node_modules');
+    if (!fs.existsSync(nestedNM)) return;
+
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(nestedNM);
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const entryPath = path.join(nestedNM, entry);
+      const stat = fs.lstatSync(entryPath);
+      if (!stat.isDirectory()) continue;
+
+      if (entry.startsWith('@')) {
+        const scopedEntries = fs.readdirSync(entryPath);
+        let allBroken = true;
+        for (const scoped of scopedEntries) {
+          const scopedDir = path.join(entryPath, scoped);
+          if (fs.lstatSync(scopedDir).isDirectory() && !fs.existsSync(path.join(scopedDir, 'package.json'))) {
+            fs.rmSync(scopedDir, { recursive: true, force: true });
+          } else {
+            allBroken = false;
+          }
+        }
+        if (allBroken) {
+          fs.rmSync(entryPath, { recursive: true, force: true });
+        }
+      } else {
+        if (!fs.existsSync(path.join(entryPath, 'package.json'))) {
+          fs.rmSync(entryPath, { recursive: true, force: true });
+        }
+      }
+    }
+
+    try {
+      const remaining = fs.readdirSync(nestedNM);
+      if (remaining.length === 0) {
+        fs.rmSync(nestedNM, { recursive: true, force: true });
+      }
+    } catch {}
+  }
+
   private async spawnGateway(): Promise<void> {
     if (!this.generated) {
       throw new Error('Bridge config not generated');
     }
 
     const bin = this.resolveOpenClawBin();
-    const args = [bin, 'gateway', '--config', this.generated.configPath, '--port', String(this._port), '--force'];
+    this.ensureOpenClawNestedModulesClean(bin);
+    const args = [bin, 'gateway', 'run', '--port', String(this._port), '--force'];
 
     this.process = spawn(process.execPath, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env },
+      env: {
+        ...process.env,
+        OPENCLAW_CONFIG_PATH: this.generated.configPath,
+      },
       detached: false,
     });
 

@@ -37,6 +37,7 @@ function buildOpenClawJson(
   bridgeConfig: BridgeConfig,
   webhookSecret: string,
   port: number,
+  hooksDir: string,
 ): string {
   const channels: Record<string, unknown> = {};
 
@@ -66,8 +67,7 @@ function buildOpenClawJson(
       dmPolicy: 'open',
       allowFrom: ['*'],
       groupPolicy: 'open',
-      botToken: d.botToken,
-      ...(d.applicationId ? { applicationId: d.applicationId } : {}),
+      token: d.botToken,
     };
   }
 
@@ -109,19 +109,17 @@ function buildOpenClawJson(
     channels,
     hooks: {
       enabled: true,
-      token: webhookSecret,
+      token: crypto.randomBytes(32).toString('hex'),
       path: '/hooks',
-      mappings: [
-        {
-          match: { path: 'message-relay' },
-          action: 'webhook',
-          webhook: {
-            url: bridgeConfig.webhookUrl,
-            secret: webhookSecret,
-            events: ['message.received'],
-          },
+      internal: {
+        enabled: true,
+        load: {
+          extraDirs: [hooksDir],
         },
-      ],
+        entries: {
+          'topichub-relay': { enabled: true },
+        },
+      },
     },
   };
 
@@ -136,12 +134,82 @@ export function generateBridgeConfigFiles(
   const configDir = fs.mkdtempSync(
     path.join(os.tmpdir(), 'topichub-bridge-'),
   );
-  const configPath = path.join(configDir, 'openclaw.json');
 
-  const content = buildOpenClawJson(bridgeConfig, webhookSecret, port);
+  const hooksDir = path.join(configDir, 'hooks');
+  const hookDir = path.join(hooksDir, 'topichub-relay');
+  fs.mkdirSync(hookDir, { recursive: true });
+
+  fs.writeFileSync(
+    path.join(hookDir, 'HOOK.md'),
+    `---
+name: topichub-relay
+description: "Forward channel messages to the TopicHub server"
+metadata:
+  { "openclaw": { "emoji": "📡", "events": ["message:received"] } }
+---
+# topichub-relay
+Forwards inbound channel messages to the TopicHub webhook endpoint.
+`,
+  );
+
+  const handlerCode = buildRelayHandler(bridgeConfig.webhookUrl, webhookSecret);
+  fs.writeFileSync(path.join(hookDir, 'handler.ts'), handlerCode);
+
+  const content = buildOpenClawJson(bridgeConfig, webhookSecret, port, hooksDir);
+
+  const configPath = path.join(configDir, 'openclaw.json');
   fs.writeFileSync(configPath, content, 'utf-8');
 
   return { configPath, configDir, webhookSecret, gatewayPort: port };
+}
+
+function buildRelayHandler(webhookUrl: string, secret: string): string {
+  return `import * as crypto from "node:crypto";
+
+const WEBHOOK_URL = ${JSON.stringify(webhookUrl)};
+const SECRET = ${JSON.stringify(secret)};
+
+const handler = async (event) => {
+  if (event.type !== "message" || event.action !== "received") return;
+
+  const ctx = event.context || {};
+
+  // Build the body WITHOUT signature so the HMAC covers the same bytes the
+  // server will verify against (the server strips "signature" before hashing).
+  const body = {
+    event: "message.received",
+    timestamp: new Date().toISOString(),
+    data: {
+      channel: ctx.channelId ?? "",
+      user: ctx.metadata?.senderId ?? ctx.from ?? "",
+      message: ctx.content ?? "",
+      sessionId: event.sessionKey ?? "",
+    },
+  };
+
+  const raw = JSON.stringify(body);
+  const sig = "sha256=" + crypto.createHmac("sha256", SECRET).update(raw).digest("hex");
+
+  // Append the signature so the server can extract it and verify "raw" above.
+  const envelope = JSON.stringify({ ...body, signature: sig });
+
+  try {
+    const res = await fetch(WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: envelope,
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) {
+      console.error("[topichub-relay] webhook POST failed:", res.status, await res.text().catch(() => ""));
+    }
+  } catch (err) {
+    console.error("[topichub-relay] webhook POST error:", err?.message ?? err);
+  }
+};
+
+export default handler;
+`;
 }
 
 export function cleanupBridgeConfigFiles(configDir: string): void {
