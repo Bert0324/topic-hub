@@ -1,4 +1,11 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import matter from 'gray-matter';
 import { ApiClient } from '../../api-client/api-client.js';
+import { loadConfig, loadConfigOrNull } from '../../config/config.js';
+import { loadAdminToken } from '../../auth/auth.js';
+import { resolveExecutorType, createExecutor } from '../../executors/executor-factory.js';
+import { writeMcpConfig, cleanupMcpConfig } from '../../mcp/mcp-config-writer.js';
 
 const api = new ApiClient();
 
@@ -99,7 +106,138 @@ export async function handleAiCommand(sub: string, args: string[]) {
       );
       break;
     }
+    case 'run': {
+      await handleAiRun(args);
+      break;
+    }
     default:
-      console.log('Usage: topichub-admin ai <status|enable|disable|config|usage>');
+      console.log('Usage: topichub-admin ai <status|enable|disable|config|usage|run>');
   }
+}
+
+async function handleAiRun(args: string[]) {
+  const topicId = args[0];
+  if (!topicId) {
+    console.error('Usage: topichub-admin ai run <topic-id> --skill <name> [--executor <type>]');
+    process.exit(1);
+  }
+
+  const skillFlag = extractFlag(args, '--skill');
+  if (!skillFlag) {
+    console.error('Missing required flag: --skill <name>');
+    process.exit(1);
+  }
+
+  const executorFlag = extractFlag(args, '--executor');
+
+  const config = loadConfig();
+  const token = await loadAdminToken();
+  if (!token) {
+    console.error('No admin token found. Run `topichub-admin init` first.');
+    process.exit(1);
+  }
+
+  const runApi = new ApiClient(config.serverUrl);
+  runApi.setToken(token);
+
+  // Fetch topic
+  console.log(`  Fetching topic ${topicId}...`);
+  let topic: any;
+  try {
+    topic = await runApi.get(`/api/v1/topics/${topicId}`);
+  } catch (err) {
+    console.error(`  ✗ Topic not found: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+
+  // Load SKILL.md
+  const skillsDir = config.skillsDir.startsWith('~')
+    ? path.join(process.env.HOME ?? '', config.skillsDir.slice(1))
+    : path.resolve(config.skillsDir);
+
+  const skillMdPath = path.join(skillsDir, skillFlag, 'SKILL.md');
+  let systemPromptPath: string | null = null;
+  let frontmatter: Record<string, any> = {};
+
+  if (fs.existsSync(skillMdPath)) {
+    const parsed = matter(fs.readFileSync(skillMdPath, 'utf-8'));
+    frontmatter = parsed.data ?? {};
+    systemPromptPath = skillMdPath;
+  } else {
+    console.warn(`  ⚠ No SKILL.md found at ${skillMdPath}. Running without skill instructions.`);
+  }
+
+  // Resolve executor
+  const executorType = resolveExecutorType({
+    skillFrontmatter: frontmatter,
+    cliFlag: executorFlag,
+    envVar: process.env.TOPICHUB_EXECUTOR,
+    configValue: config.executor,
+  });
+  const executor = createExecutor(executorType);
+
+  console.log(`  Executing ${skillFlag} on "${topic.title}"...`);
+  console.log(`  Agent: ${executorType}`);
+
+  // Build prompt
+  const prompt = [
+    'You are processing a one-off task from Topic Hub.',
+    '',
+    '## Topic',
+    JSON.stringify(topic, null, 2),
+  ].join('\n');
+
+  // Write MCP config
+  const mcpConfigPath = writeMcpConfig({
+    serverUrl: config.serverUrl,
+    token,
+    allowedTools: frontmatter.allowedTools,
+  });
+
+  try {
+    const result = await executor.execute(prompt, systemPromptPath, {
+      mcpConfigPath,
+      maxTurns: frontmatter.maxTurns,
+    });
+
+    console.log(`  Duration: ${(result.durationMs / 1000).toFixed(1)}s`);
+    console.log();
+    console.log('  Result:');
+    console.log(`  ${result.text.split('\n').join('\n  ')}`);
+
+    // Write timeline entry
+    try {
+      const entry = await runApi.post<{ _id: string }>(
+        `/api/v1/topics/${topicId}/timeline`,
+        {
+          actionType: 'ai_response',
+          actor: `ai:${skillFlag}`,
+          payload: {
+            skillName: skillFlag,
+            content: result.text,
+            executorType: result.executorType,
+            durationMs: result.durationMs,
+            tokenUsage: result.tokenUsage,
+          },
+        },
+      );
+      console.log(`\n  ✓ Timeline entry written (id: ${entry._id})`);
+    } catch {
+      console.warn('\n  ⚠ Failed to write timeline entry');
+    }
+  } catch (err) {
+    console.error(
+      `\n  ✗ Agent execution failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    process.exit(1);
+  } finally {
+    cleanupMcpConfig(mcpConfigPath);
+  }
+}
+
+function extractFlag(args: string[], flag: string): string | undefined {
+  const idx = args.indexOf(flag);
+  if (idx >= 0 && idx + 1 < args.length) return args[idx + 1];
+  const eqFlag = args.find((a) => a.startsWith(`${flag}=`));
+  return eqFlag?.split('=')[1];
 }

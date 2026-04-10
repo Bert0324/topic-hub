@@ -12,6 +12,7 @@ import { AuthModule } from './auth/auth.module';
 import { SearchModule } from './search/search.module';
 import { HealthController } from './health.controller';
 import { AiModule } from './ai/ai.module';
+import { DispatchModule } from './dispatch/dispatch.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { AiModule } from './ai/ai.module';
     IngestionModule,
     AdminModule,
     AuthModule,
+    DispatchModule,
   ],
   controllers: [HealthController],
 })

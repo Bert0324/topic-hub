@@ -13,11 +13,13 @@ import { SkillPipeline } from './pipeline/skill-pipeline';
 import { SkillAiRuntime } from './pipeline/skill-ai-runtime';
 import { CryptoModule } from '../crypto/crypto.module';
 import { AiModule } from '../ai/ai.module';
+import { DispatchModule } from '../dispatch/dispatch.module';
 
 @Module({
   imports: [
     CryptoModule,
     AiModule,
+    DispatchModule,
     MongooseModule.forFeature([
       {
         name: SkillRegistration.name,

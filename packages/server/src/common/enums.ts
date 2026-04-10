@@ -24,6 +24,22 @@ export enum TimelineActionType {
 export enum SkillCategory {
   TYPE = 'type',
   PLATFORM = 'platform',
-  AUTH = 'auth',
   ADAPTER = 'adapter',
+}
+
+export enum DispatchStatus {
+  UNCLAIMED = 'unclaimed',
+  CLAIMED = 'claimed',
+  COMPLETED = 'completed',
+  FAILED = 'failed',
+}
+
+export enum DispatchEventType {
+  CREATED = 'created',
+  UPDATED = 'updated',
+  STATUS_CHANGED = 'status_changed',
+  ASSIGNED = 'assigned',
+  SIGNAL_ATTACHED = 'signal_attached',
+  TAG_CHANGED = 'tag_changed',
+  REOPENED = 'reopened',
 }

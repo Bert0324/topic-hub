@@ -31,6 +31,16 @@ async function main() {
       await handleAiCommand(subcommand, restArgs);
       break;
     }
+    case 'init': {
+      const { handleInitCommand } = await import('./commands/init/index.js');
+      await handleInitCommand();
+      break;
+    }
+    case 'serve': {
+      const { handleServeCommand } = await import('./commands/serve/index.js');
+      await handleServeCommand(restArgs);
+      break;
+    }
     case 'auth': {
       const { saveAdminToken } = await import('./auth/auth.js');
       if (args[1]) {
@@ -62,7 +72,7 @@ async function main() {
     }
     default:
       console.log('Usage: topichub-admin <command> [subcommand] [args]');
-      console.log('Commands: skill, tenant, stats, health, ai, auth, login, logout');
+      console.log('Commands: init, serve, skill, tenant, stats, health, ai, auth, login, logout');
   }
 }
 

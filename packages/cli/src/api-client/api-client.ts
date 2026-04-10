@@ -1,11 +1,17 @@
 import { loadAdminToken, loadIdToken } from '../auth/auth.js';
+import { loadConfigOrNull } from '../config/config.js';
 
 export class ApiClient {
   readonly baseUrl: string;
   private token: string | null = null;
 
   constructor(baseUrl?: string) {
-    this.baseUrl = baseUrl ?? process.env.TOPICHUB_SERVER_URL ?? 'http://localhost:3000';
+    const config = baseUrl ? null : loadConfigOrNull();
+    this.baseUrl =
+      baseUrl ??
+      config?.serverUrl ??
+      process.env.TOPICHUB_SERVER_URL ??
+      'http://localhost:3000';
   }
 
   setToken(token: string) {
