@@ -96,16 +96,17 @@ export class BridgeManager {
   }
 
   private resolveOpenClawBin(): string {
-    try {
-      const resolved = require.resolve('openclaw/package.json');
-      const pkgDir = require('node:path').dirname(resolved);
-      const binPath = require('node:path').join(pkgDir, 'openclaw.mjs');
-      const fs = require('node:fs');
-      if (fs.existsSync(binPath)) return binPath;
-    } catch {
-      // fall through
+    const resolved = require.resolve('openclaw/package.json');
+    const pkgDir = require('node:path').dirname(resolved);
+    const binPath = require('node:path').join(pkgDir, 'openclaw.mjs');
+    const fs = require('node:fs');
+    if (!fs.existsSync(binPath)) {
+      throw new Error(
+        `openclaw binary not found at ${binPath}. ` +
+        'The openclaw package appears installed but is missing its entry point.',
+      );
     }
-    return 'openclaw';
+    return binPath;
   }
 
   private async spawnGateway(): Promise<void> {
@@ -114,12 +115,9 @@ export class BridgeManager {
     }
 
     const bin = this.resolveOpenClawBin();
-    const args = bin === 'openclaw'
-      ? ['gateway', '--config', this.generated.configPath, '--port', String(this._port), '--force']
-      : [bin, 'gateway', '--config', this.generated.configPath, '--port', String(this._port), '--force'];
-    const cmd = bin === 'openclaw' ? bin : process.execPath;
+    const args = [bin, 'gateway', '--config', this.generated.configPath, '--port', String(this._port), '--force'];
 
-    this.process = spawn(cmd, args, {
+    this.process = spawn(process.execPath, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env },
       detached: false,
