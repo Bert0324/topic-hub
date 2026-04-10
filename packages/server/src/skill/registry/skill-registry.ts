@@ -6,14 +6,13 @@ import { SkillRegistration } from '../entities/skill-registration.entity';
 import { TenantSkillConfig } from '../entities/tenant-skill-config.entity';
 import { TypeSkill } from '../interfaces/type-skill';
 import { PlatformSkill } from '../interfaces/platform-skill';
-import { AuthSkill } from '../interfaces/auth-skill';
 import { AdapterSkill } from '../interfaces/adapter-skill';
 import { ParsedSkillMd } from '../interfaces/skill-md';
 import { SkillLoader } from './skill-loader';
 import { SkillMdParser } from './skill-md-parser';
 import { AiService } from '../../ai/ai.service';
 
-type AnySkill = TypeSkill | PlatformSkill | AuthSkill | AdapterSkill;
+type AnySkill = TypeSkill | PlatformSkill | AdapterSkill;
 
 interface RegisteredSkill {
   skill: AnySkill;
@@ -75,13 +74,6 @@ export class SkillRegistry implements OnModuleInit {
     return this.getByCategory(SkillCategory.PLATFORM).map(
       (s) => s.skill as PlatformSkill,
     );
-  }
-
-  getAuthSkill(_tenantId: string): AuthSkill | undefined {
-    const authSkills = this.getByCategory(SkillCategory.AUTH);
-    return authSkills.length > 0
-      ? (authSkills[0].skill as AuthSkill)
-      : undefined;
   }
 
   async isTypeAvailable(
@@ -171,7 +163,6 @@ export class SkillRegistry implements OnModuleInit {
     if ('topicType' in manifest) return SkillCategory.TYPE;
     if ('platform' in manifest) return SkillCategory.PLATFORM;
     if ('sourceSystem' in manifest) return SkillCategory.ADAPTER;
-    if ('authorize' in skill) return SkillCategory.AUTH;
     return SkillCategory.TYPE;
   }
 

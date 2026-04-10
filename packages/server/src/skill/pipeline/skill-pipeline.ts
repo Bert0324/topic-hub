@@ -3,7 +3,7 @@ import { SkillRegistry } from '../registry/skill-registry';
 import { SkillConfigService } from '../config/skill-config.service';
 import { SkillAiRuntime } from './skill-ai-runtime';
 import { TopicContext } from '../interfaces/type-skill';
-import { UserIdentity } from '../interfaces/auth-skill';
+import { DispatchService } from '../../dispatch/dispatch.service';
 
 @Injectable()
 export class SkillPipeline {
@@ -13,68 +13,27 @@ export class SkillPipeline {
     private readonly registry: SkillRegistry,
     private readonly configService: SkillConfigService,
     @Optional() private readonly skillAiRuntime: SkillAiRuntime | null,
+    @Optional() private readonly dispatchService: DispatchService | null,
   ) {}
 
   async execute(
     tenantId: string,
     operation: string,
     topicData: any,
-    actor: string | UserIdentity,
+    actor: string,
     extra?: Record<string, unknown>,
   ): Promise<void> {
-    const actorStr =
-      typeof actor === 'string' ? actor : actor.userId;
-
     const ctx: TopicContext = {
       topic: topicData,
-      actor: actorStr,
+      actor,
       tenantId,
       timestamp: new Date(),
     };
 
-    const userIdentity: UserIdentity =
-      typeof actor === 'object'
-        ? actor
-        : {
-            userId: actor,
-            platform: 'unknown',
-            displayName: actor,
-            verified: false,
-          };
-
-    await this.runAuthCheck(tenantId, operation, ctx, userIdentity);
     await this.runTypeSkillHook(tenantId, operation, topicData, ctx, extra);
-    await this.runSkillAi(tenantId, operation, topicData, actorStr, extra);
+    await this.runSkillAi(tenantId, operation, topicData, actor, extra);
+    await this.createTaskDispatch(tenantId, operation, topicData, actor, extra);
     await this.runPlatformSkills(tenantId, operation, topicData, ctx);
-  }
-
-  private async runAuthCheck(
-    tenantId: string,
-    operation: string,
-    ctx: TopicContext,
-    userIdentity: UserIdentity,
-  ): Promise<void> {
-    const authSkill = this.registry.getAuthSkill(tenantId);
-    if (!authSkill) return;
-
-    try {
-      const result = await authSkill.authorize({
-        user: userIdentity,
-        action: operation,
-        tenantId,
-        topicContext: ctx.topic,
-      });
-
-      if (!result.allowed) {
-        const msg = result.reason ?? 'Unauthorized';
-        const err = new Error(msg);
-        (err as any).suggestedCommand = result.suggestedCommand;
-        throw err;
-      }
-    } catch (err) {
-      if ((err as any).suggestedCommand !== undefined) throw err;
-      this.logger.error('Auth skill error', err);
-    }
   }
 
   private async runTypeSkillHook(
@@ -156,6 +115,75 @@ export class SkillPipeline {
     } catch (err) {
       this.logger.error(
         `Skill AI runtime failed for ${typeSkill.manifest.name}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  private async createTaskDispatch(
+    tenantId: string,
+    operation: string,
+    topicData: any,
+    actor: string,
+    extra?: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this.dispatchService) return;
+
+    const topicType = topicData?.type;
+    if (!topicType) return;
+
+    const typeSkill = this.registry.getTypeSkillForType(topicType);
+    if (!typeSkill) return;
+
+    const enabled = await this.configService.isEnabledForTenant(
+      tenantId,
+      typeSkill.manifest.name,
+    );
+    if (!enabled) return;
+
+    const topicId = topicData._id?.toString?.() ?? String(topicData._id ?? '');
+    if (!topicId) return;
+
+    try {
+      await this.dispatchService.create({
+        tenantId,
+        topicId,
+        eventType: operation,
+        skillName: typeSkill.manifest.name,
+        enrichedPayload: {
+          topic: {
+            id: topicId,
+            type: topicData.type ?? '',
+            title: topicData.title ?? '',
+            status: topicData.status ?? '',
+            metadata: topicData.metadata ?? {},
+            groups: (topicData.groups ?? []).map((g: any) => ({
+              platform: g.platform,
+              groupId: g.groupId,
+            })),
+            assignees: (topicData.assignees ?? []).map((a: any) => ({
+              userId: a.userId,
+            })),
+            tags: topicData.tags ?? [],
+            signals: (topicData.signals ?? []).map((s: any) => ({
+              label: s.label,
+              url: s.url,
+              description: s.description,
+            })),
+            createdAt: topicData.createdAt?.toISOString?.() ?? '',
+            updatedAt: topicData.updatedAt?.toISOString?.() ?? '',
+          },
+          event: {
+            type: operation,
+            actor,
+            timestamp: new Date(),
+            payload: extra,
+          },
+        },
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to create task dispatch for skill=${typeSkill.manifest.name} topic=${topicId}`,
+        err,
       );
     }
   }

@@ -12,14 +12,19 @@
     "lint": "eslint src/"
   },
   "dependencies": {
+    "@inquirer/prompts": "^8.4.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "eventsource": "^4.1.0",
+    "gray-matter": "^4.0.3",
     "ink": "^5.0.0",
     "keytar": "^7.9.0",
     "open": "^10.1.0",
-    "react": "^18.3.0",
     "pastel": "^3.0.0",
+    "react": "^18.3.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@types/eventsource": "^3.0.0",
     "@types/jest": "^29.5.0",
     "@types/node": "^20.0.0",
     "@types/react": "^18.3.0",

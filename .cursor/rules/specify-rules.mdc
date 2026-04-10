@@ -16,6 +16,10 @@ Auto-generated from all feature plans. Last updated: 2026-04-10
 - MongoDB 7 (new collection: `ai_usage_records`) (002-ai-driven-skills)
 - TypeScript 5.x, Node.js 20 LTS + NestJS 10, Typegoose + Mongoose 8, zod, gray-matter (new — YAML frontmatter parsing) (002-ai-driven-skills)
 - MongoDB 7 (existing collections: `topics`, `timeline_entries`, `skill_registrations`, `tenant_skill_configs`, `ai_usage_records`) (002-ai-driven-skills)
+- TypeScript 5.x, Node.js 20 LTS + NestJS 10, Typegoose + Mongoose 8, zod, gray-matter (server); Ink 5 + React 18, zod (CLI — existing deps, Ink unused so far); `@modelcontextprotocol/sdk` (new — MCP server for CLI) (003-local-agent-executor)
+- MongoDB 7 (existing collections + new `task_dispatches` collection) (003-local-agent-executor)
+- TypeScript 5.x, Node.js 20 LTS + NestJS 10, Typegoose + Mongoose 8, zod (server) (004-simplify-skill-types)
+- MongoDB 7 (existing `skill_registrations` collection may contain `category: 'auth'` records) (004-simplify-skill-types)
 
 - TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Prisma (ORM), zod (validation) (001-topic-hub-app)
 
@@ -35,9 +39,9 @@ npm test && npm run lint
 TypeScript 5.x, Node.js 20 LTS: Follow standard conventions
 
 ## Recent Changes
+- 004-simplify-skill-types: Added TypeScript 5.x, Node.js 20 LTS + NestJS 10, Typegoose + Mongoose 8, zod (server)
+- 003-local-agent-executor: Added TypeScript 5.x, Node.js 20 LTS + NestJS 10, Typegoose + Mongoose 8, zod, gray-matter (server); Ink 5 + React 18, zod (CLI — existing deps, Ink unused so far); `@modelcontextprotocol/sdk` (new — MCP server for CLI)
 - 002-ai-driven-skills: Added TypeScript 5.x, Node.js 20 LTS + NestJS 10, Typegoose + Mongoose 8, zod, gray-matter (new — YAML frontmatter parsing)
-- 002-ai-driven-skills: Added TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Typegoose + Mongoose (ODM), zod (validation)
-- 002-ai-driven-skills: Added TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Typegoose + Mongoose (ODM), zod (validation)
 
 
 <!-- MANUAL ADDITIONS START -->
