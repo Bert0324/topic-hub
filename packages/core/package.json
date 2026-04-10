@@ -29,6 +29,14 @@
     "ts-node": "^10.9.2",
     "typescript": "^5.5.0"
   },
+  "peerDependencies": {
+    "openclaw": ">=2026.2.25"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
   "publishConfig": {
     "access": "public"
   }

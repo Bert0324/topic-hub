@@ -22,6 +22,10 @@ import { Observable, interval, map, merge } from 'rxjs';
 import { ZodError } from 'zod';
 import {
   EventPayloadSchema,
+  RegisterExecutorRequestSchema,
+  LinkRequestSchema,
+  UnlinkRequestSchema,
+  PostQuestionRequestSchema,
   TopicHubError,
   ValidationError,
   NotFoundError,
@@ -265,12 +269,14 @@ export class ApiController {
     @Req() req: Request,
     @Query('status') status?: string,
     @Query('limit') limit?: string,
+    @Query('targetUserId') targetUserId?: string,
   ) {
     try {
       const tenantId = await this.tenant(req);
       const dispatches = await this.hub.getHub().dispatch.list(tenantId, {
         status,
         limit: limit ? parseInt(limit, 10) : undefined,
+        targetUserId,
       });
       return { dispatches };
     } catch (err) {
@@ -279,8 +285,8 @@ export class ApiController {
   }
 
   @Post('api/v1/dispatches/:id/claim')
-  async claim(@Param('id') id: string, @Body() body: { claimedBy: string }) {
-    const ok = await this.hub.getHub().dispatch.claim(id, body.claimedBy);
+  async claim(@Param('id') id: string, @Body() body: { claimedBy: string; targetUserId?: string }) {
+    const ok = await this.hub.getHub().dispatch.claim(id, body.claimedBy, body.targetUserId);
     if (!ok) throw new ConflictException('Already claimed or not found');
     return { id, status: 'claimed', claimedBy: body.claimedBy };
   }
@@ -297,15 +303,83 @@ export class ApiController {
     return { id, status: 'failed' };
   }
 
+  // ─── Q&A Relay (tenant-scoped) ──────────────────────────────────────
+
+  @Post('api/v1/dispatches/:id/question')
+  async postQuestion(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    let parsed;
+    try {
+      parsed = PostQuestionRequestSchema.parse(body);
+    } catch (err) {
+      if (err instanceof ZodError)
+        throw new BadRequestException({ message: 'Validation failed', errors: err.errors });
+      throw err;
+    }
+
+    const hub = this.hub.getHub();
+    const dispatch = await hub.dispatch.findById(id);
+    if (!dispatch) throw new NotFoundException('Dispatch not found');
+
+    const tenantId = dispatch.tenantId;
+    const sourceChannel = dispatch.sourceChannel;
+    const sourcePlatform = dispatch.sourcePlatform;
+    const topichubUserId = dispatch.targetUserId ?? tenantId;
+
+    const qa = await hub.qa.createQuestion(
+      tenantId,
+      id,
+      topichubUserId,
+      parsed.questionText,
+      parsed.questionContext,
+      sourceChannel,
+      sourcePlatform,
+    );
+
+    if (sourceChannel && sourcePlatform) {
+      const ctx = parsed.questionContext;
+      const header = ctx
+        ? `🔔 **Agent Question** (${ctx.skillName} / ${ctx.topicTitle})`
+        : '🔔 **Agent Question**';
+
+      const imMessage = `${header}\n\n${parsed.questionText}\n\nReply with: \`/answer <your response>\``;
+
+      hub.messaging.send(sourcePlatform, {
+        tenantId,
+        groupId: sourceChannel,
+        message: imMessage,
+      }).catch(() => { /* non-fatal */ });
+    }
+
+    res.status(HttpStatus.CREATED);
+    return { qaId: String(qa._id), status: qa.status };
+  }
+
+  @Get('api/v1/dispatches/:id/qa')
+  async listQaExchanges(
+    @Param('id') id: string,
+    @Query('status') status?: string,
+  ) {
+    const hub = this.hub.getHub();
+    const exchanges = await hub.qa.findByDispatchAndStatus(id, status);
+    return { exchanges };
+  }
+
   @Sse('api/v1/dispatches/stream')
   stream(@Req() req: Request): Observable<{ data: string; type?: string }> {
     const tenantId = (req.query as any).tenantId as string;
+    const targetUserId = (req.query as any).targetUserId as string | undefined;
     const hub = this.hub.getHub();
 
     const dispatches$ = new Observable<{ data: string; type?: string }>((sub) => {
       const unsub = hub.dispatch.onTask((task: any) => {
-        if (task.tenantId === tenantId)
-          sub.next({ type: 'dispatch', data: JSON.stringify(task) });
+        if (task.tenantId !== tenantId) return;
+        if (targetUserId && task.targetUserId && task.targetUserId !== targetUserId) return;
+        sub.next({ type: 'dispatch', data: JSON.stringify(task) });
       });
       return () => unsub();
     });
@@ -315,5 +389,165 @@ export class ApiController {
     );
 
     return merge(dispatches$, heartbeat$);
+  }
+}
+
+// ── Executor management ──────────────────────────────────────────────
+
+@Controller('api/v1/executors')
+export class ExecutorController {
+  constructor(private readonly hub: TopicHubService) {}
+
+  private async resolveUser(req: Request) {
+    const auth = req.headers['authorization'] ?? '';
+    const token = typeof auth === 'string' && auth.startsWith('Bearer ')
+      ? auth.slice(7)
+      : '';
+    if (!token) throw new UnauthorizedException('Missing authorization');
+
+    const hub = this.hub.getHub();
+    const resolved = await hub.identity.resolveUserByClaimToken(token);
+    if (resolved) return { tenantId: resolved.tenantId, topichubUserId: resolved.topichubUserId, claimToken: token };
+
+    const { tenantId } = await hub.auth.resolveFromHeaders(
+      req.headers as Record<string, string>,
+    );
+    return { tenantId, topichubUserId: tenantId, claimToken: token };
+  }
+
+  @Post('register')
+  async register(
+    @Req() req: Request,
+    @Body() body: unknown,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { tenantId, topichubUserId, claimToken } = await this.resolveUser(req);
+
+    let parsed;
+    try {
+      parsed = RegisterExecutorRequestSchema.parse(body);
+    } catch (err) {
+      if (err instanceof ZodError)
+        throw new BadRequestException({ message: 'Validation failed', errors: err.errors });
+      throw err;
+    }
+
+    const result = await this.hub.getHub().heartbeat.registerExecutor(
+      tenantId, topichubUserId, claimToken, parsed.force, parsed.executorMeta,
+    );
+
+    if (result.conflict) {
+      res.status(HttpStatus.CONFLICT);
+      return {
+        error: 'An executor is already active for your account',
+        activeExecutor: result.existing,
+      };
+    }
+
+    return { status: 'registered', topichubUserId };
+  }
+
+  @Post('heartbeat')
+  async heartbeat(@Req() req: Request) {
+    const { tenantId, topichubUserId } = await this.resolveUser(req);
+    const result = await this.hub.getHub().heartbeat.heartbeat(tenantId, topichubUserId);
+    return { status: 'ok', pendingDispatches: result.pendingDispatches };
+  }
+
+  @Post('deregister')
+  async deregister(@Req() req: Request) {
+    const { tenantId, topichubUserId } = await this.resolveUser(req);
+    await this.hub.getHub().heartbeat.deregister(tenantId, topichubUserId);
+    return { status: 'deregistered' };
+  }
+}
+
+// ── Identity binding ─────────────────────────────────────────────────
+
+@Controller('api/v1/identity')
+export class IdentityController {
+  constructor(private readonly hub: TopicHubService) {}
+
+  private async tenant(req: Request) {
+    const { tenantId } = await this.hub.getHub().auth.resolveFromHeaders(
+      req.headers as Record<string, string>,
+    );
+    return tenantId;
+  }
+
+  private extractBearerToken(req: Request): string {
+    const auth = req.headers['authorization'] ?? '';
+    if (typeof auth === 'string' && auth.startsWith('Bearer ')) {
+      return auth.slice(7);
+    }
+    throw new UnauthorizedException('Missing Bearer token');
+  }
+
+  @Post('link')
+  async link(@Req() req: Request, @Body() body: unknown) {
+    let parsed;
+    try {
+      parsed = LinkRequestSchema.parse(body);
+    } catch (err) {
+      if (err instanceof ZodError)
+        throw new BadRequestException({ message: 'Validation failed', errors: (err as ZodError).errors });
+      throw err;
+    }
+
+    const tenantId = await this.tenant(req);
+    const claimToken = this.extractBearerToken(req);
+
+    try {
+      const result = await this.hub.getHub().identity.claimPairingCode(
+        tenantId,
+        parsed.code,
+        claimToken,
+      );
+
+      if (!result) {
+        throw new BadRequestException('Invalid or expired pairing code');
+      }
+
+      return {
+        status: 'linked',
+        topichubUserId: result.topichubUserId,
+        platform: result.platform,
+        platformUserId: result.platformUserId,
+      };
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
+      toHttpError(err);
+    }
+  }
+
+  @Post('unlink')
+  async unlink(@Req() req: Request, @Body() body: unknown) {
+    let parsed;
+    try {
+      parsed = UnlinkRequestSchema.parse(body);
+    } catch (err) {
+      if (err instanceof ZodError)
+        throw new BadRequestException({ message: 'Validation failed', errors: (err as ZodError).errors });
+      throw err;
+    }
+
+    const tenantId = await this.tenant(req);
+    const claimToken = this.extractBearerToken(req);
+
+    try {
+      if (parsed.platform && parsed.platformUserId) {
+        await this.hub.getHub().identity.deactivateBinding(
+          tenantId,
+          parsed.platform,
+          parsed.platformUserId,
+        );
+      } else {
+        await this.hub.getHub().identity.deactivateAllBindings(claimToken);
+      }
+
+      return { status: 'unlinked', cancelledDispatches: 0 };
+    } catch (err) {
+      toHttpError(err);
+    }
   }
 }

@@ -4,12 +4,14 @@ import type {
   OpenClawConfig,
   OpenClawWebhookPayload,
   OpenClawInboundResult,
+  TenantChannelEntry,
 } from './openclaw-types';
 import { OpenClawWebhookPayloadSchema } from './openclaw-types';
 import { MessageRenderer } from './message-renderer';
 import type { CardData } from '../skill/interfaces/type-skill';
 
 const COMMAND_PREFIX = '/topichub';
+const ANSWER_PREFIX = '/answer';
 const DEDUP_TTL_MS = 60_000;
 
 export class OpenClawBridge {
@@ -25,6 +27,27 @@ export class OpenClawBridge {
     if (this.dedupTimer.unref) {
       this.dedupTimer.unref();
     }
+  }
+
+  /**
+   * Create an OpenClawBridge configured for an auto-managed (embedded) gateway.
+   * The gatewayUrl, token, and webhookSecret are derived from the BridgeManager's state.
+   */
+  static fromBridgeManager(
+    port: number,
+    webhookSecret: string,
+    tenantMapping: Record<string, TenantChannelEntry>,
+    logger: TopicHubLogger,
+  ): OpenClawBridge {
+    return new OpenClawBridge(
+      {
+        gatewayUrl: `http://127.0.0.1:${port}`,
+        token: webhookSecret,
+        webhookSecret,
+        tenantMapping,
+      },
+      logger,
+    );
   }
 
   destroy(): void {
@@ -72,7 +95,7 @@ export class OpenClawBridge {
 
     const { channel, user, message, sessionId } = webhook.data;
 
-    if (!message.startsWith(COMMAND_PREFIX)) {
+    if (!message.startsWith(COMMAND_PREFIX) && !message.startsWith(ANSWER_PREFIX)) {
       return null;
     }
 

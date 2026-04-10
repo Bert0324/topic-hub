@@ -3,6 +3,7 @@ import { SkillConfigService } from '../config/skill-config.service';
 import { SkillAiRuntime } from './skill-ai-runtime';
 import { TopicContext } from '../interfaces/type-skill';
 import { DispatchService } from '../../services/dispatch.service';
+import type { DispatchMeta } from '../../services/dispatch.service';
 import { OpenClawBridge } from '../../bridge/openclaw-bridge';
 import type { TopicHubLogger } from '../../common/logger';
 import type { SkillPipelinePort } from '../../command/handlers/create.handler';
@@ -23,6 +24,7 @@ export class SkillPipeline implements SkillPipelinePort {
     topicData: any,
     actor: string,
     extra?: Record<string, unknown>,
+    dispatchMeta?: DispatchMeta,
   ): Promise<void> {
     const ctx: TopicContext = {
       topic: topicData,
@@ -33,7 +35,7 @@ export class SkillPipeline implements SkillPipelinePort {
 
     await this.runTypeSkillHook(tenantId, operation, topicData, ctx, extra);
     await this.runSkillAi(tenantId, operation, topicData, actor, extra);
-    await this.createTaskDispatch(tenantId, operation, topicData, actor, extra);
+    await this.createTaskDispatch(tenantId, operation, topicData, actor, extra, dispatchMeta);
     await this.runBridgeNotifications(tenantId, operation, topicData);
   }
 
@@ -126,6 +128,7 @@ export class SkillPipeline implements SkillPipelinePort {
     topicData: any,
     actor: string,
     extra?: Record<string, unknown>,
+    dispatchMeta?: DispatchMeta,
   ): Promise<void> {
     if (!this.dispatchService) return;
 
@@ -180,6 +183,7 @@ export class SkillPipeline implements SkillPipelinePort {
             payload: extra,
           },
         },
+        ...dispatchMeta,
       });
     } catch (err) {
       this.logger.error(

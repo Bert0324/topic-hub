@@ -111,6 +111,7 @@ const DISPATCH_TTL_DAYS = 30;
   options: { allowMixed: Severity.ALLOW },
 })
 @index({ tenantId: 1, status: 1, createdAt: 1 })
+@index({ tenantId: 1, targetUserId: 1, status: 1, createdAt: 1 })
 @index({ tenantId: 1, topicId: 1 })
 @index({ status: 1, claimExpiry: 1 })
 @index({ createdAt: 1 }, { expireAfterSeconds: DISPATCH_TTL_DAYS * 86400 })
@@ -150,8 +151,20 @@ export class TaskDispatch {
   @prop({ default: null })
   error?: string | null;
 
+  @prop({ default: null })
+  targetUserId?: string | null;
+
+  @prop({ default: null })
+  sourceChannel?: string | null;
+
+  @prop({ default: null })
+  sourcePlatform?: string | null;
+
   @prop()
   completedAt?: Date;
+
+  @prop({ default: null })
+  reminderSentAt?: Date | null;
 
   createdAt!: Date;
   updatedAt!: Date;

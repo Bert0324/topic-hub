@@ -1,14 +1,24 @@
+import os from 'node:os';
+import { HEARTBEAT_INTERVAL_MS, DEFAULT_MAX_CONCURRENT_AGENTS } from '@topichub/core';
 import { loadConfig } from '../../config/config.js';
 import { loadAdminToken } from '../../auth/auth.js';
 import { isAgentAvailable } from '../../executors/detector.js';
+import { ApiClient } from '../../api-client/api-client.js';
 import { EventConsumer, type DispatchEvent } from './event-consumer.js';
 import { TaskProcessor } from './task-processor.js';
+import { QaRelay } from './qa-relay.js';
 import { renderStatus, type ServeStatus, type EventLogEntry } from './status-display.js';
 
 export async function handleServeCommand(args: string[]): Promise<void> {
   const config = loadConfig();
 
   const executorFlag = extractFlag(args, '--executor');
+  const maxAgentsFlag = extractFlag(args, '--max-agents');
+  const forceFlag = args.includes('--force');
+
+  const maxConcurrentAgents = maxAgentsFlag
+    ? Math.max(1, Math.min(10, parseInt(maxAgentsFlag, 10) || DEFAULT_MAX_CONCURRENT_AGENTS))
+    : config.maxConcurrentAgents ?? DEFAULT_MAX_CONCURRENT_AGENTS;
 
   const token = await loadAdminToken();
   if (!token) {
@@ -23,12 +33,67 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     );
   }
 
+  // ── Executor registration (T023) ──────────────────────────────────
+  const baseUrl = config.serverUrl.replace(/\/+$/, '');
+  const regRes = await fetch(`${baseUrl}/api/v1/executors/register`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      force: forceFlag,
+      executorMeta: {
+        agentType: activeExecutor,
+        maxConcurrentAgents,
+        hostname: os.hostname(),
+        pid: process.pid,
+      },
+    }),
+  });
+
+  if (regRes.status === 409) {
+    const conflict = await regRes.json() as { error: string; activeExecutor?: { hostname: string; lastSeenAt: string } };
+    console.error(`✗ ${conflict.error}`);
+    if (conflict.activeExecutor) {
+      console.error(`  Active executor: hostname=${conflict.activeExecutor.hostname}, lastSeenAt=${conflict.activeExecutor.lastSeenAt}`);
+    }
+    console.error('  Use --force to override.');
+    process.exit(1);
+  }
+  if (!regRes.ok) {
+    const err = await regRes.json().catch(() => ({ message: regRes.statusText })) as { message?: string };
+    console.error(`✗ Executor registration failed: ${err.message ?? `HTTP ${regRes.status}`}`);
+    process.exit(1);
+  }
+
+  const regData = await regRes.json() as { status: string; topichubUserId: string };
+  console.log(`  ✓ Executor registered (topichubUserId=${regData.topichubUserId})`);
+  console.log(`  ✓ Max concurrent agents: ${maxConcurrentAgents}`);
+
+  // ── Heartbeat timer (T024) ────────────────────────────────────────
+  const heartbeatTimer = setInterval(async () => {
+    try {
+      await fetch(`${baseUrl}/api/v1/executors/heartbeat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+    } catch {
+      // heartbeat failure is non-fatal; server will consider executor stale after threshold
+    }
+  }, HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref();
+
   const status: ServeStatus = {
     connected: false,
     serverUrl: config.serverUrl,
     tenantId: config.tenantId,
     executor: activeExecutor,
     skillsDir: config.skillsDir,
+    maxConcurrentAgents,
     events: [],
     startedAt: new Date(),
     counters: { completed: 0, running: 0, failed: 0 },
@@ -37,7 +102,6 @@ export async function handleServeCommand(args: string[]): Promise<void> {
   const updateDisplay = () => renderStatus(status);
 
   const taskQueue: DispatchEvent[] = [];
-  let processingNext = false;
 
   const onEventUpdate = (entry: EventLogEntry) => {
     const idx = status.events.findIndex(
@@ -65,6 +129,9 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     updateDisplay();
   };
 
+  const qaApiClient = new ApiClient(config.serverUrl, token);
+  const qaRelay = new QaRelay(qaApiClient);
+
   const processor = new TaskProcessor({
     serverUrl: config.serverUrl,
     token,
@@ -72,28 +139,41 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     configExecutor: config.executor,
     cliExecutorFlag: executorFlag,
     executorArgs: config.executorArgs,
+    maxConcurrentAgents,
     onEventUpdate,
+    onAgentQuestion: async (dispatchId, question, context) => {
+      try {
+        const { qaId } = await qaRelay.postQuestion(dispatchId, question, context);
+        console.log(`[QA]       Question posted (qaId=${qaId}), waiting for answer...`);
+        const answer = await qaRelay.waitForAnswer(dispatchId, qaId);
+        if (answer) {
+          console.log(`[QA]       Answer received for qaId=${qaId}`);
+        } else {
+          console.log(`[QA]       Timed out waiting for answer (qaId=${qaId})`);
+        }
+        return answer;
+      } catch (err) {
+        console.error(`[QA]       Failed to relay question: ${err instanceof Error ? err.message : String(err)}`);
+        return null;
+      }
+    },
   });
 
-  const processQueue = async () => {
-    if (processingNext || taskQueue.length === 0) return;
-    processingNext = true;
-
-    while (taskQueue.length > 0) {
+  const drainQueue = () => {
+    while (taskQueue.length > 0 && processor.canAcceptMore()) {
       const dispatch = taskQueue.shift()!;
-      await processor.process(dispatch);
+      processor.process(dispatch).finally(drainQueue);
     }
-
-    processingNext = false;
   };
 
   const consumer = new EventConsumer({
     serverUrl: config.serverUrl,
     tenantId: config.tenantId,
     token,
+    topichubUserId: regData.topichubUserId,
     onDispatch: (event) => {
       taskQueue.push(event);
-      processQueue();
+      drainQueue();
     },
     onConnected: () => {
       status.connected = true;
@@ -108,13 +188,26 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     },
   });
 
-  // Graceful shutdown
+  // Graceful shutdown (T025)
   const shutdown = async () => {
     console.log('\n  Shutting down...');
+    clearInterval(heartbeatTimer);
     consumer.stop();
 
+    try {
+      await fetch(`${baseUrl}/api/v1/executors/deregister`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+    } catch {
+      // best-effort deregister
+    }
+
     if (processor.isProcessing) {
-      console.log('  Waiting for in-flight agent to finish (up to 30s)...');
+      console.log(`  Waiting for ${processor.activeTaskCount} in-flight agent(s) to finish (up to 30s)...`);
       const deadline = Date.now() + 30_000;
       while (processor.isProcessing && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 1000));

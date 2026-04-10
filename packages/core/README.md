@@ -134,11 +134,44 @@ console.log(GENERIC_TYPE_SKILL_MD);
 
 ## OpenClaw IM Bridge
 
-IM platform integration is handled by a built-in OpenClaw bridge. [OpenClaw](https://github.com/openclaw/openclaw) acts as a pure message relay — no AI processing at the bridge layer.
+IM platform integration is handled by an [OpenClaw](https://github.com/openclaw/openclaw) bridge — a pure message relay with no AI processing at the bridge layer. Two modes are supported:
 
-**Inbound**: OpenClaw receives messages from IM platforms (Lark, Slack, Telegram, etc.) and forwards them to Topic Hub via the `message.received` outbound webhook. Topic Hub parses `/topichub` commands, executes them, and sends a reply.
+### Auto-managed mode (recommended)
 
-**Outbound**: When topic lifecycle events occur, Topic Hub renders markdown notifications and sends them to all IM channels mapped to the tenant via OpenClaw's send API.
+Core spawns and manages an OpenClaw gateway as a child process. No separate OpenClaw deployment needed — just provide your IM platform credentials:
+
+```typescript
+const hub = await TopicHub.create({
+  mongoUri: process.env.MONGODB_URI!,
+  bridge: {
+    channels: {
+      feishu: { appId: 'cli_xxx', appSecret: 'secret' },
+      // discord: { botToken: 'xxx' },
+      // telegram: { botToken: 'xxx' },
+      // slack: { botToken: 'xoxb-xxx', appToken: 'xapp-xxx' },
+    },
+    tenantMapping: {
+      'lark-main': { tenantId: 'tenant_abc', platform: 'feishu' },
+    },
+    webhookUrl: 'http://localhost:8080/webhooks/openclaw',
+  },
+});
+```
+
+The consumer only needs ONE webhook endpoint to complete integration:
+
+```typescript
+app.post('/webhooks/openclaw', async (req, res) => {
+  const result = await hub.webhook.handleOpenClaw(req.body, JSON.stringify(req.body));
+  res.json(result);
+});
+```
+
+Requires `openclaw` to be installed (`npm install openclaw`). The host machine needs Node.js >= 22 for the OpenClaw child process (the main app can run on Node.js 20).
+
+### External mode
+
+Connect to a separately deployed OpenClaw gateway:
 
 ```typescript
 const hub = await TopicHub.create({
@@ -149,27 +182,16 @@ const hub = await TopicHub.create({
     webhookSecret: 'your-hmac-secret',
     tenantMapping: {
       'lark-main': { tenantId: 'tenant_abc', platform: 'lark' },
-      'slack-eng': { tenantId: 'tenant_abc', platform: 'slack' },
     },
   },
 });
-
-// Handle inbound OpenClaw webhook (POST /webhooks/openclaw)
-const result = await hub.webhook.handleOpenClaw(payload, rawBody);
-
-// Send a message to an IM channel
-await hub.messaging.send('lark', {
-  tenantId: 'tenant_abc',
-  groupId: 'lark-main',
-  message: '**Topic updated**: status changed to in_progress',
-});
 ```
 
-If `openclaw` config is omitted, the bridge is disabled and IM messaging is unavailable (all other TopicHub features still work).
+If neither `bridge` nor `openclaw` config is provided, the bridge is disabled and IM messaging is unavailable (all other TopicHub features still work). The two modes are mutually exclusive.
 
 ## Embedding in External Projects
 
-`@topichub/core` is designed to be embedded in any Node.js service:
+`@topichub/core` is designed to be embedded in any Node.js service. A complete integration needs only one controller:
 
 ```typescript
 import express from 'express';
@@ -180,21 +202,21 @@ app.use(express.json());
 
 const hub = await TopicHub.create({
   mongoUri: process.env.MONGODB_URI!,
-  openclaw: {
-    gatewayUrl: process.env.OPENCLAW_URL!,
-    token: process.env.OPENCLAW_TOKEN!,
-    webhookSecret: process.env.OPENCLAW_SECRET!,
-    tenantMapping: JSON.parse(process.env.OPENCLAW_TENANT_MAPPING || '{}'),
+  bridge: {
+    channels: {
+      feishu: {
+        appId: process.env.FEISHU_APP_ID!,
+        appSecret: process.env.FEISHU_APP_SECRET!,
+      },
+    },
+    tenantMapping: {
+      'lark-main': { tenantId: 'my-team', platform: 'feishu' },
+    },
+    webhookUrl: `http://localhost:8080/webhooks/openclaw`,
   },
 });
 
-app.post('/api/topichub/events', async (req, res) => {
-  const tenantId = req.headers['x-tenant-id'] as string;
-  const result = await hub.ingestion.ingest(tenantId, req.body);
-  res.json(result);
-});
-
-// OpenClaw inbound webhook
+// Single webhook endpoint — handles all IM inbound messages
 app.post('/webhooks/openclaw', async (req, res) => {
   const result = await hub.webhook.handleOpenClaw(req.body, JSON.stringify(req.body));
   res.json(result);
@@ -209,10 +231,14 @@ app.post('/webhooks/:platform', async (req, res) => {
 app.listen(8080);
 ```
 
+On `hub.shutdown()`, the OpenClaw child process is gracefully terminated.
+
 ## Requirements
 
-- Node.js 20+
+- Node.js 20+ (main process)
+- Node.js 22+ on host (for auto-managed OpenClaw gateway child process)
 - MongoDB 7 (or compatible)
+- `openclaw` npm package (optional — only needed when using `bridge` config)
 
 ## Monorepo
 

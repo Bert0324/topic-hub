@@ -23,6 +23,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@3.25.76)
+      '@topichub/core':
+        specifier: workspace:*
+        version: link:../core
       eventsource:
         specifier: ^4.1.0
         version: 4.1.0
@@ -169,19 +172,6 @@ importers:
         version: 5.9.3
 
   packages/skills/adapters/github-trending:
-    dependencies:
-      '@topichub/core':
-        specifier: workspace:*
-        version: link:../../../core
-    devDependencies:
-      '@types/node':
-        specifier: ^20.19.39
-        version: 20.19.39
-      typescript:
-        specifier: ^5.5.0
-        version: 5.9.3
-
-  packages/skills/platforms/lark-bot:
     dependencies:
       '@topichub/core':
         specifier: workspace:*

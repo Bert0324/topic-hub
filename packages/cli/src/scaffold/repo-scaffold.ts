@@ -32,113 +32,158 @@ function writeIfAbsent(filePath: string, content: string, force: boolean): 'writ
 function getSkillContent(): string {
   return `# Writing Topic Hub Skills
 
-Skills are organized by category: \`skills/topics/\`, \`skills/adapters/\`.
-Each skill lives in \`skills/{category}/<skill-name>/\` and is a self-contained package
-that plugs into the Topic Hub dispatch loop via one of two category interfaces.
-IM platform integration is handled by the OpenClaw bridge (configured at the server level),
-not by individual skills.
+## Overview
 
-There are two authoring modes: **code skills** (full TypeScript implementation) and
-**md-only skills** (just a SKILL.md file with AI instructions, no code required).
+Skills are self-contained packages that plug into the Topic Hub dispatch loop.
+Two categories: **type** (topic lifecycle) and **adapter** (external system connector).
+Two authoring modes: **code skills** (TypeScript) and **md-only skills** (just a SKILL.md).
 
-## Skill Categories
+IM platform integration is handled by the built-in OpenClaw bridge at the server level — not by skills.
 
-| Category | \`topichub.category\` | Key | Purpose |
-|----------|---------------------|-----|---------|
-| **type** | \`type\` | \`topicType\` | Topic type with lifecycle hooks, field schema, status transitions, card rendering |
-| **adapter** | \`adapter\` | \`sourceSystem\` | External system connector — transforms webhooks into topic events |
+## When to Use
 
-## Md-Only Skills (SKILL.md only, no code)
+- Creating a new skill (type or adapter)
+- Modifying an existing skill's manifest, hooks, or SKILL.md
+- Debugging skill loading, registration, or dispatch
+- Working in \`skills/topics/\` or \`skills/adapters/\`
 
-For AI-driven skills that don't need custom card rendering or validation,
-create a directory with just a \`SKILL.md\` file:
+Do **not** use for IM platform integration — that is configured at the server level via the OpenClaw bridge.
+
+## Quick Reference
+
+| Category | \`topichub.category\` | Key | Purpose | Md-only? |
+|----------|---------------------|-----|---------|----------|
+| **type** | \`type\` | \`topicType\` | Topic lifecycle hooks, field schema, card rendering | Yes |
+| **adapter** | \`adapter\` | \`sourceSystem\` | Transform external webhooks into topic events | No (requires code) |
+
+### Required Exports
+
+| Category | Required | Optional |
+|----------|----------|----------|
+| **TypeSkill** | \`manifest\`, \`renderCard\`, \`validateMetadata\` | \`onTopicCreated\`, \`onTopicUpdated\`, \`onTopicStatusChanged\`, \`onTopicAssigned\`, \`onTopicClosed\`, \`onTopicReopened\`, \`onSignalAttached\`, \`onTagChanged\` |
+| **AdapterSkill** | \`manifest\`, \`transformWebhook\` | \`runSetup\` |
+
+## File Layout
+
+### Code skill
 
 \`\`\`
-skills/topics/my-ai-skill/
-  SKILL.md
+skills/{topics,adapters}/<skill-name>/
+  package.json      # manifest with topichub config
+  SKILL.md          # agent instructions (frontmatter + system prompt)
+  src/index.ts      # implements TypeSkill or AdapterSkill
+  tests/
 \`\`\`
 
-The SKILL.md frontmatter declares identity and category:
+### Md-only skill (type category only)
+
+\`\`\`
+skills/topics/<skill-name>/
+  SKILL.md          # frontmatter declares name, topicType, executor, etc.
+\`\`\`
+
+The system auto-generates a TypeSkill stub with \`ai: true\`, generic card rendering,
+and permissive metadata validation. All logic is AI-driven via the SKILL.md prompt.
+
+## Manifest (\`package.json\`)
+
+### Type skill
+
+\`\`\`json
+{
+  "name": "my-bug-tracker",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "topichub": {
+    "category": "type",
+    "topicType": "bug"
+  },
+  "dependencies": {
+    "@topichub/core": "workspace:*"
+  }
+}
+\`\`\`
+
+### Adapter skill
+
+\`\`\`json
+{
+  "name": "github-adapter",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "topichub": {
+    "category": "adapter",
+    "sourceSystem": "github",
+    "webhookPath": "/webhooks/github"
+  },
+  "dependencies": {
+    "@topichub/core": "workspace:*"
+  }
+}
+\`\`\`
+
+Skill name regex: \`^[a-z][a-z0-9-]{1,62}[a-z0-9]$\`
+
+## SKILL.md Frontmatter
 
 \`\`\`yaml
 ---
-name: my-ai-skill
-description: Analyzes topics and provides AI-driven insights
-topicType: my-ai-type
-executor: cursor
+name: my-skill
+description: What this skill does
+topicType: my-type          # for type skills
+executor: cursor            # claude | cursor | codex | none
 maxTurns: 6
 allowedTools:
   - topichub_update_topic
   - topichub_add_timeline
 ---
+\`\`\`
 
-# System prompt here
+The markdown body becomes the AI system prompt.
+Use \`## on<EventName>\` headings for per-event instructions.
+
+## Md-Only Skill Example
+
+\`\`\`yaml
+---
+name: github-trends
+description: Tracks GitHub trending repos and enriches topics
+topicType: github-trend
+executor: cursor
+maxTurns: 8
+allowedTools:
+  - topichub_update_topic
+  - topichub_add_timeline
+---
+
+# GitHub Trends Tracker
 
 ## onTopicCreated
-Instructions for when a topic is created...
+1. Read the repo URL from topic metadata.
+2. Fetch repository stats.
+3. Classify by domain and add tags.
+4. Post analysis summary to timeline.
 \`\`\`
 
-## Skill Manifest (\`package.json\`) — Code Skills
-
-Declared under the \`topichub\` key. Must include \`category\` and the
-category-specific identifier (\`topicType\`, \`platform\`, or \`sourceSystem\`).
-
-## SKILL.md Frontmatter
-
-YAML frontmatter controls agent execution:
-- \`executor\`: \`claude\` | \`cursor\` | \`codex\` | \`none\`
-- \`maxTurns\`: max agent loop iterations
-- \`allowedTools\`: array of MCP tool names the agent may call
-
-The Markdown body becomes the system prompt. Use \`## on<EventName>\`
-headings for per-event instructions.
-
-## Interface Contracts
-
-### TypeSkill
-Required: \`manifest\`, \`renderCard\`, \`validateMetadata\`.
-Lifecycle hooks (optional): \`onTopicCreated\`, \`onTopicUpdated\`,
-\`onTopicStatusChanged\`, \`onTopicAssigned\`, \`onTopicClosed\`,
-\`onTopicReopened\`, \`onSignalAttached\`, \`onTagChanged\`.
-
-### AdapterSkill
-Required: \`manifest\`, \`transformWebhook\`.
-Optional: \`runSetup\` for credential configuration.
-
-## Publish Workflow
+## Publish & Test
 
 \`\`\`bash
-topichub publish
+topichub publish                      # publish all skills to server
+topichub serve                        # local dev with hot-reload
+topichub serve --executor none        # dry-run (no agent execution)
 \`\`\`
 
-Scans category subdirectories (\`skills/topics/\`,
-\`skills/adapters/\`), validates each skill's \`package.json\`, bundles SKILL.md
-and source, POSTs batch to server. Server upserts registrations and enables for tenant.
+Scans \`skills/topics/\` and \`skills/adapters/\`, validates manifests, bundles
+SKILL.md + source, POSTs batch to server.
 
-## Testing
+## Common Mistakes
 
-- Unit test hooks and \`renderCard\`/\`validateMetadata\` directly.
-- Test \`transformWebhook\` with sample payloads.
-- Integration: \`topichub serve --executor none\` to verify dispatch pipeline.
-
-## File Layout
-
-### Code skill (full implementation)
-
-\`\`\`
-skills/{category}/<skill-name>/
-  package.json      # manifest
-  SKILL.md          # agent instructions
-  src/index.ts      # category interface implementation
-  tests/
-\`\`\`
-
-### Md-only skill (no code)
-
-\`\`\`
-skills/{category}/<skill-name>/
-  SKILL.md          # frontmatter (name, description, topicType) + AI instructions
-\`\`\`
+| Mistake | Fix |
+|---------|-----|
+| Md-only skill with \`category: adapter\` | Adapters require code — use a code skill with \`transformWebhook\` |
+| Missing \`topicType\` in type skill manifest | Add \`topicType\` under \`topichub\` in package.json |
+| SKILL.md frontmatter missing \`name\` | Add \`name\` field matching the directory name |
+| Using \`platform\` category | Platform skills no longer exist — IM is handled by the OpenClaw bridge |
 `;
 }
 
@@ -146,9 +191,9 @@ function getCursorSkillMd(): string {
   return `---
 name: writing-topic-hub
 description: >-
-  Guide for writing Topic Hub skills — covers manifests, interfaces, SKILL.md
-  authoring, publishing, and testing. Use when creating, modifying, or debugging
-  Topic Hub skills, or when working in the skills/ directory.
+  Use when creating, modifying, or debugging Topic Hub skills, or when working
+  in the skills/ directory. Covers type skills, adapter skills, manifests,
+  SKILL.md authoring, md-only skills, publishing, and testing.
 ---
 
 ${getSkillContent()}`;
@@ -156,7 +201,7 @@ ${getSkillContent()}`;
 
 function getCursorRuleMdc(): string {
   return `---
-description: "Guide for writing Topic Hub skills — covers manifests, interfaces, SKILL.md, publishing, and testing"
+description: "Use when creating, modifying, or debugging Topic Hub skills, or when working in the skills/ directory"
 globs: ["skills/**"]
 ---
 

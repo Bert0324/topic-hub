@@ -1,5 +1,6 @@
 import { SkillCategory } from '../common/enums';
 import type { ParsedCommand } from './command-parser';
+import type { DispatchMeta } from '../services/dispatch.service';
 
 export interface CommandContext {
   platform: string;
@@ -7,6 +8,7 @@ export interface CommandContext {
   userId: string;
   tenantId: string;
   hasActiveTopic: boolean;
+  dispatchMeta?: DispatchMeta;
 }
 
 export interface RouteResult {

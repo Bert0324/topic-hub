@@ -8,12 +8,21 @@ const CLAIM_TTL_MS = 5 * 60 * 1000;
 const EXPIRY_CHECK_INTERVAL_MS = 60 * 1000;
 const MAX_RETRY_COUNT = 3;
 
+export interface DispatchMeta {
+  targetUserId?: string;
+  sourceChannel?: string;
+  sourcePlatform?: string;
+}
+
 export interface CreateDispatchDto {
   tenantId: string;
   topicId: string;
   eventType: string;
   skillName: string;
   enrichedPayload: any;
+  targetUserId?: string;
+  sourceChannel?: string;
+  sourcePlatform?: string;
 }
 
 export class DispatchService {
@@ -23,7 +32,7 @@ export class DispatchService {
   constructor(
     private readonly dispatchModel: Model<any>,
     private readonly logger: TopicHubLogger,
-  ) {}
+  ) { }
 
   init(): void {
     this.expiryTimer = setInterval(
@@ -53,6 +62,9 @@ export class DispatchService {
       status: DispatchStatus.UNCLAIMED,
       retryCount: 0,
       enrichedPayload: dto.enrichedPayload,
+      targetUserId: dto.targetUserId ?? null,
+      sourceChannel: dto.sourceChannel ?? null,
+      sourcePlatform: dto.sourcePlatform ?? null,
     });
 
     this.emitter.emit('newDispatch', dispatch);
@@ -63,9 +75,13 @@ export class DispatchService {
     return dispatch;
   }
 
+  async findById(dispatchId: string): Promise<any | null> {
+    return this.dispatchModel.findById(dispatchId).exec();
+  }
+
   async findUnclaimed(
     tenantId: string,
-    options?: { limit?: number; since?: Date },
+    options?: { limit?: number; since?: Date; targetUserId?: string },
   ): Promise<any[]> {
     const filter: Record<string, unknown> = {
       tenantId,
@@ -73,6 +89,12 @@ export class DispatchService {
     };
     if (options?.since) {
       filter.createdAt = { $gt: options.since };
+    }
+    if (options?.targetUserId) {
+      filter.$or = [
+        { targetUserId: options.targetUserId },
+        { targetUserId: null },
+      ];
     }
 
     return this.dispatchModel
@@ -82,15 +104,38 @@ export class DispatchService {
       .exec();
   }
 
+  async findUnclaimedForUser(
+    tenantId: string,
+    topichubUserId: string,
+    options?: { limit?: number; since?: Date },
+  ): Promise<any[]> {
+    return this.findUnclaimed(tenantId, {
+      ...options,
+      targetUserId: topichubUserId,
+    });
+  }
+
   async claim(
     dispatchId: string,
     claimedBy: string,
+    targetUserId?: string,
   ): Promise<any | null> {
     const claimExpiry = new Date(Date.now() + CLAIM_TTL_MS);
 
+    const filter: Record<string, unknown> = {
+      _id: dispatchId,
+      status: DispatchStatus.UNCLAIMED,
+    };
+    if (targetUserId) {
+      filter.$or = [
+        { targetUserId },
+        { targetUserId: null },
+      ];
+    }
+
     return this.dispatchModel
       .findOneAndUpdate(
-        { _id: dispatchId, status: DispatchStatus.UNCLAIMED },
+        filter,
         {
           $set: {
             status: DispatchStatus.CLAIMED,
@@ -153,6 +198,22 @@ export class DispatchService {
       .exec();
   }
 
+  async suspend(dispatchId: string, reason: string): Promise<any | null> {
+    return this.dispatchModel
+      .findOneAndUpdate(
+        { _id: dispatchId, status: { $in: [DispatchStatus.CLAIMED, DispatchStatus.UNCLAIMED] } },
+        {
+          $set: {
+            status: DispatchStatus.SUSPENDED,
+            error: reason,
+            claimExpiry: null,
+          },
+        },
+        { new: true },
+      )
+      .exec();
+  }
+
   async releaseExpired(): Promise<number> {
     const now = new Date();
 
@@ -199,6 +260,27 @@ export class DispatchService {
     return released;
   }
 
+  async findUnclaimedWithReminder(thresholdMs: number): Promise<any[]> {
+    const cutoff = new Date(Date.now() - thresholdMs);
+    return this.dispatchModel
+      .find({
+        status: DispatchStatus.UNCLAIMED,
+        targetUserId: { $ne: null },
+        sourceChannel: { $ne: null },
+        sourcePlatform: { $ne: null },
+        createdAt: { $lt: cutoff },
+        reminderSentAt: null,
+      })
+      .sort({ createdAt: 1 })
+      .exec();
+  }
+
+  async markReminderSent(dispatchId: string): Promise<void> {
+    await this.dispatchModel
+      .updateOne({ _id: dispatchId }, { $set: { reminderSentAt: new Date() } })
+      .exec();
+  }
+
   async countByStatus(
     tenantId: string,
   ): Promise<Record<DispatchStatus, number>> {
@@ -214,6 +296,7 @@ export class DispatchService {
       [DispatchStatus.CLAIMED]: 0,
       [DispatchStatus.COMPLETED]: 0,
       [DispatchStatus.FAILED]: 0,
+      [DispatchStatus.SUSPENDED]: 0,
     };
 
     for (const r of results) {
