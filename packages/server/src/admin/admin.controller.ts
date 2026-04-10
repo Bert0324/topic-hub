@@ -6,9 +6,14 @@ import {
   Patch,
   Param,
   Body,
+  Query,
+  BadRequestException,
+  NotFoundException,
+  BadGatewayException,
 } from '@nestjs/common';
 import { AdminService } from './admin.service';
 import { TenantService } from '../tenant/tenant.service';
+import { PublishPayloadSchema } from '../skill/interfaces';
 
 @Controller('admin')
 export class AdminController {
@@ -18,13 +23,25 @@ export class AdminController {
   ) {}
 
   @Get('skills')
-  async listSkills() {
-    return this.adminService.listSkills();
+  async listSkills(
+    @Query('scope') scope?: 'all' | 'public' | 'private',
+    @Query('tenantId') tenantId?: string,
+  ) {
+    return this.adminService.listSkills({ scope, tenantId });
   }
 
   @Post('skills')
   async installSkill(@Body() body: { packagePath: string }) {
     return this.adminService.installSkill(body.packagePath);
+  }
+
+  @Post('skills/publish')
+  async publishSkills(@Body() body: unknown) {
+    const result = PublishPayloadSchema.safeParse(body);
+    if (!result.success) {
+      throw new BadRequestException(result.error.flatten());
+    }
+    return this.adminService.publishSkills(result.data);
   }
 
   @Delete('skills/:name')
@@ -74,6 +91,31 @@ export class AdminController {
       await this.adminService.updateSkillConfig(tid, name, body.config);
     }
     return { success: true };
+  }
+
+  @Post('groups')
+  async createGroup(
+    @Body()
+    body: {
+      name: string;
+      platform: string;
+      memberIds?: string[];
+      topicType?: string;
+    },
+  ) {
+    if (!body.name || !body.platform) {
+      throw new BadRequestException('name and platform are required');
+    }
+
+    try {
+      return await this.adminService.createGroup(body);
+    } catch (err) {
+      if (err instanceof NotFoundException) throw err;
+      if (err instanceof BadGatewayException) throw err;
+      throw new BadGatewayException(
+        `Platform API error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   @Get('stats')

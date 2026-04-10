@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadGatewayException, ForbiddenException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ReturnModelType } from '@typegoose/typegoose';
 import { SkillRegistry } from '../skill/registry/skill-registry';
@@ -9,7 +9,9 @@ import { SkillRegistration } from '../skill/entities/skill-registration.entity';
 import { TenantSkillConfig } from '../skill/entities/tenant-skill-config.entity';
 import { Topic } from '../core/entities/topic.entity';
 import { TimelineEntry } from '../core/entities/timeline-entry.entity';
-import { TimelineActionType } from '../common/enums';
+import { TimelineActionType, SkillCategory } from '../common/enums';
+import type { PlatformSkill } from '../skill/interfaces/platform-skill';
+import type { PublishPayload } from '../skill/interfaces';
 
 @Injectable()
 export class AdminService {
@@ -66,8 +68,24 @@ export class AdminService {
     this.logger.log(`Uninstalled skill: ${name}`);
   }
 
-  async listSkills() {
-    return this.registrationModel.find().lean().exec();
+  async listSkills(
+    options: {
+      scope?: 'all' | 'public' | 'private';
+      tenantId?: string;
+    } = {},
+  ) {
+    const { scope = 'all', tenantId } = options;
+
+    let filter: Record<string, unknown> = {};
+    if (scope === 'public') {
+      filter = { isPrivate: false };
+    } else if (scope === 'private' && tenantId) {
+      filter = { isPrivate: true, tenantId };
+    } else if (scope === 'all' && tenantId) {
+      filter = { $or: [{ isPrivate: false }, { tenantId }] };
+    }
+
+    return this.registrationModel.find(filter).lean().exec();
   }
 
   async listTenantSkills(tenantId: string) {
@@ -148,6 +166,129 @@ export class AdminService {
     ]);
 
     return { topicsByType: byType, topicsByStatus: byStatus, skillErrors24h };
+  }
+
+  async createGroup(params: {
+    name: string;
+    platform: string;
+    memberIds?: string[];
+    topicType?: string;
+  }): Promise<{
+    groupId: string;
+    platform: string;
+    name: string;
+    inviteLink: string | null;
+  }> {
+    const platformSkills = this.skillRegistry.getByCategory(SkillCategory.PLATFORM);
+    const match = platformSkills.find(
+      (s) => (s.registration.metadata as any)?.platform === params.platform,
+    );
+
+    if (!match) {
+      throw new NotFoundException(
+        `No platform skill registered for platform: ${params.platform}`,
+      );
+    }
+
+    const platformSkill = match.skill as PlatformSkill;
+    if (!platformSkill.createGroup) {
+      throw new NotFoundException(
+        `Platform skill "${match.registration.name}" does not support group creation`,
+      );
+    }
+
+    try {
+      const result = await platformSkill.createGroup({
+        tenantId: '',
+        topicId: '',
+        name: params.name,
+        members: params.memberIds ?? [],
+      });
+
+      return {
+        groupId: result.groupId,
+        platform: params.platform,
+        name: params.name,
+        inviteLink: result.groupUrl ?? null,
+      };
+    } catch (err) {
+      this.logger.error(`Platform API failed for ${params.platform}`, err);
+      throw new BadGatewayException(
+        `Platform API error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  async publishSkills(
+    payload: PublishPayload,
+    requestingTenantId?: string,
+  ): Promise<{
+    published: Array<{ name: string; status: string }>;
+    errors: Array<{ name: string; error: string }>;
+  }> {
+    const isPublic = payload.isPublic ?? false;
+
+    if (isPublic) {
+      const tenant = await this.tenantService.findById(requestingTenantId ?? payload.tenantId);
+      if (!tenant || !tenant.isSuperAdmin) {
+        throw new ForbiddenException('Only super-admins can publish public skills');
+      }
+    }
+
+    const effectiveTenantId = isPublic ? null : payload.tenantId;
+    const published: Array<{ name: string; status: string }> = [];
+    const errors: Array<{ name: string; error: string }> = [];
+
+    for (const skill of payload.skills) {
+      try {
+        const existing = await this.registrationModel
+          .findOne({ name: skill.name, tenantId: effectiveTenantId })
+          .lean()
+          .exec();
+
+        await this.registrationModel
+          .findOneAndUpdate(
+            { name: skill.name, tenantId: effectiveTenantId },
+            {
+              name: skill.name,
+              category: skill.category,
+              version: skill.version ?? '0.0.0',
+              modulePath: isPublic
+                ? `published://public/${skill.name}`
+                : `published://${payload.tenantId}/${skill.name}`,
+              metadata: skill.metadata ?? {},
+              isPrivate: !isPublic,
+              tenantId: effectiveTenantId,
+              publishedContent: {
+                manifest: skill.manifest,
+                skillMdRaw: skill.skillMdRaw,
+                entryPoint: skill.entryPoint,
+                files: skill.files ?? {},
+              },
+            },
+            { upsert: true, new: true },
+          )
+          .lean()
+          .exec();
+
+        await this.tenantConfigModel
+          .findOneAndUpdate(
+            { tenantId: payload.tenantId, skillName: skill.name },
+            { tenantId: payload.tenantId, skillName: skill.name, enabled: true },
+            { upsert: true },
+          )
+          .exec();
+
+        published.push({
+          name: skill.name,
+          status: existing ? 'updated' : 'created',
+        });
+      } catch (err) {
+        errors.push({ name: skill.name, error: String(err) });
+      }
+    }
+
+    return { published, errors };
   }
 
   async reloadSkills() {

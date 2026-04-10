@@ -38,12 +38,13 @@ Topic Hub is just an engine. All actual capabilities come from **Skill** plugins
 
 | Category | What it does | Examples |
 |----------|--------------|---------|
-| **Type** | Defines a topic type — fields, card template, status rules | `deploy-type`, `incident-type` |
-| **Platform** | Connects an IM platform — groups, cards, commands | `feishu`, `slack` |
-| **Auth** | Controls permissions — who can do what | `rbac-auth`, `ldap-auth` |
-| **Adapter** | Transforms external webhooks into Topic Hub events | `github-adapter`, `jenkins-adapter` |
+| **Type** | Defines a topic type — fields, card template, lifecycle hooks | `deploy-type`, `incident-type` |
+| **Platform** | Connects an IM platform — webhook, commands, cards, groups | `feishu`, `slack` |
+| **Adapter** | Connects external systems — transforms webhooks, handles auth | `github-adapter`, `jenkins-adapter` |
 
-No Auth Skill installed? Everyone has full access. No Adapter? Just create Topics manually. **Mix and match — only install what you need.**
+No Adapter? Just create Topics manually. **Mix and match — only install what you need.**
+
+Skills are organized by category: `skills/topics/`, `skills/platforms/`, `skills/adapters/`.
 
 ### AI-Powered Skills
 
@@ -153,12 +154,31 @@ topichub-admin login                 # OAuth2 login (opens browser)
 ### Skill management
 
 ```bash
-topichub-admin skill install <pkg>   # install a Skill (npm package or local path)
-topichub-admin skill list            # list installed Skills
-topichub-admin skill enable <name>   # enable for your tenant
-topichub-admin skill disable <name>  # disable
-topichub-admin skill setup <name>    # guided setup (OAuth, etc.)
+topichub-admin skill list                   # list installed Skills
+topichub-admin skill list --scope private   # list only private Skills
+topichub-admin skill list --category adapter  # filter by category
+topichub-admin skill install <pkg>          # install from path (server-local)
+topichub-admin skill enable <name>          # enable for your tenant
+topichub-admin skill disable <name>         # disable
+topichub-admin skill setup <name>           # guided setup (OAuth, etc.)
 topichub-admin skill config <name> --show   # view config (secrets masked)
+```
+
+### Skill development
+
+```bash
+topichub-admin init                         # configure server URL, token, tenant
+topichub-admin skill-repo create <name>     # create a skill repo project
+topichub-admin skill create                 # scaffold a skill (interactive Q&A)
+topichub-admin publish                      # publish all skills in repo (private)
+topichub-admin publish --public             # publish as public (super-admin only)
+topichub-admin publish --dry-run            # validate without publishing
+```
+
+### Group management
+
+```bash
+topichub-admin group create <name> --platform <p> --members <ids>  # create IM group
 ```
 
 ### Tenant management
@@ -215,56 +235,78 @@ https://your-hub.com/webhooks/adapter/github
 
 ## Custom Skills
 
-Create a directory with a `package.json` and an entry module:
+### Unified Workflow (recommended)
 
-```typescript
-import { z } from 'zod';
-
-export default {
-  manifest: {
-    name: 'incident-type',
-    category: 'type',
-    topicType: 'incident',
-    version: '1.0.0',
-    fieldSchema: z.object({
-      severity: z.enum(['P0', 'P1', 'P2', 'P3']),
-      affectedService: z.string(),
-    }),
-    groupNamingTemplate: '🚨 {title} - {severity}',
-    customArgs: [
-      { name: 'severity', type: 'string', required: true, description: 'P0-P3' },
-      { name: 'affected-service', type: 'string', required: true },
-    ],
-  },
-
-  renderCard(topic) {
-    return {
-      title: `🚨 Incident: ${topic.title}`,
-      status: topic.status,
-      fields: [
-        { label: 'Severity', value: topic.metadata.severity, type: 'badge' },
-        { label: 'Service', value: topic.metadata.affectedService, type: 'text' },
-      ],
-    };
-  },
-
-  validateMetadata(metadata) {
-    return this.manifest.fieldSchema.safeParse(metadata);
-  },
-};
-```
-
-Install and enable:
+Both public and private Skills use the same development flow:
 
 ```bash
-topichub-admin skill install ./my-skills/incident-type
-topichub-admin skill enable incident-type
+# 1. Set up CLI
+topichub-admin init
+
+# 2. Create a skill repo
+topichub-admin skill-repo create my-skills
+cd my-skills
+
+# 3. Create a skill (interactive Q&A)
+topichub-admin skill create
+# ? Skill name: incident-handler
+# ? Category: Topic Type
+# ? Topic type name: incident
+# ? Lifecycle hooks: created, updated
+
+# 4. Develop (AI-assisted — open in Cursor / Claude Code / Codex)
+cursor .
+
+# 5. Test locally
+topichub-admin serve --executor claude-code
+
+# 6. Publish
+topichub-admin publish              # private (your tenant only)
+topichub-admin publish --public     # public (all tenants, super-admin only)
 ```
 
-Now users can type in IM:
+The scaffolded repo includes AI agent skill files (`.cursor/rules/`, `AGENTS.md`) that teach your AI coding tool how to write Topic Hub skills.
+
+### Skill Structure
 
 ```
-/topichub create incident --severity P0 --affected-service payments
+my-skills/
+├── skills/
+│   ├── topics/
+│   │   └── incident-handler/
+│   │       ├── package.json     # manifest with topichub.category
+│   │       ├── SKILL.md         # agent instructions (gray-matter frontmatter)
+│   │       ├── src/index.ts     # implements TypeSkill interface
+│   │       └── README.md
+│   ├── platforms/
+│   └── adapters/
+├── .cursor/rules/               # AI rules for Cursor
+├── AGENTS.md                    # AI guide for Claude Code / Codex
+└── .topichub-repo.json          # repo metadata
+```
+
+### Manifest Example (Type Skill)
+
+```json
+{
+  "name": "incident-handler",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "topichub": {
+    "category": "type",
+    "topicType": "incident",
+    "hooks": ["created", "updated"]
+  }
+}
+```
+
+### Direct Server Loading (public Skills shortcut)
+
+Public Skills can also be placed directly in `packages/skills/` (organized by `topics/`, `platforms/`, `adapters/`). The server auto-loads them on startup — no `publish` step needed.
+
+```bash
+topichub-admin skill install ./packages/skills/topics/incident-handler
+topichub-admin skill enable incident-handler
 ```
 
 ### AI-Powered Skill Example

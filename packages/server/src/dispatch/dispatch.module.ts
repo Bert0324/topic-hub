@@ -5,6 +5,7 @@ import { TaskDispatch } from './entities/task-dispatch.entity';
 import { DispatchService } from './dispatch.service';
 import { DispatchController } from './dispatch.controller';
 import { DispatchSseController } from './dispatch-sse.controller';
+import { TenantModule } from '../tenant/tenant.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { DispatchSseController } from './dispatch-sse.controller';
         schema: getModelForClass(TaskDispatch).schema,
       },
     ]),
+    TenantModule,
   ],
   providers: [DispatchService],
   controllers: [DispatchController, DispatchSseController],

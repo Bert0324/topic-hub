@@ -24,6 +24,9 @@ export class Tenant {
   @prop({ required: true })
   adminTokenExpiresAt!: Date;
 
+  @prop({ default: false })
+  isSuperAdmin!: boolean;
+
   createdAt!: Date;
   updatedAt!: Date;
 }
