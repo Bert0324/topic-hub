@@ -8,6 +8,7 @@ export const LocalConfigSchema = z.object({
   tenantId: z.string().min(1),
   executor: ExecutorType,
   executorArgs: z.array(z.string()).optional(),
+  maxConcurrentAgents: z.number().int().min(1).max(10).optional(),
   skillsDir: z.string().min(1),
   openclawGatewayUrl: z.string().url().optional(),
   openclawToken: z.string().min(1).optional(),

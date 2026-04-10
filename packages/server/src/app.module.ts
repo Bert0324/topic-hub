@@ -1,7 +1,7 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TopicHubModule } from './topichub.provider';
-import { WebhookController, ApiController } from './api.controller';
+import { WebhookController, ApiController, ExecutorController, IdentityController } from './api.controller';
 import { requestLogger } from './common/request-logger.middleware';
 
 @Module({
@@ -9,7 +9,7 @@ import { requestLogger } from './common/request-logger.middleware';
     ConfigModule.forRoot({ isGlobal: true }),
     TopicHubModule,
   ],
-  controllers: [WebhookController, ApiController],
+  controllers: [WebhookController, ApiController, ExecutorController, IdentityController],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {

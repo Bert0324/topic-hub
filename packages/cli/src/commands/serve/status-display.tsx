@@ -13,6 +13,7 @@ export interface ServeStatus {
   tenantId: string;
   executor: string;
   skillsDir: string;
+  maxConcurrentAgents: number;
   events: EventLogEntry[];
   startedAt: Date;
   counters: { completed: number; running: number; failed: number };
@@ -49,7 +50,7 @@ export function renderStatus(status: ServeStatus): void {
     `  Topic Hub Serve — ${connStr} to ${status.serverUrl}`,
   );
   console.log(
-    `  Tenant: ${status.tenantId} | Executor: ${status.executor} | Skills: ${status.skillsDir}`,
+    `  Tenant: ${status.tenantId} | Executor: ${status.executor} | Skills: ${status.skillsDir} | Agents: ${status.counters.running}/${status.maxConcurrentAgents}`,
   );
   console.log();
 

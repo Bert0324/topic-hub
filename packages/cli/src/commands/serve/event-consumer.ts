@@ -13,6 +13,7 @@ export interface EventConsumerOptions {
   serverUrl: string;
   tenantId: string;
   token: string;
+  topichubUserId?: string;
   onDispatch: (event: DispatchEvent) => void;
   onConnected: () => void;
   onDisconnected: (err?: Error) => void;
@@ -44,9 +45,11 @@ export class EventConsumer {
 
   private async catchUp(): Promise<void> {
     try {
-      const data = await this.api.get<{ dispatches: DispatchEvent[] }>(
-        `/api/v1/dispatches?status=unclaimed&limit=50`,
-      );
+      let url = `/api/v1/dispatches?status=unclaimed&limit=50`;
+      if (this.options.topichubUserId) {
+        url += `&targetUserId=${encodeURIComponent(this.options.topichubUserId)}`;
+      }
+      const data = await this.api.get<{ dispatches: DispatchEvent[] }>(url);
       for (const dispatch of data.dispatches) {
         this.options.onDispatch(dispatch);
       }
@@ -58,7 +61,10 @@ export class EventConsumer {
   private connectSse(): void {
     if (this.closed) return;
 
-    const url = `${this.options.serverUrl}/api/v1/dispatches/stream?tenantId=${this.options.tenantId}`;
+    let url = `${this.options.serverUrl}/api/v1/dispatches/stream?tenantId=${this.options.tenantId}`;
+    if (this.options.topichubUserId) {
+      url += `&targetUserId=${encodeURIComponent(this.options.topichubUserId)}`;
+    }
     const es = new EventSource(url, {
       fetch: (input: any, init?: any) =>
         fetch(input, {

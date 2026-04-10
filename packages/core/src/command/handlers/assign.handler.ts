@@ -1,10 +1,11 @@
 import type { TopicService } from '../../services/topic.service';
 import type { TopicHubLogger } from '../../common/logger';
+import type { DispatchMeta } from '../../services/dispatch.service';
 import type { ParsedCommand } from '../command-parser';
 import type { CommandContext } from '../command-router';
 
 export interface SkillPipelinePort {
-  execute(tenantId: string, operation: string, topic: any, actor: string, extra?: Record<string, unknown>): Promise<void>;
+  execute(tenantId: string, operation: string, topic: any, actor: string, extra?: Record<string, unknown>, dispatchMeta?: DispatchMeta): Promise<void>;
 }
 
 export class AssignHandler {
@@ -43,6 +44,7 @@ export class AssignHandler {
         updated,
         context.userId,
         { userId },
+        context.dispatchMeta,
       );
 
       return {

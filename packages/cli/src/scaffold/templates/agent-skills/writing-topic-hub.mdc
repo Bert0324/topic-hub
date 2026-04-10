@@ -1,25 +1,61 @@
 ---
-description: "Guide for writing Topic Hub skills — covers manifests, interfaces, SKILL.md, publishing, and testing"
+description: "Use when creating, modifying, or debugging Topic Hub skills, or when working in the skills/ directory"
 globs: ["skills/**"]
 ---
 
 # Writing Topic Hub Skills
 
-Skills are organized by category: `skills/topics/`, `skills/platforms/`, `skills/adapters/`.
-Each skill lives in `skills/{category}/<skill-name>/` and is a self-contained package
-that plugs into the Topic Hub dispatch loop via one of three category interfaces.
+## Overview
 
-## Skill Categories
+Skills are self-contained packages that plug into the Topic Hub dispatch loop.
+Two categories: **type** (topic lifecycle) and **adapter** (external system connector).
+Two authoring modes: **code skills** (TypeScript) and **md-only skills** (just a SKILL.md).
 
-| Category   | `topichub.category` | Identifying key        | Purpose |
-|------------|---------------------|------------------------|---------|
-| **type**   | `type`              | `topicType`            | Defines a topic type with lifecycle hooks, field schema, status transitions, and card rendering |
-| **platform** | `platform`        | `platform`             | IM platform integration — webhook handling, slash-command parsing, card posting, group management |
-| **adapter** | `adapter`          | `sourceSystem`         | External system connector — transforms inbound webhooks into topic events (GitHub, Jira, PagerDuty, …) |
+IM platform integration is handled by the built-in OpenClaw bridge at the server level — not by skills.
 
-## Skill Manifest (`package.json`)
+## When to Use
 
-The manifest is declared in the skill's `package.json` under the `topichub` key.
+- Creating a new skill (type or adapter)
+- Modifying an existing skill's manifest, hooks, or SKILL.md
+- Debugging skill loading, registration, or dispatch
+- Working in `skills/topics/` or `skills/adapters/`
+
+Do **not** use for IM platform integration — that is configured at the server level via the OpenClaw bridge.
+
+## Quick Reference
+
+| Category | `topichub.category` | Key | Purpose | Md-only? |
+|----------|---------------------|-----|---------|----------|
+| **type** | `type` | `topicType` | Topic lifecycle hooks, field schema, card rendering | Yes |
+| **adapter** | `adapter` | `sourceSystem` | Transform external webhooks into topic events | No (requires code) |
+
+### Required Exports
+
+| Category | Required | Optional |
+|----------|----------|----------|
+| **TypeSkill** | `manifest`, `renderCard`, `validateMetadata` | `onTopicCreated`, `onTopicUpdated`, `onTopicStatusChanged`, `onTopicAssigned`, `onTopicClosed`, `onTopicReopened`, `onSignalAttached`, `onTagChanged` |
+| **AdapterSkill** | `manifest`, `transformWebhook` | `runSetup` |
+
+## File Layout
+
+### Code skill
+
+```
+skills/{topics,adapters}/<skill-name>/
+  package.json      # manifest with topichub config
+  SKILL.md          # agent instructions (frontmatter + system prompt)
+  src/index.ts      # implements TypeSkill or AdapterSkill
+  tests/
+```
+
+### Md-only skill (type category only)
+
+```
+skills/topics/<skill-name>/
+  SKILL.md          # frontmatter declares name, topicType, executor, etc.
+```
+
+## Manifest (`package.json`)
 
 ### Type skill
 
@@ -30,29 +66,10 @@ The manifest is declared in the skill's `package.json` under the `topichub` key.
   "main": "src/index.ts",
   "topichub": {
     "category": "type",
-    "topicType": "bug",
-    "hooks": ["onTopicCreated", "onTopicUpdated", "onTopicStatusChanged"],
-    "schema": {
-      "severity": "string",
-      "stepsToReproduce": "string"
-    }
-  }
-}
-```
-
-### Platform skill
-
-```json
-{
-  "name": "lark-platform",
-  "version": "1.0.0",
-  "main": "src/index.ts",
-  "topichub": {
-    "category": "platform",
-    "platform": "lark",
-    "capabilities": ["group_management", "push", "commands"],
-    "webhookPath": "/webhooks/lark",
-    "auth": { "type": "oauth2", "scopes": ["im:message", "im:chat"] }
+    "topicType": "bug"
+  },
+  "dependencies": {
+    "@topichub/core": "workspace:*"
   }
 }
 ```
@@ -67,201 +84,70 @@ The manifest is declared in the skill's `package.json` under the `topichub` key.
   "topichub": {
     "category": "adapter",
     "sourceSystem": "github",
-    "webhookPath": "/webhooks/github",
-    "supportedEvents": ["issues.opened", "issues.closed", "pull_request.merged"]
+    "webhookPath": "/webhooks/github"
+  },
+  "dependencies": {
+    "@topichub/core": "workspace:*"
   }
 }
 ```
 
-## SKILL.md Frontmatter
+Skill name regex: `^[a-z][a-z0-9-]{1,62}[a-z0-9]$`
 
-Every skill **should** have a `SKILL.md` file. The YAML frontmatter controls how
-the AI agent executor processes dispatches for this skill.
+## SKILL.md Frontmatter
 
 ```yaml
 ---
-name: my-bug-tracker
-description: Triages incoming bug reports and assigns severity
-executor: claude          # claude | cursor | codex | none
-maxTurns: 5               # max agent loop iterations
-allowedTools:             # MCP tools the agent may call
+name: my-skill
+description: What this skill does
+topicType: my-type          # for type skills
+executor: cursor            # claude | cursor | codex | none
+maxTurns: 6
+allowedTools:
   - topichub_update_topic
   - topichub_add_timeline
-  - topichub_transition_status
+---
+```
+
+The markdown body becomes the AI system prompt.
+Use `## on<EventName>` headings for per-event instructions.
+
+## Md-Only Skill Example
+
+```yaml
+---
+name: github-trends
+description: Tracks GitHub trending repos and enriches topics
+topicType: github-trend
+executor: cursor
+maxTurns: 8
+allowedTools:
+  - topichub_update_topic
+  - topichub_add_timeline
 ---
 
-# System prompt content below the frontmatter
+# GitHub Trends Tracker
 
-You are a bug-triage agent. When a new bug topic is created, analyse the
-description and metadata, then:
-1. Set severity to P0–P3.
-2. Assign to the on-call engineer if P0/P1.
-3. Post a triage summary to the timeline.
-```
-
-The Markdown body (everything below the frontmatter) becomes the **system prompt**
-passed to the agent executor.
-
-### Event-specific prompts
-
-Add headings of the form `## on<EventName>` to provide per-event instructions:
-
-```markdown
 ## onTopicCreated
-Perform initial triage…
-
-## onTopicStatusChanged
-Validate the status transition…
+1. Read the repo URL from topic metadata.
+2. Fetch repository stats.
+3. Classify by domain and add tags.
+4. Post analysis summary to timeline.
 ```
 
-## Interface Contracts
-
-### TypeSkill
-
-```typescript
-interface TypeSkill {
-  manifest: TypeSkillManifest;
-  init?(ctx: SkillContext): void;
-  onTopicCreated?(ctx: TopicContext): Promise<void> | void;
-  onTopicUpdated?(ctx: TopicContext): Promise<void> | void;
-  onTopicStatusChanged?(ctx: TopicContext & { from: string; to: string }): Promise<void> | void;
-  onTopicAssigned?(ctx: TopicContext & { userId: string }): Promise<void> | void;
-  onTopicClosed?(ctx: TopicContext): Promise<void> | void;
-  onTopicReopened?(ctx: TopicContext): Promise<void> | void;
-  onSignalAttached?(ctx: TopicContext & { signal: any }): Promise<void> | void;
-  onTagChanged?(ctx: TopicContext & { added?: string[]; removed?: string[] }): Promise<void> | void;
-  renderCard(topic: any): CardData;
-  validateMetadata(metadata: unknown): ValidationResult;
-}
-```
-
-Required exports: `manifest`, `renderCard`, `validateMetadata`.
-Lifecycle hooks are optional — only implement the events your skill cares about.
-
-### PlatformSkill
-
-```typescript
-interface PlatformSkill {
-  manifest: PlatformSkillManifest;
-  init?(ctx: SkillContext): void;
-  createGroup?(params: CreateGroupParams): Promise<GroupResult>;
-  inviteToGroup?(params: { tenantId: string; groupId: string; userIds: string[] }): Promise<void>;
-  postCard?(params: PostCardParams): Promise<void>;
-  updateCard?(params: PostCardParams): Promise<void>;
-  handleWebhook?(payload: unknown, headers: Record<string, string>): Promise<CommandResult | null>;
-  sendMessage?(params: { tenantId: string; groupId: string; message: string }): Promise<void>;
-  resolveTenantId?(webhookPayload: unknown): Promise<string> | string;
-  runSetup?(ctx: SetupContext): Promise<void>;
-}
-```
-
-The webhook pipeline is: `handleWebhook` → command parsing → routing → response.
-`resolveTenantId` must be implemented for multi-tenant webhook dispatch.
-
-### AdapterSkill
-
-```typescript
-interface AdapterSkill {
-  manifest: AdapterSkillManifest;
-  init?(ctx: SkillContext): void;
-  transformWebhook(payload: unknown, headers: Record<string, string>): TopicEventPayload | null;
-  runSetup?(ctx: SetupContext): Promise<void>;
-}
-```
-
-`transformWebhook` is **required** — it converts an inbound webhook into a
-`TopicEventPayload` (or `null` to ignore the event).
-
-## Publish Workflow
+## Publish & Test
 
 ```bash
-# Publish all skills in the repo to the server
-topichub publish
-
-# What happens:
-# 1. CLI scans skills/{topics,platforms,adapters}/<name>/package.json
-# 2. Validates manifest against SkillManifestSchema (zod)
-# 3. Reads SKILL.md raw content
-# 4. Reads entry point source
-# 5. POSTs batch to POST /admin/skills/publish
-# 6. Server upserts SkillRegistration + enables for tenant
+topichub publish                      # publish all skills to server
+topichub serve                        # local dev with hot-reload
+topichub serve --executor none        # dry-run (no agent execution)
 ```
 
-Skills are published as a batch per-tenant. The server stores the full
-`publishedContent` (manifest, SKILL.md, entry point, supporting files).
+## Common Mistakes
 
-## Testing Patterns
-
-### Unit test a type skill
-
-```typescript
-import { myBugTracker } from './index';
-
-test('renderCard includes severity badge', () => {
-  const card = myBugTracker.renderCard({
-    title: 'Login crash',
-    status: 'open',
-    metadata: { severity: 'P0' },
-  });
-  expect(card.fields).toContainEqual(
-    expect.objectContaining({ label: 'Severity', value: 'P0' }),
-  );
-});
-
-test('validateMetadata rejects missing severity', () => {
-  const result = myBugTracker.validateMetadata({ stepsToReproduce: '…' });
-  expect(result.valid).toBe(false);
-});
-```
-
-### Unit test an adapter skill
-
-```typescript
-import { githubAdapter } from './index';
-
-test('transforms issues.opened webhook', () => {
-  const payload = githubAdapter.transformWebhook(
-    { action: 'opened', issue: { title: 'Bug', html_url: '…' } },
-    { 'x-github-event': 'issues' },
-  );
-  expect(payload).toMatchObject({ type: 'bug', title: 'Bug' });
-});
-
-test('ignores unsupported events', () => {
-  const payload = githubAdapter.transformWebhook(
-    { action: 'labeled' },
-    { 'x-github-event': 'issues' },
-  );
-  expect(payload).toBeNull();
-});
-```
-
-### Integration test with `topichub serve`
-
-```bash
-# Start serve in dev mode (reads skills from disk, hot-reloads SKILL.md)
-topichub serve --executor none
-
-# Trigger a dispatch via the server API, then check logs for
-# [DISPATCH], [CLAIM], [AGENT], [RESULT] prefixes
-```
-
-## File Layout Reference
-
-```
-skills/
-  topics/
-    my-bug-tracker/
-      package.json        # manifest with topichub.category = "type"
-      SKILL.md            # agent instructions (frontmatter + system prompt)
-      src/
-        index.ts          # exports: manifest, renderCard, validateMetadata, lifecycle hooks
-      tests/
-        index.test.ts
-  platforms/
-    lark-platform/
-      ...
-  adapters/
-    github-adapter/
-      ...
-```
+| Mistake | Fix |
+|---------|-----|
+| Md-only skill with `category: adapter` | Adapters require code — use a code skill with `transformWebhook` |
+| Missing `topicType` in type skill manifest | Add `topicType` under `topichub` in package.json |
+| SKILL.md frontmatter missing `name` | Add `name` field matching the directory name |
+| Using `platform` category | Platform skills no longer exist — IM is handled by the OpenClaw bridge |

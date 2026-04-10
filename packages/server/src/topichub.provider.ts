@@ -9,6 +9,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import mongoose from 'mongoose';
 import { TopicHub, TopicHubLogger } from '@topichub/core';
+import type { BridgeConfig } from '@topichub/core';
 
 @Injectable()
 export class TopicHubService implements OnModuleInit, OnModuleDestroy {
@@ -58,6 +59,10 @@ export class TopicHubService implements OnModuleInit, OnModuleDestroy {
       tenantMapping: parseTenantMapping(this.config.get<string>('TOPICHUB_OPENCLAW_TENANT_MAPPING')),
     } : undefined;
 
+    const bridgeConfig = this.buildBridgeConfig(
+      parseTenantMapping(this.config.get<string>('TOPICHUB_OPENCLAW_TENANT_MAPPING')),
+    );
+
     this.hub = await TopicHub.create({
       mongoConnection: this.connection,
       logger: nestLogger,
@@ -74,7 +79,9 @@ export class TopicHubService implements OnModuleInit, OnModuleDestroy {
         }
         : {}),
       ...(masterKey ? { encryption: { masterKey } } : {}),
-      ...(openclawConfig ? { openclaw: openclawConfig } : {}),
+      ...(bridgeConfig ? { bridge: bridgeConfig }
+        : openclawConfig ? { openclaw: openclawConfig }
+        : {}),
     });
 
     this.logger.log('TopicHub initialized');
@@ -116,6 +123,53 @@ export class TopicHubService implements OnModuleInit, OnModuleDestroy {
         : '';
 
     return `mongodb://${auth}${hosts}/${db}`;
+  }
+
+  private buildBridgeConfig(
+    tenantMapping: Record<string, { tenantId: string; platform: string }>,
+  ): BridgeConfig | undefined {
+    const webhookUrl = this.config.get<string>('TOPICHUB_BRIDGE_WEBHOOK_URL');
+    if (!webhookUrl) return undefined;
+
+    const channels: BridgeConfig['channels'] = {};
+    const feishuAppId = this.config.get<string>('TOPICHUB_BRIDGE_FEISHU_APP_ID');
+    const feishuAppSecret = this.config.get<string>('TOPICHUB_BRIDGE_FEISHU_APP_SECRET');
+    if (feishuAppId && feishuAppSecret) {
+      channels.feishu = {
+        appId: feishuAppId,
+        appSecret: feishuAppSecret,
+        domain: (this.config.get<string>('TOPICHUB_BRIDGE_FEISHU_DOMAIN') as 'feishu' | 'lark') || undefined,
+      };
+    }
+
+    const discordToken = this.config.get<string>('TOPICHUB_BRIDGE_DISCORD_BOT_TOKEN');
+    if (discordToken) {
+      channels.discord = { botToken: discordToken };
+    }
+
+    const telegramToken = this.config.get<string>('TOPICHUB_BRIDGE_TELEGRAM_BOT_TOKEN');
+    if (telegramToken) {
+      channels.telegram = { botToken: telegramToken };
+    }
+
+    const slackBotToken = this.config.get<string>('TOPICHUB_BRIDGE_SLACK_BOT_TOKEN');
+    const slackAppToken = this.config.get<string>('TOPICHUB_BRIDGE_SLACK_APP_TOKEN');
+    if (slackBotToken && slackAppToken) {
+      channels.slack = { botToken: slackBotToken, appToken: slackAppToken };
+    }
+
+    if (!channels.feishu && !channels.discord && !channels.telegram && !channels.slack) {
+      return undefined;
+    }
+
+    const port = this.config.get<string>('TOPICHUB_BRIDGE_PORT');
+
+    return {
+      channels: channels as BridgeConfig['channels'],
+      tenantMapping,
+      webhookUrl,
+      ...(port ? { port: parseInt(port, 10) } : {}),
+    };
   }
 
   private buildConnectOpts(): mongoose.ConnectOptions {

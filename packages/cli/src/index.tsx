@@ -56,6 +56,16 @@ async function main() {
       await handleGroupCommand(subcommand, restArgs);
       break;
     }
+    case 'link': {
+      const { handleLinkCommand } = await import('./commands/link/index.js');
+      await handleLinkCommand(args.slice(1));
+      break;
+    }
+    case 'unlink': {
+      const { handleUnlinkCommand } = await import('./commands/unlink/index.js');
+      await handleUnlinkCommand(args.slice(1));
+      break;
+    }
     case 'auth': {
       const { saveAdminToken } = await import('./auth/auth.js');
       if (args[1]) {
@@ -87,7 +97,7 @@ async function main() {
     }
     default:
       console.log('Usage: topichub-admin <command> [subcommand] [args]');
-      console.log('Commands: init, serve, skill, skill-repo, publish, group, tenant, stats, health, ai, auth, login, logout');
+      console.log('Commands: init, serve, skill, skill-repo, publish, group, tenant, stats, health, ai, auth, login, logout, link, unlink');
   }
 }
 

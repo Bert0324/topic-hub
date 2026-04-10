@@ -11,6 +11,9 @@ export type {
   SkillOperations,
   DispatchOperations,
   AdminOperations,
+  IdentityOperations,
+  HeartbeatOperations,
+  QaOperations,
 } from './topichub';
 
 // Config
@@ -41,6 +44,7 @@ export {
   SkillCategory,
   DispatchStatus,
   DispatchEventType,
+  QaExchangeStatus,
 } from './common/enums';
 
 // Skill interfaces
@@ -74,5 +78,47 @@ export type { WebhookResult } from './webhook/webhook-handler';
 // Bridge
 export { OpenClawBridge } from './bridge/openclaw-bridge';
 export { MessageRenderer } from './bridge/message-renderer';
-export { OpenClawConfigSchema } from './bridge/openclaw-types';
-export type { OpenClawConfig } from './bridge/openclaw-types';
+export { BridgeManager } from './bridge/bridge-manager';
+export type { BridgeManagerState } from './bridge/bridge-manager';
+export { OpenClawConfigSchema, BridgeConfigSchema } from './bridge/openclaw-types';
+export type { OpenClawConfig, BridgeConfig } from './bridge/openclaw-types';
+
+// Services
+export { IdentityService } from './identity/identity.service';
+export type { ClaimResult, ResolvedPlatformUser, ResolvedClaimTokenUser } from './identity/identity.service';
+export { HeartbeatService } from './services/heartbeat.service';
+export type { ExecutorHeartbeatMeta, RegisterExecutorResult } from './services/heartbeat.service';
+export { QaService } from './services/qa.service';
+export type { DispatchMeta } from './services/dispatch.service';
+
+// Entities
+export { UserIdentityBinding } from './entities/user-identity-binding.entity';
+export { ExecutorHeartbeat } from './entities/executor-heartbeat.entity';
+export { QaExchange } from './entities/qa-exchange.entity';
+
+// Identity
+export { PairingCode } from './identity/pairing-code.entity';
+export {
+  LinkRequestSchema,
+  UnlinkRequestSchema,
+  RegisterExecutorRequestSchema,
+  PostQuestionRequestSchema,
+  AnswerTextSchema,
+  HEARTBEAT_INTERVAL_MS,
+  HEARTBEAT_STALE_THRESHOLD_MS,
+  PAIRING_CODE_TTL_MS,
+  PAIRING_CODE_LENGTH,
+  DISPATCH_UNCLAIMED_REMINDER_MS,
+  QA_REMINDER_MS,
+  QA_TIMEOUT_MS,
+  DEFAULT_MAX_CONCURRENT_AGENTS,
+  SAFE_ALPHABET,
+  generatePairingCode,
+} from './identity/identity-types';
+export type {
+  LinkRequest,
+  UnlinkRequest,
+  RegisterExecutorRequest,
+  PostQuestionRequest,
+  AnswerText,
+} from './identity/identity-types';

@@ -19,7 +19,9 @@ export interface TaskProcessorOptions {
   configExecutor: ExecutorType;
   cliExecutorFlag?: string;
   executorArgs?: string[];
+  maxConcurrentAgents?: number;
   onEventUpdate: (entry: EventLogEntry) => void;
+  onAgentQuestion?: (dispatchId: string, question: string, context?: { skillName: string; topicTitle: string }) => Promise<string | null>;
 }
 
 interface SkillFrontmatter {
@@ -35,7 +37,8 @@ const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 export class TaskProcessor {
   private readonly api: ApiClient;
   private readonly claimId: string;
-  private processing = false;
+  private activeCount = 0;
+  private readonly activeDispatches = new Set<string>();
 
   constructor(private readonly options: TaskProcessorOptions) {
     this.api = new ApiClient(options.serverUrl);
@@ -44,11 +47,24 @@ export class TaskProcessor {
   }
 
   get isProcessing(): boolean {
-    return this.processing;
+    return this.activeCount > 0;
+  }
+
+  get activeTaskCount(): number {
+    return this.activeCount;
+  }
+
+  get concurrencyLimit(): number {
+    return this.options.maxConcurrentAgents ?? 1;
+  }
+
+  canAcceptMore(): boolean {
+    return this.activeCount < this.concurrencyLimit;
   }
 
   async process(dispatch: DispatchEvent): Promise<void> {
-    this.processing = true;
+    this.activeCount++;
+    this.activeDispatches.add(dispatch.id);
     const topicTitle =
       (dispatch as any).enrichedPayload?.topic?.title ??
       `topic:${dispatch.topicId}`;
@@ -151,7 +167,8 @@ export class TaskProcessor {
         // Best-effort
       }
     } finally {
-      this.processing = false;
+      this.activeCount--;
+      this.activeDispatches.delete(dispatch.id);
       this.options.onEventUpdate(logEntry);
     }
   }

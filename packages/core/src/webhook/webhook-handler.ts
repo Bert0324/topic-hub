@@ -6,7 +6,25 @@ import { IngestionService } from '../ingestion/ingestion.service';
 import { SkillCategory } from '../common/enums';
 import { AdapterSkill } from '../skill/interfaces/adapter-skill';
 import { OpenClawBridge } from '../bridge/openclaw-bridge';
+import type { OpenClawInboundResult } from '../bridge/openclaw-types';
 import type { TopicHubLogger } from '../common/logger';
+import { AnswerTextSchema } from '../identity/identity-types';
+
+export interface WebhookIdentityOps {
+  generatePairingCode(tenantId: string, platform: string, platformUserId: string, channel: string): Promise<string>;
+  resolveUserByPlatform(tenantId: string, platform: string, platformUserId: string): Promise<{ topichubUserId: string; claimToken: string } | undefined>;
+  deactivateBinding(tenantId: string, platform: string, platformUserId: string): Promise<boolean>;
+}
+
+export interface WebhookHeartbeatOps {
+  isAvailable(tenantId: string, topichubUserId: string): Promise<boolean>;
+}
+
+export interface WebhookQaOps {
+  findPendingByUser(topichubUserId: string): Promise<any | null>;
+  findAllPendingByUser(topichubUserId: string): Promise<any[]>;
+  submitAnswer(qaId: string, answerText: string): Promise<any | null>;
+}
 
 export interface WebhookResult {
   success: boolean;
@@ -31,6 +49,9 @@ export class WebhookHandler {
     private readonly commandDispatcher: CommandDispatcher,
     private readonly logger: TopicHubLogger,
     private readonly bridge?: OpenClawBridge,
+    private readonly identityOps?: WebhookIdentityOps,
+    private readonly heartbeatOps?: WebhookHeartbeatOps,
+    private readonly qaOps?: WebhookQaOps,
   ) {}
 
   async handle(
@@ -56,6 +77,44 @@ export class WebhookHandler {
       return { success: true, response: { status: 'ignored' } };
     }
 
+    if (result.rawCommand.startsWith('/answer ')) {
+      return this.handleAnswer(result, result.rawCommand.slice('/answer '.length));
+    }
+
+    if (result.rawCommand.startsWith('/topichub register')) {
+      return this.handleRegister(result);
+    }
+
+    if (result.rawCommand.startsWith('/topichub unregister')) {
+      return this.handleUnregister(result);
+    }
+
+    const identity = await this.identityOps?.resolveUserByPlatform(
+      result.tenantId,
+      result.platform,
+      result.userId,
+    );
+
+    if (!identity) {
+      this.bridge
+        .sendMessage(result.platform, result.channel, "You haven't linked a local executor yet. Run `/topichub register` to get started.")
+        .catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+      return { success: true, response: { status: 'unregistered' } };
+    }
+
+    const topichubUserId = identity.topichubUserId;
+
+    const available = await this.heartbeatOps?.isAvailable(result.tenantId, topichubUserId);
+    if (available === false) {
+      this.bridge
+        .sendMessage(
+          result.platform,
+          result.channel,
+          'Your local agent is not running. Start it with: `topichub-admin serve`\nYour task has been queued and will be processed when your agent starts.',
+        )
+        .catch((err) => this.logger.error('Failed to send unavailable executor notice', String(err)));
+    }
+
     const activeTopic = await this.topicService.findActiveTopicByGroup(
       result.tenantId,
       result.platform,
@@ -68,6 +127,11 @@ export class WebhookHandler {
       userId: result.userId,
       tenantId: result.tenantId,
       hasActiveTopic: !!activeTopic,
+      dispatchMeta: {
+        targetUserId: topichubUserId,
+        sourceChannel: result.channel,
+        sourcePlatform: result.platform,
+      },
     };
 
     const parsed = this.parser.parse(result.rawCommand);
@@ -79,11 +143,135 @@ export class WebhookHandler {
 
     const execResult = await this.commandDispatcher(route.handler, result.tenantId, parsed, context);
 
+    const replyMessage = execResult?.success
+      ? 'Task dispatched to your local agent.'
+      : (execResult?.error ?? 'Command failed');
+
     this.bridge
-      .sendMessage(result.platform, result.channel, execResult?.success ? 'Command executed successfully.' : (execResult?.error ?? 'Command failed'))
+      .sendMessage(result.platform, result.channel, replyMessage)
       .catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
 
     return { success: true, response: execResult };
+  }
+
+  private async handleRegister(result: OpenClawInboundResult): Promise<WebhookResult> {
+    if (!this.identityOps || !this.bridge) {
+      return { success: false, error: 'Identity operations not configured' };
+    }
+
+    try {
+      const code = await this.identityOps.generatePairingCode(
+        result.tenantId,
+        result.platform,
+        result.userId,
+        result.channel,
+      );
+
+      const message = `Your pairing code: **${code}**\nEnter this in your terminal: \`topichub-admin link ${code}\`\nCode expires in 10 minutes.`;
+
+      await this.bridge.sendMessage(result.platform, result.channel, message);
+
+      return { success: true, response: { status: 'registered' } };
+    } catch (err) {
+      this.logger.error('Register command failed', String(err));
+      return { success: false, error: 'Failed to generate pairing code' };
+    }
+  }
+
+  private async handleUnregister(result: OpenClawInboundResult): Promise<WebhookResult> {
+    if (!this.identityOps || !this.bridge) {
+      return { success: false, error: 'Identity operations not configured' };
+    }
+
+    try {
+      const resolved = await this.identityOps.resolveUserByPlatform(
+        result.tenantId,
+        result.platform,
+        result.userId,
+      );
+
+      if (!resolved) {
+        await this.bridge.sendMessage(
+          result.platform,
+          result.channel,
+          'No linked identity found. Use `/topichub register` to link first.',
+        );
+        return { success: true, response: { status: 'not_found' } };
+      }
+
+      await this.identityOps.deactivateBinding(result.tenantId, result.platform, result.userId);
+
+      await this.bridge.sendMessage(
+        result.platform,
+        result.channel,
+        'Your identity has been unlinked. Use `/topichub register` to re-link.',
+      );
+
+      return { success: true, response: { status: 'unregistered' } };
+    } catch (err) {
+      this.logger.error('Unregister command failed', String(err));
+      return { success: false, error: 'Failed to unregister identity' };
+    }
+  }
+
+  private async handleAnswer(result: OpenClawInboundResult, answerBody: string): Promise<WebhookResult> {
+    if (!this.identityOps || !this.bridge || !this.qaOps) {
+      return { success: false, error: 'Q&A operations not configured' };
+    }
+
+    try {
+      const identity = await this.identityOps.resolveUserByPlatform(
+        result.tenantId,
+        result.platform,
+        result.userId,
+      );
+
+      if (!identity) {
+        await this.bridge.sendMessage(result.platform, result.channel, 'You need to register first.');
+        return { success: true, response: { status: 'unregistered' } };
+      }
+
+      let answerText = answerBody;
+      let targetQa: any = null;
+
+      const refMatch = answerBody.match(/^#(\d+)\s+([\s\S]*)$/);
+      if (refMatch) {
+        const refIndex = parseInt(refMatch[1], 10);
+        answerText = refMatch[2];
+        const allPending = await this.qaOps.findAllPendingByUser(identity.topichubUserId);
+        if (refIndex >= 1 && refIndex <= allPending.length) {
+          targetQa = allPending[refIndex - 1];
+        } else {
+          targetQa = allPending.length > 0 ? allPending[allPending.length - 1] : null;
+        }
+      } else {
+        targetQa = await this.qaOps.findPendingByUser(identity.topichubUserId);
+      }
+
+      if (!targetQa) {
+        await this.bridge.sendMessage(result.platform, result.channel, 'No pending questions to answer.');
+        return { success: true, response: { status: 'no_pending' } };
+      }
+
+      const answerParsed = AnswerTextSchema.safeParse(answerText.trim());
+      if (!answerParsed.success) {
+        await this.bridge.sendMessage(
+          result.platform,
+          result.channel,
+          'Answer is empty or too long (max 5000 characters).',
+        );
+        return { success: true, response: { status: 'invalid_answer' } };
+      }
+
+      await this.qaOps.submitAnswer(String(targetQa._id), answerParsed.data);
+
+      await this.bridge.sendMessage(result.platform, result.channel, 'Answer received. Your agent will continue.');
+
+      return { success: true, response: { status: 'answered' } };
+    } catch (err) {
+      this.logger.error('Answer command failed', String(err));
+      return { success: false, error: 'Failed to process answer' };
+    }
   }
 
   private async handleAdapterWebhook(

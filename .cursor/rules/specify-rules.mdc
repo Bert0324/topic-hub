@@ -27,6 +27,8 @@ Auto-generated from all feature plans. Last updated: 2026-04-10
 - TypeScript 5.5, Node.js 20 LTS + Mongoose 8 + Typegoose 12 (ODM), zod (validation), gray-matter (YAML frontmatter parsing), jsonwebtoken + jwks-rsa (auth) (006-extract-core-package)
 - TypeScript 5.5, Node.js 20 LTS + Mongoose 8 + Typegoose 12 (ODM), zod (validation), NestJS 10 (server), gray-matter (YAML frontmatter) (007-openclaw-im-bridge)
 - MongoDB 7 (existing collections: `topics`, `timeline_entries`, `skill_registrations`, `tenant_skill_configs`) (007-openclaw-im-bridge)
+- TypeScript 5.5, Node.js 20 LTS + Mongoose 8 + Typegoose 12 (ODM), zod (validation), NestJS 10 (server), eventsource (SSE client in CLI), @inquirer/prompts (CLI interaction), @modelcontextprotocol/sdk (MCP) (008-secure-im-dispatch)
+- MongoDB 7 (existing collections: `task_dispatches`; new collections: `user_identity_bindings`, `pairing_codes`, `executor_heartbeats`, `qa_exchanges`) (008-secure-im-dispatch)
 
 - TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Prisma (ORM), zod (validation) (001-topic-hub-app)
 
@@ -46,9 +48,9 @@ npm test && npm run lint
 TypeScript 5.x, Node.js 20 LTS: Follow standard conventions
 
 ## Recent Changes
+- 008-secure-im-dispatch: Added TypeScript 5.5, Node.js 20 LTS + Mongoose 8 + Typegoose 12 (ODM), zod (validation), NestJS 10 (server), eventsource (SSE client in CLI), @inquirer/prompts (CLI interaction), @modelcontextprotocol/sdk (MCP)
 - 007-openclaw-im-bridge: Added TypeScript 5.5, Node.js 20 LTS + Mongoose 8 + Typegoose 12 (ODM), zod (validation), NestJS 10 (server), gray-matter (YAML frontmatter)
 - 006-extract-core-package: Added TypeScript 5.5, Node.js 20 LTS + Mongoose 8 + Typegoose 12 (ODM), zod (validation), gray-matter (YAML frontmatter parsing), jsonwebtoken + jwks-rsa (auth)
-- 005-skill-dev-ecosystem: Added TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Typegoose + Mongoose 8, zod, gray-matter, @modelcontextprotocol/sdk, keytar
 
 
 <!-- MANUAL ADDITIONS START -->

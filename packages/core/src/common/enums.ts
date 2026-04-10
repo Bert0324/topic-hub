@@ -31,6 +31,7 @@ export enum DispatchStatus {
   CLAIMED = 'claimed',
   COMPLETED = 'completed',
   FAILED = 'failed',
+  SUSPENDED = 'suspended',
 }
 
 export enum DispatchEventType {
@@ -41,4 +42,10 @@ export enum DispatchEventType {
   SIGNAL_ATTACHED = 'signal_attached',
   TAG_CHANGED = 'tag_changed',
   REOPENED = 'reopened',
+}
+
+export enum QaExchangeStatus {
+  PENDING = 'pending',
+  ANSWERED = 'answered',
+  TIMED_OUT = 'timed_out',
 }
