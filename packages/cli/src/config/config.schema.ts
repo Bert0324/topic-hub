@@ -9,6 +9,10 @@ export const LocalConfigSchema = z.object({
   executor: ExecutorType,
   executorArgs: z.array(z.string()).optional(),
   skillsDir: z.string().min(1),
+  openclawGatewayUrl: z.string().url().optional(),
+  openclawToken: z.string().min(1).optional(),
+  openclawWebhookSecret: z.string().min(1).optional(),
+  openclawTenantMapping: z.string().optional(),
 });
 
 export type LocalConfig = z.infer<typeof LocalConfigSchema>;

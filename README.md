@@ -39,12 +39,20 @@ Topic Hub is just an engine. All actual capabilities come from **Skill** plugins
 | Category | What it does | Examples |
 |----------|--------------|---------|
 | **Type** | Defines a topic type — fields, card template, lifecycle hooks | `deploy-type`, `incident-type` |
-| **Platform** | Connects an IM platform — webhook, commands, cards, groups | `feishu`, `slack` |
 | **Adapter** | Connects external systems — transforms webhooks, handles auth | `github-adapter`, `jenkins-adapter` |
 
 No Adapter? Just create Topics manually. **Mix and match — only install what you need.**
 
-Skills can be full TypeScript packages or **md-only** (just a `SKILL.md` file with AI instructions — no code required). Skills are organized by category: `skills/topics/`, `skills/platforms/`, `skills/adapters/`.
+Skills can be full TypeScript packages or **md-only** (just a `SKILL.md` file with AI instructions — no code required). Skills are organized by category: `skills/topics/`, `skills/adapters/`.
+
+### IM Platform Integration (OpenClaw Bridge)
+
+IM platform connectivity (Lark, Slack, Telegram, Discord, etc.) is handled by the built-in **OpenClaw bridge** — not by skills. [OpenClaw](https://github.com/openclaw/openclaw) is an open-source multi-channel gateway that acts as a pure message relay:
+
+- **Inbound**: Users send `/topichub` commands in any IM → OpenClaw forwards to Topic Hub via webhook → commands are parsed and executed
+- **Outbound**: Topic lifecycle events → Topic Hub renders markdown notifications → sends to IM channels via OpenClaw's send API
+
+Adding a new IM platform requires only configuring a channel in OpenClaw — **zero code changes in Topic Hub**.
 
 ### AI-Powered Skills
 
@@ -77,56 +85,62 @@ topichub-admin tenant create --name "My Team"
 #    Admin Token: tk_xxxxxxxx (expires in 30 days)
 ```
 
-### 3. Install Skills
+### 3. Connect IM via OpenClaw
 
 ```bash
-# Authenticate with Admin Token
-topichub-admin auth tk_xxxxxxxx
+# Set OpenClaw connection (env vars or config file)
+export TOPICHUB_OPENCLAW_GATEWAY_URL="http://localhost:18789"
+export TOPICHUB_OPENCLAW_TOKEN="your-openclaw-token"
+export TOPICHUB_OPENCLAW_WEBHOOK_SECRET="your-hmac-secret"
+export TOPICHUB_OPENCLAW_TENANT_MAPPING='{"lark-main":{"tenantId":"tenant_abc123","platform":"lark"}}'
 
+# Register Topic Hub webhook in OpenClaw
+openclaw webhooks add \
+  --url "http://localhost:3000/webhooks/openclaw" \
+  --events "message.received" \
+  --secret "your-hmac-secret"
+```
+
+### 4. Install Skills & Start Using
+
+```bash
 # Install a topic type (e.g. "deploy")
 topichub-admin skill install topichub-deploy-type
 topichub-admin skill enable deploy-type
-
-# Connect an IM platform (e.g. Feishu)
-topichub-admin skill install topichub-feishu
-topichub-admin skill enable feishu
-topichub-admin skill setup feishu   # guided OAuth flow
 ```
 
-### 4. Start using it
-
-In your IM, type:
+In your IM (Lark, Slack, Telegram, etc.), type:
 
 ```
 /topichub create deploy --title "v2.3 Release"
 ```
 
-A dedicated group is created. The topic card is pinned. Your team is invited. Done.
+Topic Hub creates the topic and sends a rich text confirmation back to the IM channel.
 
 ---
 
 ## IM Commands
 
-All end-user interaction happens in IM via `/topichub`.
+All end-user interaction happens in IM via `/topichub`. Commands work in any IM platform connected through OpenClaw.
 
 ### Global (work anywhere)
 
 | Command | Description |
 |---------|-------------|
-| `/topichub create <type> [args]` | Create a topic (auto-creates group or uses current one) |
+| `/topichub create <type> [args]` | Create a topic |
 | `/topichub search --type <t> --status <s>` | Search topics with filters |
 | `/topichub help` | List available types and commands |
 
-### Inside a topic group
+### Topic-scoped
 
 | Command | Description |
 |---------|-------------|
 | `/topichub update --status <status>` | Update topic status |
-| `/topichub assign @user` | Assign user (auto-invited to group) |
-| `/topichub show` | Show topic detail card |
+| `/topichub assign @user` | Assign user |
+| `/topichub show` | Show topic details |
 | `/topichub timeline` | Show event history |
 | `/topichub reopen` | Reopen a closed topic |
-| `/topichub history` | List past topics in this group |
+| `/topichub history` | List past topics |
 
 ### Status lifecycle
 
@@ -136,7 +150,7 @@ open → in_progress → resolved → closed
                                 open (reopen)
 ```
 
-When a topic is closed, the group stays open for chat but mutation commands are disabled. You can create a new topic in the same group or reopen the existing one.
+Topic lifecycle events (create, update, status change, assign, close, reopen) automatically trigger rich text notifications to all IM channels configured for the tenant.
 
 ---
 
@@ -282,7 +296,6 @@ my-skills/
 │   │       ├── SKILL.md         # agent instructions (gray-matter frontmatter)
 │   │       ├── src/index.ts     # implements TypeSkill interface
 │   │       └── README.md
-│   ├── platforms/
 │   └── adapters/
 ├── .cursor/rules/               # AI rules for Cursor
 ├── AGENTS.md                    # AI guide for Claude Code / Codex
@@ -353,7 +366,7 @@ rendering, and permissive metadata validation. No TypeScript code required.
 
 ### Direct Server Loading (public Skills shortcut)
 
-Public Skills can also be placed directly in `packages/skills/` (organized by `topics/`, `platforms/`, `adapters/`). The server auto-loads them on startup — no `publish` step needed.
+Public Skills can also be placed directly in `packages/skills/` (organized by `topics/`, `adapters/`). The server auto-loads them on startup — no `publish` step needed.
 
 ```bash
 topichub-admin skill install ./packages/skills/topics/incident-handler
@@ -424,12 +437,7 @@ await hub.ingestion.ingest('my-tenant', {
 });
 ```
 
-### Skill Loading
-
-Skills are loaded in two stages (later stages override earlier ones):
-
-1. **Built-in skills** — SKILL.md-based skills shipped with `@topichub/core` (disable with `builtins: false`)
-2. **Filesystem skills** — scanned from a `skillsDir` directory
+### Full Configuration
 
 ```typescript
 import { TopicHub } from '@topichub/core';
@@ -438,8 +446,21 @@ const hub = await TopicHub.create({
   mongoUri: process.env.MONGODB_URI!,
   skillsDir: './skills',          // filesystem skills (optional)
   builtins: true,                 // load built-in skills (default: true)
+  openclaw: {                     // IM bridge (optional)
+    gatewayUrl: 'http://localhost:18789',
+    token: process.env.OPENCLAW_TOKEN!,
+    webhookSecret: process.env.OPENCLAW_SECRET!,
+    tenantMapping: {
+      'lark-main': { tenantId: 'tenant_abc', platform: 'lark' },
+    },
+  },
 });
 ```
+
+Skills are loaded in two stages (later stages override earlier ones):
+
+1. **Built-in skills** — SKILL.md-based skills shipped with `@topichub/core` (disable with `builtins: false`)
+2. **Filesystem skills** — scanned from a `skillsDir` directory
 
 ### Built-in Skills
 
@@ -472,6 +493,12 @@ Starts MongoDB 7 + Topic Hub server at `http://localhost:3000`.
 | `SKILLS_DIR` | `./skills` | Skills directory |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `TOKEN_EXPIRY_DAYS` | `30` | Admin Token expiry in days |
+| **OpenClaw Bridge** | | |
+| `TOPICHUB_OPENCLAW_GATEWAY_URL` | — | OpenClaw gateway URL (e.g., `http://localhost:18789`). If unset, IM messaging is disabled. |
+| `TOPICHUB_OPENCLAW_TOKEN` | — | Bearer token for OpenClaw API authentication |
+| `TOPICHUB_OPENCLAW_WEBHOOK_SECRET` | — | HMAC-SHA256 secret for verifying inbound OpenClaw webhooks |
+| `TOPICHUB_OPENCLAW_TENANT_MAPPING` | — | JSON mapping of OpenClaw channels to tenants (e.g., `{"lark-main":{"tenantId":"t1","platform":"lark"}}`) |
+| **AI** | | |
 | `AI_ENABLED` | `false` | Enable AI for Skills (`true` / `false`) |
 | `AI_PROVIDER` | `ark` | AI provider (`ark` for Volcengine) |
 | `AI_API_URL` | `https://ark.cn-beijing.volces.com/api/v3` | AI API endpoint (change for internal deployments) |
@@ -485,9 +512,11 @@ Starts MongoDB 7 + Topic Hub server at `http://localhost:3000`.
 - [ ] Set a strong `ENCRYPTION_KEY` (32+ random bytes, base64 encoded)
 - [ ] Use managed MongoDB (Atlas, etc.)
 - [ ] Set up HTTPS reverse proxy
-- [ ] Install and configure at least one Platform Skill (Feishu / Slack)
+- [ ] Deploy and configure OpenClaw gateway with your IM channels
+- [ ] Set `TOPICHUB_OPENCLAW_*` environment variables
+- [ ] Register Topic Hub webhook in OpenClaw (`webhooks add --url .../webhooks/openclaw`)
 - [ ] Install at least one Type Skill (deploy / incident / bug, etc.)
-- [ ] Create tenants for each team
+- [ ] Create tenants and configure tenant-channel mapping
 
 ---
 

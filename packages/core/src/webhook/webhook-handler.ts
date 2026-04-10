@@ -4,8 +4,8 @@ import { CommandRouter, CommandContext } from '../command/command-router';
 import { TopicService } from '../services/topic.service';
 import { IngestionService } from '../ingestion/ingestion.service';
 import { SkillCategory } from '../common/enums';
-import { PlatformSkill, CommandResult } from '../skill/interfaces/platform-skill';
 import { AdapterSkill } from '../skill/interfaces/adapter-skill';
+import { OpenClawBridge } from '../bridge/openclaw-bridge';
 import type { TopicHubLogger } from '../common/logger';
 
 export interface WebhookResult {
@@ -30,6 +30,7 @@ export class WebhookHandler {
     private readonly ingestionService: IngestionService,
     private readonly commandDispatcher: CommandDispatcher,
     private readonly logger: TopicHubLogger,
+    private readonly bridge?: OpenClawBridge,
   ) {}
 
   async handle(
@@ -37,11 +38,6 @@ export class WebhookHandler {
     payload: unknown,
     headers: Record<string, string>,
   ): Promise<WebhookResult> {
-    const platformSkill = this.findPlatformSkill(platform);
-    if (platformSkill) {
-      return this.handlePlatformWebhook(platformSkill, platform, payload, headers);
-    }
-
     const adapterMatch = this.findAdapterSkill(platform);
     if (adapterMatch) {
       return this.handleAdapterWebhook(adapterMatch.skill, adapterMatch.name, payload, headers);
@@ -50,60 +46,44 @@ export class WebhookHandler {
     return { success: false, error: `No skill registered for platform: ${platform}` };
   }
 
-  private async handlePlatformWebhook(
-    platformSkill: PlatformSkill,
-    platform: string,
-    payload: unknown,
-    headers: Record<string, string>,
-  ): Promise<WebhookResult> {
-    if (typeof platformSkill.verifySignature === 'function') {
-      const valid = await platformSkill.verifySignature(payload, headers);
-      if (!valid) {
-        return { success: false, error: 'Webhook signature verification failed' };
-      }
+  async handleOpenClaw(payload: unknown, rawBody: string): Promise<WebhookResult> {
+    if (!this.bridge) {
+      return { success: false, error: 'OpenClaw bridge not configured' };
     }
 
-    if (!platformSkill.resolveTenantId) {
-      this.logger.warn(`Platform skill ${platform} does not support resolveTenantId`);
-      return { success: false, error: 'Platform skill cannot resolve tenant' };
+    const result = this.bridge.handleInboundWebhook(payload, rawBody);
+    if (!result) {
+      return { success: true, response: { status: 'ignored' } };
     }
 
-    const tenantId = await platformSkill.resolveTenantId(payload);
-
-    if (!platformSkill.handleWebhook) {
-      this.logger.debug(`Platform skill ${platform} does not handle webhooks`);
-      return { success: true, response: { message: 'Webhook received, no handler configured' } };
-    }
-
-    const commandResult = await platformSkill.handleWebhook(payload, headers);
-    if (!commandResult) {
-      return { success: true, response: { message: 'Webhook event ignored' } };
-    }
-
-    const rawCommand = this.buildRawCommand(commandResult);
     const activeTopic = await this.topicService.findActiveTopicByGroup(
-      tenantId,
-      commandResult.platform,
-      commandResult.groupId,
+      result.tenantId,
+      result.platform,
+      result.channel,
     );
 
     const context: CommandContext = {
-      platform: commandResult.platform,
-      groupId: commandResult.groupId,
-      userId: commandResult.userId,
-      tenantId,
+      platform: result.platform,
+      groupId: result.channel,
+      userId: result.userId,
+      tenantId: result.tenantId,
       hasActiveTopic: !!activeTopic,
     };
 
-    const parsed = this.parser.parse(rawCommand);
+    const parsed = this.parser.parse(result.rawCommand);
     const route = this.router.route(parsed, context);
 
     if (route.error) {
       return { success: false, error: route.error };
     }
 
-    const result = await this.commandDispatcher(route.handler, tenantId, parsed, context);
-    return { success: true, response: result };
+    const execResult = await this.commandDispatcher(route.handler, result.tenantId, parsed, context);
+
+    this.bridge
+      .sendMessage(result.platform, result.channel, execResult?.success ? 'Command executed successfully.' : (execResult?.error ?? 'Command failed'))
+      .catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+
+    return { success: true, response: execResult };
   }
 
   private async handleAdapterWebhook(
@@ -166,14 +146,6 @@ export class WebhookHandler {
     }
   }
 
-  private findPlatformSkill(platform: string): PlatformSkill | undefined {
-    const platformSkills = this.skillRegistry.getByCategory(SkillCategory.PLATFORM);
-    const found = platformSkills.find(
-      (s) => (s.registration.metadata as any)?.platform === platform,
-    );
-    return found?.skill as PlatformSkill | undefined;
-  }
-
   private findAdapterSkill(skillName: string): { skill: AdapterSkill; name: string } | undefined {
     const adapters = this.skillRegistry.getByCategory(SkillCategory.ADAPTER);
     const match = adapters.find((a) => a.registration.name === skillName);
@@ -181,22 +153,4 @@ export class WebhookHandler {
     return { skill: match.skill as AdapterSkill, name: match.registration.name };
   }
 
-  private buildRawCommand(result: CommandResult): string {
-    const parts = ['/topichub', result.action];
-
-    if (result.type) {
-      parts.push(result.type);
-    }
-
-    for (const [key, value] of Object.entries(result.args)) {
-      if (value === true) {
-        parts.push(`--${key}`);
-      } else if (value !== undefined && value !== null) {
-        const strVal = String(value);
-        parts.push(`--${key}`, strVal.includes(' ') ? `"${strVal}"` : strVal);
-      }
-    }
-
-    return parts.join(' ');
-  }
 }

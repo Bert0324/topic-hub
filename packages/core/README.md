@@ -33,6 +33,7 @@ await hub.shutdown();
 | `skillsDir` | `string` | no | — | Directory to scan for filesystem-based skills |
 | `builtins` | `boolean` | no | `true` | Load built-in skills (set `false` to disable) |
 | `ai` | `AiProviderConfig` | no | — | AI provider settings (provider, apiKey, model, baseUrl) |
+| `openclaw` | `OpenClawConfig` | no | — | OpenClaw bridge for IM integration (gatewayUrl, token, webhookSecret, tenantMapping) |
 | `encryption` | `{ masterKey: string }` | no | — | AES-256 key for encrypting tenant secrets |
 | `logger` | `LoggerFactory` | no | console logger | Custom logger factory |
 
@@ -56,7 +57,7 @@ const hub = await TopicHub.create({
 });
 ```
 
-**Builtins + filesystem skills:**
+**Builtins + filesystem skills + OpenClaw IM bridge:**
 
 ```typescript
 const hub = await TopicHub.create({
@@ -65,6 +66,14 @@ const hub = await TopicHub.create({
   ai: {
     provider: 'ark',
     apiKey: process.env.ARK_API_KEY!,
+  },
+  openclaw: {
+    gatewayUrl: 'http://localhost:18789',
+    token: process.env.OPENCLAW_TOKEN!,
+    webhookSecret: process.env.OPENCLAW_WEBHOOK_SECRET!,
+    tenantMapping: {
+      'lark-main': { tenantId: 'tenant_abc', platform: 'lark' },
+    },
   },
 });
 ```
@@ -116,25 +125,67 @@ console.log(GENERIC_TYPE_SKILL_MD);
 | `topics`    | List, get, create, update status, tags, assignees |
 | `commands`  | Parse and execute slash-style commands |
 | `ingestion` | Ingest events into topics |
-| `webhook`   | Platform webhook handling |
-| `messaging` | Send messages and post cards (platform integration) |
+| `webhook`   | Adapter and OpenClaw webhook handling |
+| `messaging` | Send messages to IM channels via OpenClaw bridge |
 | `auth`      | Resolve tenant from API key |
 | `search`    | Filtered / text topic search |
 | `skills`    | List registered skills, check type availability |
 | `dispatch`  | Async task dispatch for agents |
+
+## OpenClaw IM Bridge
+
+IM platform integration is handled by a built-in OpenClaw bridge. [OpenClaw](https://github.com/openclaw/openclaw) acts as a pure message relay — no AI processing at the bridge layer.
+
+**Inbound**: OpenClaw receives messages from IM platforms (Lark, Slack, Telegram, etc.) and forwards them to Topic Hub via the `message.received` outbound webhook. Topic Hub parses `/topichub` commands, executes them, and sends a reply.
+
+**Outbound**: When topic lifecycle events occur, Topic Hub renders markdown notifications and sends them to all IM channels mapped to the tenant via OpenClaw's send API.
+
+```typescript
+const hub = await TopicHub.create({
+  mongoUri: process.env.MONGODB_URI!,
+  openclaw: {
+    gatewayUrl: 'http://localhost:18789',
+    token: 'your-openclaw-bearer-token',
+    webhookSecret: 'your-hmac-secret',
+    tenantMapping: {
+      'lark-main': { tenantId: 'tenant_abc', platform: 'lark' },
+      'slack-eng': { tenantId: 'tenant_abc', platform: 'slack' },
+    },
+  },
+});
+
+// Handle inbound OpenClaw webhook (POST /webhooks/openclaw)
+const result = await hub.webhook.handleOpenClaw(payload, rawBody);
+
+// Send a message to an IM channel
+await hub.messaging.send('lark', {
+  tenantId: 'tenant_abc',
+  groupId: 'lark-main',
+  message: '**Topic updated**: status changed to in_progress',
+});
+```
+
+If `openclaw` config is omitted, the bridge is disabled and IM messaging is unavailable (all other TopicHub features still work).
 
 ## Embedding in External Projects
 
 `@topichub/core` is designed to be embedded in any Node.js service:
 
 ```typescript
-// Example: Express integration
 import express from 'express';
 import { TopicHub } from '@topichub/core';
 
 const app = express();
+app.use(express.json());
+
 const hub = await TopicHub.create({
   mongoUri: process.env.MONGODB_URI!,
+  openclaw: {
+    gatewayUrl: process.env.OPENCLAW_URL!,
+    token: process.env.OPENCLAW_TOKEN!,
+    webhookSecret: process.env.OPENCLAW_SECRET!,
+    tenantMapping: JSON.parse(process.env.OPENCLAW_TENANT_MAPPING || '{}'),
+  },
 });
 
 app.post('/api/topichub/events', async (req, res) => {
@@ -143,7 +194,14 @@ app.post('/api/topichub/events', async (req, res) => {
   res.json(result);
 });
 
-app.post('/api/topichub/webhooks/:platform', async (req, res) => {
+// OpenClaw inbound webhook
+app.post('/webhooks/openclaw', async (req, res) => {
+  const result = await hub.webhook.handleOpenClaw(req.body, JSON.stringify(req.body));
+  res.json(result);
+});
+
+// Adapter webhooks (GitHub, Jira, etc.)
+app.post('/webhooks/:platform', async (req, res) => {
   const result = await hub.webhook.handle(req.params.platform, req.body, req.headers as any);
   res.json(result);
 });

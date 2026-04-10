@@ -32,9 +32,11 @@ function writeIfAbsent(filePath: string, content: string, force: boolean): 'writ
 function getSkillContent(): string {
   return `# Writing Topic Hub Skills
 
-Skills are organized by category: \`skills/topics/\`, \`skills/platforms/\`, \`skills/adapters/\`.
+Skills are organized by category: \`skills/topics/\`, \`skills/adapters/\`.
 Each skill lives in \`skills/{category}/<skill-name>/\` and is a self-contained package
-that plugs into the Topic Hub dispatch loop via one of three category interfaces.
+that plugs into the Topic Hub dispatch loop via one of two category interfaces.
+IM platform integration is handled by the OpenClaw bridge (configured at the server level),
+not by individual skills.
 
 There are two authoring modes: **code skills** (full TypeScript implementation) and
 **md-only skills** (just a SKILL.md file with AI instructions, no code required).
@@ -44,7 +46,6 @@ There are two authoring modes: **code skills** (full TypeScript implementation) 
 | Category | \`topichub.category\` | Key | Purpose |
 |----------|---------------------|-----|---------|
 | **type** | \`type\` | \`topicType\` | Topic type with lifecycle hooks, field schema, status transitions, card rendering |
-| **platform** | \`platform\` | \`platform\` | IM integration — webhook handling, command parsing, card posting, group management |
 | **adapter** | \`adapter\` | \`sourceSystem\` | External system connector — transforms webhooks into topic events |
 
 ## Md-Only Skills (SKILL.md only, no code)
@@ -100,12 +101,6 @@ Lifecycle hooks (optional): \`onTopicCreated\`, \`onTopicUpdated\`,
 \`onTopicStatusChanged\`, \`onTopicAssigned\`, \`onTopicClosed\`,
 \`onTopicReopened\`, \`onSignalAttached\`, \`onTagChanged\`.
 
-### PlatformSkill
-Required: \`manifest\`.
-Key methods: \`handleWebhook\`, \`createGroup\`, \`postCard\`,
-\`resolveTenantId\`, \`runSetup\`.
-Webhook pipeline: handleWebhook → command parsing → routing → response.
-
 ### AdapterSkill
 Required: \`manifest\`, \`transformWebhook\`.
 Optional: \`runSetup\` for credential configuration.
@@ -116,7 +111,7 @@ Optional: \`runSetup\` for credential configuration.
 topichub publish
 \`\`\`
 
-Scans category subdirectories (\`skills/topics/\`, \`skills/platforms/\`,
+Scans category subdirectories (\`skills/topics/\`,
 \`skills/adapters/\`), validates each skill's \`package.json\`, bundles SKILL.md
 and source, POSTs batch to server. Server upserts registrations and enables for tenant.
 
@@ -180,8 +175,8 @@ function getClaudeMd(): string {
 See AGENTS.md for full skill development conventions, interface contracts,
 manifest schemas, and testing patterns.
 
-Skills are organized by category under \`skills/topics/\`, \`skills/platforms/\`,
-and \`skills/adapters/\`. Each skill has:
+Skills are organized by category under \`skills/topics/\` and \`skills/adapters/\`.
+IM platform integration is handled by the OpenClaw bridge. Each skill has:
 - \`package.json\` — manifest with \`topichub\` config (\`category\`, type-specific key)
 - \`SKILL.md\` — agent instructions (YAML frontmatter: \`executor\`, \`maxTurns\`, \`allowedTools\`)
 - \`src/index.ts\` — entry point exporting the category interface
@@ -223,7 +218,7 @@ export function writeAgentSkillFiles(
     result[status === 'written' ? 'written' : 'skipped'].push(rel);
   }
 
-  for (const sub of ['topics', 'platforms', 'adapters']) {
+  for (const sub of ['topics', 'adapters']) {
     fs.mkdirSync(path.join(targetDir, 'skills', sub), { recursive: true });
   }
 
@@ -287,7 +282,7 @@ export async function initSkillScaffold(
       console.log(`    ~ ${f}`);
     }
   }
-  console.log('  Created: skills/{topics,platforms,adapters}/');
+  console.log('  Created: skills/{topics,adapters}/');
   console.log('  Created: .topichub-repo.json');
   console.log('');
   console.log('Next steps:');

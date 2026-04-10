@@ -39,6 +39,25 @@ export class TopicHubService implements OnModuleInit, OnModuleDestroy {
       };
     };
 
+    const parseTenantMapping = (
+      raw?: string,
+    ): Record<string, { tenantId: string; platform: string }> => {
+      if (!raw) return {};
+      try {
+        return JSON.parse(raw);
+      } catch {
+        this.logger.warn(`Invalid TOPICHUB_OPENCLAW_TENANT_MAPPING JSON — ignoring`);
+        return {};
+      }
+    };
+
+    const openclawConfig = this.config.get<string>('TOPICHUB_OPENCLAW_GATEWAY_URL') ? {
+      gatewayUrl: this.config.get<string>('TOPICHUB_OPENCLAW_GATEWAY_URL')!,
+      token: this.config.get<string>('TOPICHUB_OPENCLAW_TOKEN') ?? '',
+      webhookSecret: this.config.get<string>('TOPICHUB_OPENCLAW_WEBHOOK_SECRET') ?? '',
+      tenantMapping: parseTenantMapping(this.config.get<string>('TOPICHUB_OPENCLAW_TENANT_MAPPING')),
+    } : undefined;
+
     this.hub = await TopicHub.create({
       mongoConnection: this.connection,
       logger: nestLogger,
@@ -55,6 +74,7 @@ export class TopicHubService implements OnModuleInit, OnModuleDestroy {
         }
         : {}),
       ...(masterKey ? { encryption: { masterKey } } : {}),
+      ...(openclawConfig ? { openclaw: openclawConfig } : {}),
     });
 
     this.logger.log('TopicHub initialized');

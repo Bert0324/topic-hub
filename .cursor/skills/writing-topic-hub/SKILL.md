@@ -8,7 +8,7 @@ description: >-
 
 # Writing Topic Hub Skills
 
-Skills are organized by category: `skills/topics/`, `skills/platforms/`, `skills/adapters/`.
+Skills are organized by category: `skills/topics/`, `skills/adapters/`.
 Each skill lives in `skills/{category}/<skill-name>/` and is a self-contained package
 that plugs into the Topic Hub dispatch loop via one of three category interfaces.
 
@@ -20,7 +20,6 @@ There are two authoring modes: **code skills** (full TypeScript implementation) 
 | Category | `topichub.category` | Key | Purpose |
 |----------|---------------------|-----|---------|
 | **type** | `type` | `topicType` | Topic type with lifecycle hooks, field schema, status transitions, card rendering |
-| **platform** | `platform` | `platform` | IM integration — webhook handling, command parsing, card posting, group management |
 | **adapter** | `adapter` | `sourceSystem` | External system connector — transforms webhooks into topic events |
 
 ## Md-Only Skills (SKILL.md only, no code)
@@ -56,7 +55,7 @@ Instructions for when a topic is created...
 ## Skill Manifest (`package.json`) — Code Skills
 
 Declared under the `topichub` key. Must include `category` and the
-category-specific identifier (`topicType`, `platform`, or `sourceSystem`).
+category-specific identifier (`topicType` or `sourceSystem`).
 
 ## SKILL.md Frontmatter
 
@@ -76,11 +75,7 @@ Lifecycle hooks (optional): `onTopicCreated`, `onTopicUpdated`,
 `onTopicStatusChanged`, `onTopicAssigned`, `onTopicClosed`,
 `onTopicReopened`, `onSignalAttached`, `onTagChanged`.
 
-### PlatformSkill
-Required: `manifest`.
-Key methods: `handleWebhook`, `createGroup`, `postCard`,
-`resolveTenantId`, `runSetup`.
-Webhook pipeline: handleWebhook → command parsing → routing → response.
+> **Note:** Platform integration is handled by the built-in OpenClaw bridge, not by skills.
 
 ### AdapterSkill
 Required: `manifest`, `transformWebhook`.
@@ -92,8 +87,8 @@ Optional: `runSetup` for credential configuration.
 topichub publish
 ```
 
-Scans category subdirectories (`skills/topics/`, `skills/platforms/`,
-`skills/adapters/`), validates each skill's `package.json`, bundles SKILL.md
+Scans category subdirectories (`skills/topics/`, `skills/adapters/`),
+validates each skill's `package.json`, bundles SKILL.md
 and source, POSTs batch to server. Server upserts registrations and enables for tenant.
 
 ## Testing

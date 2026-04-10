@@ -3,6 +3,7 @@ import { SkillConfigService } from '../config/skill-config.service';
 import { SkillAiRuntime } from './skill-ai-runtime';
 import { TopicContext } from '../interfaces/type-skill';
 import { DispatchService } from '../../services/dispatch.service';
+import { OpenClawBridge } from '../../bridge/openclaw-bridge';
 import type { TopicHubLogger } from '../../common/logger';
 import type { SkillPipelinePort } from '../../command/handlers/create.handler';
 
@@ -13,6 +14,7 @@ export class SkillPipeline implements SkillPipelinePort {
     private readonly skillAiRuntime: SkillAiRuntime | null,
     private readonly dispatchService: DispatchService | null,
     private readonly logger: TopicHubLogger,
+    private readonly bridge: OpenClawBridge | null = null,
   ) {}
 
   async execute(
@@ -32,7 +34,7 @@ export class SkillPipeline implements SkillPipelinePort {
     await this.runTypeSkillHook(tenantId, operation, topicData, ctx, extra);
     await this.runSkillAi(tenantId, operation, topicData, actor, extra);
     await this.createTaskDispatch(tenantId, operation, topicData, actor, extra);
-    await this.runPlatformSkills(tenantId, operation, topicData, ctx);
+    await this.runBridgeNotifications(tenantId, operation, topicData);
   }
 
   private async runTypeSkillHook(
@@ -187,53 +189,30 @@ export class SkillPipeline implements SkillPipelinePort {
     }
   }
 
-  private async runPlatformSkills(
+  private async runBridgeNotifications(
     tenantId: string,
     operation: string,
     topicData: any,
-    ctx: TopicContext,
   ): Promise<void> {
-    const platformSkills = this.registry.getPlatformSkills();
-    const topicType = topicData?.type;
-    const typeSkill = topicType
-      ? this.registry.getTypeSkillForType(topicType)
-      : undefined;
+    if (!this.bridge) return;
 
-    for (const platformSkill of platformSkills) {
-      const enabled = await this.configService.isEnabledForTenant(
-        tenantId,
-        platformSkill.manifest.name,
+    const notifyOps = ['created', 'updated', 'status_changed', 'assigned', 'closed', 'reopened'];
+    if (!notifyOps.includes(operation)) return;
+
+    try {
+      const topicType = topicData?.type;
+      if (!topicType) return;
+
+      const typeSkill = this.registry.getTypeSkillForType(topicType);
+      if (!typeSkill) return;
+
+      const card = typeSkill.renderCard(topicData);
+      await this.bridge.notifyTenantChannels(tenantId, card, topicData.type);
+    } catch (err) {
+      this.logger.error(
+        `Bridge notification failed for operation ${operation}`,
+        String(err),
       );
-      if (!enabled) continue;
-
-      try {
-        if (
-          (operation === 'created' || operation === 'updated') &&
-          typeSkill &&
-          platformSkill.postCard
-        ) {
-          const card = typeSkill.renderCard(topicData);
-          const groupId = topicData?.groupId;
-          if (groupId) {
-            const method =
-              operation === 'created' ? 'postCard' : 'updateCard';
-            const fn = platformSkill[method];
-            if (typeof fn === 'function') {
-              await fn.call(platformSkill, {
-                tenantId,
-                platform: platformSkill.manifest.platform,
-                groupId,
-                card,
-              });
-            }
-          }
-        }
-      } catch (err) {
-        this.logger.error(
-          `Platform skill ${platformSkill.manifest.name} failed for operation ${operation}`,
-          String(err),
-        );
-      }
     }
   }
 }

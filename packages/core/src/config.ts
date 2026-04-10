@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { Connection } from 'mongoose';
+import { OpenClawConfigSchema } from './bridge/openclaw-types';
 
 const AiProviderConfigSchema = z.object({
   provider: z.string().min(1),
@@ -22,6 +23,7 @@ export const TopicHubConfigSchema = z.object({
   ai: AiProviderConfigSchema.optional(),
   logger: z.custom<import('./common/logger').LoggerFactory>().optional(),
   encryption: EncryptionConfigSchema.optional(),
+  openclaw: OpenClawConfigSchema.optional(),
 }).refine(
   (data) => !!(data.mongoConnection ?? data.mongoUri),
   { message: 'Either mongoConnection or mongoUri must be provided' }

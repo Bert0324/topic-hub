@@ -2,11 +2,9 @@ import { select, input, confirm, checkbox } from '@inquirer/prompts';
 
 export interface QaResult {
   name: string;
-  category: 'type' | 'platform' | 'adapter';
+  category: 'type' | 'adapter';
   topicType?: string;
   hooks?: string[];
-  platform?: string;
-  capabilities?: string[];
   sourceSystem?: string;
   authType?: 'oauth2' | 'api_key' | 'none';
   authScopes?: string[];
@@ -22,7 +20,6 @@ export async function runQaFlow(options?: { category?: string; name?: string; no
     message: 'Category:',
     choices: [
       { value: 'type' as const, name: 'Topic Type — defines topic types with lifecycle hooks' },
-      { value: 'platform' as const, name: 'Platform — IM platform integration' },
       { value: 'adapter' as const, name: 'Adapter — external system connector' },
     ],
   });
@@ -43,18 +40,6 @@ export async function runQaFlow(options?: { category?: string; name?: string; no
         ],
       });
       return { name, category, topicType, hooks };
-    }
-    case 'platform': {
-      const platform = await input({ message: 'Target IM platform (e.g., feishu, slack):' });
-      const capabilities = await checkbox({
-        message: 'Capabilities:',
-        choices: [
-          { value: 'push', checked: true },
-          { value: 'commands', checked: true },
-          { value: 'group_management' },
-        ],
-      });
-      return { name, category, platform, capabilities };
     }
     case 'adapter': {
       const sourceSystem = await input({ message: 'External system (e.g., github, jira):' });
