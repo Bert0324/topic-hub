@@ -77,6 +77,42 @@ export class AiClassification {
 }
 
 @modelOptions({ schemaOptions: { _id: false } })
+export class SkillFrontmatterSnapshot {
+  @prop({ required: true })
+  name!: string;
+
+  @prop({ required: true })
+  description!: string;
+
+  @prop()
+  executor?: string;
+
+  @prop()
+  maxTurns?: number;
+
+  @prop({ type: () => [String] })
+  allowedTools?: string[];
+
+  @prop()
+  topicType?: string;
+}
+
+@modelOptions({ schemaOptions: { _id: false } })
+export class SkillInstructions {
+  @prop({ required: true })
+  primaryInstruction!: string;
+
+  @prop({ required: true })
+  fullBody!: string;
+
+  @prop()
+  eventName?: string;
+
+  @prop({ required: true, type: () => SkillFrontmatterSnapshot })
+  frontmatter!: SkillFrontmatterSnapshot;
+}
+
+@modelOptions({ schemaOptions: { _id: false } })
 export class EnrichedPayload {
   @prop({ required: true, type: () => TopicSnapshot })
   topic!: TopicSnapshot;
@@ -86,6 +122,9 @@ export class EnrichedPayload {
 
   @prop({ type: () => AiClassification })
   aiClassification?: AiClassification;
+
+  @prop({ type: () => SkillInstructions })
+  skillInstructions?: SkillInstructions;
 }
 
 @modelOptions({ schemaOptions: { _id: false } })

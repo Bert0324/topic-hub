@@ -6,7 +6,6 @@ import { ParsedSkillMd } from '../interfaces/skill-md';
 import { SkillLoader } from './skill-loader';
 import { SkillMdParser } from './skill-md-parser';
 import { createMdOnlyTypeSkill } from './md-only-skill';
-import type { AiCompletionPort } from '../interfaces/skill-context';
 import type { TopicHubLogger } from '../../common/logger';
 import type { SkillRegistryPort } from '../../command/command-router';
 
@@ -30,7 +29,6 @@ export class SkillRegistry implements SkillRegistryPort {
     private readonly skillMdParser: SkillMdParser,
     private readonly registrationModel: Model<any>,
     private readonly tenantConfigModel: Model<any>,
-    private readonly aiService: AiCompletionPort | null,
     private readonly logger: TopicHubLogger,
   ) {}
 
@@ -299,14 +297,9 @@ export class SkillRegistry implements SkillRegistryPort {
     if (typeof (skill as any).init !== 'function') return;
 
     const manifest = skill.manifest as any;
-    const wantsAi = manifest.ai === true;
-    const aiSvc = wantsAi ? this.aiService : null;
 
     try {
-      (skill as any).init({ aiService: aiSvc });
-      if (wantsAi && aiSvc) {
-        this.logger.log(`Skill ${manifest.name} initialized with AiService`);
-      }
+      (skill as any).init({ aiService: null });
     } catch (err) {
       this.logger.error(`Failed to init skill ${manifest.name}`, String(err));
     }

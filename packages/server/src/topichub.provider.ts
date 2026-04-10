@@ -144,7 +144,11 @@ export class TopicHubService implements OnModuleInit, OnModuleDestroy {
 
     const discordToken = this.config.get<string>('TOPICHUB_BRIDGE_DISCORD_BOT_TOKEN');
     if (discordToken) {
-      channels.discord = { botToken: discordToken };
+      const discordGuildId = this.config.get<string>('TOPICHUB_BRIDGE_DISCORD_GUILD_ID');
+      channels.discord = {
+        botToken: discordToken,
+        ...(discordGuildId ? { guildId: discordGuildId } : {}),
+      };
     }
 
     const telegramToken = this.config.get<string>('TOPICHUB_BRIDGE_TELEGRAM_BOT_TOKEN');

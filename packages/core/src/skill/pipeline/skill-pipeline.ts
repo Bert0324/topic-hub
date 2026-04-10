@@ -1,6 +1,6 @@
 import { SkillRegistry } from '../registry/skill-registry';
 import { SkillConfigService } from '../config/skill-config.service';
-import { SkillAiRuntime } from './skill-ai-runtime';
+import { OPERATION_TO_EVENT } from '../interfaces/skill-md';
 import { TopicContext } from '../interfaces/type-skill';
 import { DispatchService } from '../../services/dispatch.service';
 import type { DispatchMeta } from '../../services/dispatch.service';
@@ -12,7 +12,6 @@ export class SkillPipeline implements SkillPipelinePort {
   constructor(
     private readonly registry: SkillRegistry,
     private readonly configService: SkillConfigService,
-    private readonly skillAiRuntime: SkillAiRuntime | null,
     private readonly dispatchService: DispatchService | null,
     private readonly logger: TopicHubLogger,
     private readonly bridge: OpenClawBridge | null = null,
@@ -34,7 +33,6 @@ export class SkillPipeline implements SkillPipelinePort {
     };
 
     await this.runTypeSkillHook(tenantId, operation, topicData, ctx, extra);
-    await this.runSkillAi(tenantId, operation, topicData, actor, extra);
     await this.createTaskDispatch(tenantId, operation, topicData, actor, extra, dispatchMeta);
     await this.runBridgeNotifications(tenantId, operation, topicData);
   }
@@ -85,43 +83,6 @@ export class SkillPipeline implements SkillPipelinePort {
     }
   }
 
-  private async runSkillAi(
-    tenantId: string,
-    operation: string,
-    topicData: any,
-    actor: string,
-    extra?: Record<string, unknown>,
-  ): Promise<void> {
-    if (!this.skillAiRuntime) return;
-
-    const topicType = topicData?.type;
-    if (!topicType) return;
-
-    const typeSkill = this.registry.getTypeSkillForType(topicType);
-    if (!typeSkill) return;
-
-    const enabled = await this.configService.isEnabledForTenant(
-      tenantId,
-      typeSkill.manifest.name,
-    );
-    if (!enabled) return;
-
-    try {
-      await this.skillAiRuntime.executeIfApplicable(
-        tenantId,
-        typeSkill.manifest.name,
-        operation,
-        topicData,
-        actor,
-        extra,
-      );
-    } catch (err) {
-      this.logger.error(
-        `Skill AI runtime failed for ${typeSkill.manifest.name}: ${(err as Error).message}`,
-      );
-    }
-  }
-
   private async createTaskDispatch(
     tenantId: string,
     operation: string,
@@ -148,41 +109,64 @@ export class SkillPipeline implements SkillPipelinePort {
     if (!topicId) return;
 
     try {
+      const enrichedPayload: Record<string, unknown> = {
+        topic: {
+          id: topicId,
+          type: topicData.type ?? '',
+          title: topicData.title ?? '',
+          status: topicData.status ?? '',
+          metadata: topicData.metadata ?? {},
+          groups: (topicData.groups ?? []).map((g: any) => ({
+            platform: g.platform,
+            groupId: g.groupId,
+          })),
+          assignees: (topicData.assignees ?? []).map((a: any) => ({
+            userId: a.userId,
+          })),
+          tags: topicData.tags ?? [],
+          signals: (topicData.signals ?? []).map((s: any) => ({
+            label: s.label,
+            url: s.url,
+            description: s.description,
+          })),
+          createdAt: topicData.createdAt?.toISOString?.() ?? '',
+          updatedAt: topicData.updatedAt?.toISOString?.() ?? '',
+        },
+        event: {
+          type: operation,
+          actor,
+          timestamp: new Date(),
+          payload: extra,
+        },
+      };
+
+      const parsedMd = this.registry.getSkillMd(typeSkill.manifest.name);
+      if (parsedMd?.hasAiInstructions) {
+        const eventName = OPERATION_TO_EVENT[operation];
+        const hasEventSection = eventName ? parsedMd.eventPrompts.has(eventName) : false;
+        const primaryInstruction = (eventName && parsedMd.eventPrompts.get(eventName)) ?? parsedMd.systemPrompt;
+
+        enrichedPayload.skillInstructions = {
+          primaryInstruction,
+          fullBody: parsedMd.systemPrompt,
+          ...(hasEventSection && eventName ? { eventName } : {}),
+          frontmatter: {
+            name: parsedMd.frontmatter.name,
+            description: parsedMd.frontmatter.description,
+            ...(parsedMd.frontmatter.executor ? { executor: parsedMd.frontmatter.executor } : {}),
+            ...(parsedMd.frontmatter.maxTurns ? { maxTurns: parsedMd.frontmatter.maxTurns } : {}),
+            ...(parsedMd.frontmatter.allowedTools ? { allowedTools: parsedMd.frontmatter.allowedTools } : {}),
+            ...(parsedMd.frontmatter.topicType ? { topicType: parsedMd.frontmatter.topicType } : {}),
+          },
+        };
+      }
+
       await this.dispatchService.create({
         tenantId,
         topicId,
         eventType: operation,
         skillName: typeSkill.manifest.name,
-        enrichedPayload: {
-          topic: {
-            id: topicId,
-            type: topicData.type ?? '',
-            title: topicData.title ?? '',
-            status: topicData.status ?? '',
-            metadata: topicData.metadata ?? {},
-            groups: (topicData.groups ?? []).map((g: any) => ({
-              platform: g.platform,
-              groupId: g.groupId,
-            })),
-            assignees: (topicData.assignees ?? []).map((a: any) => ({
-              userId: a.userId,
-            })),
-            tags: topicData.tags ?? [],
-            signals: (topicData.signals ?? []).map((s: any) => ({
-              label: s.label,
-              url: s.url,
-              description: s.description,
-            })),
-            createdAt: topicData.createdAt?.toISOString?.() ?? '',
-            updatedAt: topicData.updatedAt?.toISOString?.() ?? '',
-          },
-          event: {
-            type: operation,
-            actor,
-            timestamp: new Date(),
-            payload: extra,
-          },
-        },
+        enrichedPayload,
         ...dispatchMeta,
       });
     } catch (err) {

@@ -62,13 +62,23 @@ function buildOpenClawJson(
 
   if (bridgeConfig.channels.discord) {
     const d = bridgeConfig.channels.discord;
-    channels.discord = {
+    const discordEntry: Record<string, unknown> = {
       enabled: true,
       dmPolicy: 'open',
       allowFrom: ['*'],
       groupPolicy: 'open',
       token: d.botToken,
+      commands: {
+        native: false,
+        nativeSkills: false,
+      },
     };
+    if (d.guildId) {
+      discordEntry.guilds = {
+        [d.guildId]: { requireMention: true },
+      };
+    }
+    channels.discord = discordEntry;
   }
 
   if (bridgeConfig.channels.telegram) {
@@ -100,6 +110,13 @@ function buildOpenClawJson(
       auth: { token: webhookSecret },
       reload: { mode: 'off' },
     },
+    // Topic Hub handles /topichub via relay → webhook; disable OpenClaw command surfaces so
+    // Discord slash / text /foo is not routed to the gateway agent (model "none" would error).
+    commands: {
+      native: false,
+      nativeSkills: false,
+      text: false,
+    },
     agents: {
       defaults: {
         model: { primary: 'none' },
@@ -117,7 +134,7 @@ function buildOpenClawJson(
           extraDirs: [hooksDir],
         },
         entries: {
-          'topichub-relay': { enabled: true },
+          'topic-hub-inbound-relay': { enabled: true },
         },
       },
     },
@@ -136,18 +153,18 @@ export function generateBridgeConfigFiles(
   );
 
   const hooksDir = path.join(configDir, 'hooks');
-  const hookDir = path.join(hooksDir, 'topichub-relay');
+  const hookDir = path.join(hooksDir, 'topic-hub-inbound-relay');
   fs.mkdirSync(hookDir, { recursive: true });
 
   fs.writeFileSync(
     path.join(hookDir, 'HOOK.md'),
     `---
-name: topichub-relay
+name: topic-hub-inbound-relay
 description: "Forward channel messages to the TopicHub server"
 metadata:
   { "openclaw": { "emoji": "📡", "events": ["message:received"] } }
 ---
-# topichub-relay
+# topic-hub-inbound-relay
 Forwards inbound channel messages to the TopicHub webhook endpoint.
 `,
   );
@@ -167,37 +184,48 @@ function buildRelayHandler(webhookUrl: string, secret: string): string {
   return `import * as crypto from "node:crypto";
 
 const WEBHOOK_URL = ${JSON.stringify(webhookUrl)};
-const SECRET = ${JSON.stringify(secret)};
+// Prefer env (set by BridgeManager on the OpenClaw child) so HMAC always matches Topic Hub.
+const SECRET = process.env.TOPICHUB_WEBHOOK_HMAC_SECRET ?? ${JSON.stringify(secret)};
+
+function normalizeImCommandMessage(raw) {
+  let s = String(raw ?? "").trim();
+  for (;;) {
+    const m = s.match(/^(<@!?\d+>|<@&\d+>)\s*/);
+    if (!m) break;
+    s = s.slice(m[0].length).trim();
+  }
+  return s;
+}
 
 const handler = async (event) => {
   if (event.type !== "message" || event.action !== "received") return;
 
   const ctx = event.context || {};
+  const content = normalizeImCommandMessage(ctx.content ?? "");
 
-  // Build the body WITHOUT signature so the HMAC covers the same bytes the
-  // server will verify against (the server strips "signature" before hashing).
+  // HMAC covers exact POST body bytes; signature is sent in X-TopicHub-Signature.
   const body = {
     event: "message.received",
     timestamp: new Date().toISOString(),
     data: {
-      channel: ctx.channelId ?? "",
-      user: ctx.metadata?.senderId ?? ctx.from ?? "",
-      message: ctx.content ?? "",
-      sessionId: event.sessionKey ?? "",
+      channel: String(ctx.channelId ?? ""),
+      user: String(ctx.metadata?.senderId ?? ctx.from ?? ""),
+      message: String(content),
+      sessionId: String(event.sessionKey ?? ""),
     },
   };
 
-  const raw = JSON.stringify(body);
-  const sig = "sha256=" + crypto.createHmac("sha256", SECRET).update(raw).digest("hex");
-
-  // Append the signature so the server can extract it and verify "raw" above.
-  const envelope = JSON.stringify({ ...body, signature: sig });
+  const bodyStr = JSON.stringify(body);
+  const sig = "sha256=" + crypto.createHmac("sha256", SECRET).update(bodyStr).digest("hex");
 
   try {
     const res = await fetch(WEBHOOK_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: envelope,
+      headers: {
+        "Content-Type": "application/json",
+        "X-TopicHub-Signature": sig,
+      },
+      body: bodyStr,
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) {

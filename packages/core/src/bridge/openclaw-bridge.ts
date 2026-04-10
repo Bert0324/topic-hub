@@ -3,16 +3,55 @@ import type { TopicHubLogger } from '../common/logger';
 import type {
   OpenClawConfig,
   OpenClawWebhookPayload,
+  OpenClawWebhookUnsignedPayload,
   OpenClawInboundResult,
   TenantChannelEntry,
 } from './openclaw-types';
-import { OpenClawWebhookPayloadSchema } from './openclaw-types';
+import {
+  OpenClawWebhookPayloadSchema,
+  OpenClawWebhookUnsignedPayloadSchema,
+} from './openclaw-types';
 import { MessageRenderer } from './message-renderer';
 import type { CardData } from '../skill/interfaces/type-skill';
 
 const COMMAND_PREFIX = '/topichub';
 const ANSWER_PREFIX = '/answer';
 const DEDUP_TTL_MS = 60_000;
+
+/**
+ * Strip leading Discord mentions so `/topichub` / `/answer` still match when users write `@Bot /topichub …`.
+ * Handles user mentions `<@id>`, `<@!id>` and role `<@&id>`.
+ */
+export function normalizeImCommandMessage(raw: string): string {
+  let s = raw.trim();
+  for (;;) {
+    const m = s.match(/^(<@!?\d+>|<@&\d+>)\s*/);
+    if (!m) break;
+    s = s.slice(m[0].length).trim();
+  }
+  return s;
+}
+
+/**
+ * Exact JSON bytes used for HMAC — must stay in sync with `topichub-relay` handler.ts
+ * (`JSON.stringify(body)` before the signature field is appended).
+ */
+export function canonicalOpenClawWebhookSigningString(webhook: {
+  event: string;
+  timestamp: string;
+  data: { channel: string; user: string; message: string; sessionId: string };
+}): string {
+  return JSON.stringify({
+    event: String(webhook.event),
+    timestamp: String(webhook.timestamp),
+    data: {
+      channel: String(webhook.data.channel),
+      user: String(webhook.data.user),
+      message: String(webhook.data.message),
+      sessionId: String(webhook.data.sessionId),
+    },
+  });
+}
 
 export class OpenClawBridge {
   private readonly dedup = new Map<string, number>();
@@ -59,18 +98,59 @@ export class OpenClawBridge {
 
   /**
    * Verify HMAC-SHA256 signature.  The signature covers the JSON body
-   * **without** the `signature` field, so we strip it before hashing.
+   * **without** the `signature` field, using the same canonical serialization as topichub-relay.
    */
   verifySignature(payload: Record<string, unknown>, signature: string): boolean {
-    const { signature: _sig, ...bodyWithoutSig } = payload;
-    const canonical = JSON.stringify(bodyWithoutSig);
+    const parsed = OpenClawWebhookPayloadSchema.safeParse(payload);
+    if (!parsed.success) return false;
+    const { signature: sig, ...body } = parsed.data;
+    if (sig !== signature) return false;
+    return this.verifyParsedPayloadSignature(body, sig);
+  }
+
+  /** Verify HMAC for validated fields (same bytes as topichub-relay `JSON.stringify(body)`). */
+  verifyParsedPayloadSignature(
+    body: Omit<OpenClawWebhookPayload, 'signature'>,
+    signature: string,
+  ): boolean {
+    const canonical = canonicalOpenClawWebhookSigningString(body);
     const computed = crypto
       .createHmac('sha256', this.config.webhookSecret)
       .update(canonical)
       .digest('hex');
-    const expected = signature.startsWith('sha256=')
-      ? signature.slice(7)
-      : signature;
+    const expected = signature.startsWith('sha256=') ? signature.slice(7) : signature;
+    if (computed.length !== expected.length) return false;
+    return crypto.timingSafeEqual(
+      Buffer.from(computed, 'hex'),
+      Buffer.from(expected, 'hex'),
+    );
+  }
+
+  private static readTopicHubSignatureHeader(
+    headers?: Record<string, string | string[] | undefined>,
+  ): string | undefined {
+    if (!headers) return undefined;
+    const raw =
+      headers['x-topichub-signature'] ??
+      headers['X-TopicHub-Signature'];
+    if (Array.isArray(raw)) return raw[0];
+    return typeof raw === 'string' ? raw : undefined;
+  }
+
+  private toRawBodyBuffer(rawBody: Buffer | string | undefined): Buffer | null {
+    if (rawBody === undefined || rawBody === null) return null;
+    return Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(rawBody, 'utf8');
+  }
+
+  /** HMAC over exact POST body bytes (must match embedded relay). */
+  private verifyRawBodyHmac(buf: Buffer, signatureHeader: string): boolean {
+    const computed = crypto
+      .createHmac('sha256', this.config.webhookSecret)
+      .update(buf)
+      .digest('hex');
+    const expected = signatureHeader.startsWith('sha256=')
+      ? signatureHeader.slice(7)
+      : signatureHeader;
     if (computed.length !== expected.length) return false;
     return crypto.timingSafeEqual(
       Buffer.from(computed, 'hex'),
@@ -80,19 +160,74 @@ export class OpenClawBridge {
 
   handleInboundWebhook(
     payload: unknown,
-    _rawBody: string,
+    rawBody?: Buffer | string,
+    headers?: Record<string, string | string[] | undefined>,
   ): OpenClawInboundResult | null {
-    const parsed = OpenClawWebhookPayloadSchema.safeParse(payload);
-    if (!parsed.success) {
-      this.logger.warn('Invalid OpenClaw webhook payload', parsed.error.message);
-      return null;
-    }
+    const sigHeader = OpenClawBridge.readTopicHubSignatureHeader(headers);
+    const buf = this.toRawBodyBuffer(rawBody);
 
-    const webhook: OpenClawWebhookPayload = parsed.data;
+    let webhook: OpenClawWebhookPayload;
 
-    if (!this.verifySignature(payload as Record<string, unknown>, webhook.signature)) {
-      this.logger.warn('OpenClaw webhook signature verification failed');
-      return null;
+    if (sigHeader) {
+      const fromParsedBody = OpenClawWebhookUnsignedPayloadSchema.safeParse(payload);
+      const signingCandidates: Buffer[] = [];
+      if (buf && buf.length > 0) {
+        signingCandidates.push(buf);
+      }
+      if (fromParsedBody.success) {
+        signingCandidates.push(
+          Buffer.from(
+            canonicalOpenClawWebhookSigningString(fromParsedBody.data),
+            'utf8',
+          ),
+        );
+      }
+
+      const matched = signingCandidates.find((b) => this.verifyRawBodyHmac(b, sigHeader));
+      if (!matched) {
+        this.logger.warn(
+          'OpenClaw webhook signature verification failed (X-TopicHub-Signature; tried raw body and canonical JSON)',
+        );
+        return null;
+      }
+
+      let unsigned: OpenClawWebhookUnsignedPayload;
+      if (buf && matched.equals(buf)) {
+        try {
+          const json: unknown = JSON.parse(buf.toString('utf8'));
+          const u = OpenClawWebhookUnsignedPayloadSchema.safeParse(json);
+          if (!u.success) {
+            this.logger.warn('Invalid OpenClaw webhook payload', u.error.message);
+            return null;
+          }
+          unsigned = u.data;
+        } catch {
+          this.logger.warn('Invalid OpenClaw webhook JSON body');
+          return null;
+        }
+      } else if (fromParsedBody.success) {
+        unsigned = fromParsedBody.data;
+      } else {
+        this.logger.warn('OpenClaw webhook payload could not be validated for signed request');
+        return null;
+      }
+
+      webhook = { ...unsigned, signature: sigHeader };
+    } else {
+      const parsed = OpenClawWebhookPayloadSchema.safeParse(payload);
+      if (!parsed.success) {
+        this.logger.warn('Invalid OpenClaw webhook payload', parsed.error.message);
+        return null;
+      }
+
+      const { signature, ...body } = parsed.data;
+
+      if (!this.verifyParsedPayloadSignature(body, signature)) {
+        this.logger.warn('OpenClaw webhook signature verification failed');
+        return null;
+      }
+
+      webhook = parsed.data;
     }
 
     if (webhook.event !== 'message.received') {
@@ -101,12 +236,13 @@ export class OpenClawBridge {
     }
 
     const { channel, user, message, sessionId } = webhook.data;
+    const normalized = normalizeImCommandMessage(message);
 
-    if (!message.startsWith(COMMAND_PREFIX) && !message.startsWith(ANSWER_PREFIX)) {
+    if (!normalized.startsWith(COMMAND_PREFIX) && !normalized.startsWith(ANSWER_PREFIX)) {
       return null;
     }
 
-    if (this.isDuplicate(sessionId, message)) {
+    if (this.isDuplicate(sessionId, normalized)) {
       this.logger.debug('Duplicate webhook detected, skipping');
       return null;
     }
@@ -122,7 +258,7 @@ export class OpenClawBridge {
       platform: mapping.platform,
       channel,
       userId: user,
-      rawCommand: message,
+      rawCommand: normalized,
       sessionId,
     };
   }

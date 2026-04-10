@@ -254,21 +254,38 @@ export class TaskProcessor {
     const payload =
       claimedDispatch.enrichedPayload ?? claimedDispatch;
 
-    return [
+    const sections: string[] = [
       'You are processing a task dispatch from Topic Hub.',
       '',
-      '## Topic',
-      JSON.stringify(payload.topic ?? payload, null, 2),
-      '',
-      '## Event',
-      JSON.stringify(payload.event ?? {}, null, 2),
-      '',
-      payload.aiClassification
-        ? `## Server AI Classification\n${JSON.stringify(payload.aiClassification, null, 2)}`
-        : '',
-    ]
-      .filter(Boolean)
-      .join('\n');
+    ];
+
+    if (payload.skillInstructions?.primaryInstruction) {
+      sections.push('## Skill Instructions');
+      sections.push(payload.skillInstructions.primaryInstruction);
+      sections.push('');
+
+      if (
+        payload.skillInstructions.fullBody &&
+        payload.skillInstructions.fullBody !== payload.skillInstructions.primaryInstruction
+      ) {
+        sections.push('## Full Skill Context');
+        sections.push(payload.skillInstructions.fullBody);
+        sections.push('');
+      }
+    }
+
+    sections.push('## Topic');
+    sections.push(JSON.stringify(payload.topic ?? payload, null, 2));
+    sections.push('');
+    sections.push('## Event');
+    sections.push(JSON.stringify(payload.event ?? {}, null, 2));
+
+    if (payload.aiClassification) {
+      sections.push('');
+      sections.push(`## Server AI Classification\n${JSON.stringify(payload.aiClassification, null, 2)}`);
+    }
+
+    return sections.join('\n');
   }
 
   private resolveSkillsDir(): string {

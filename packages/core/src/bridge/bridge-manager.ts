@@ -9,6 +9,9 @@ import {
   type GeneratedBridgeConfig,
 } from './bridge-config-generator';
 
+/** Injected into the OpenClaw child so topic-hub-inbound-relay HMAC matches TopicHub's webhookSecret. */
+export const TOPICHUB_WEBHOOK_HMAC_ENV = 'TOPICHUB_WEBHOOK_HMAC_SECRET';
+
 const DEFAULT_STARTUP_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_RESTART_RETRIES = 3;
 const HEALTH_CHECK_INTERVAL_MS = 15_000;
@@ -176,6 +179,7 @@ export class BridgeManager {
       env: {
         ...process.env,
         OPENCLAW_CONFIG_PATH: this.generated.configPath,
+        [TOPICHUB_WEBHOOK_HMAC_ENV]: this._webhookSecret!,
       },
       detached: false,
     });

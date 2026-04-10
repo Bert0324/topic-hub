@@ -11,6 +11,8 @@ export type {
   SkillOperations,
   DispatchOperations,
   AdminOperations,
+  AiOperations,
+  AiOperationResult,
   IdentityOperations,
   HeartbeatOperations,
   QaOperations,
@@ -76,13 +78,18 @@ export type { EventPayload } from './ingestion/event-payload';
 export type { WebhookResult } from './webhook/webhook-handler';
 
 // Bridge
-export { OpenClawBridge } from './bridge/openclaw-bridge';
+export {
+  OpenClawBridge,
+  normalizeImCommandMessage,
+  canonicalOpenClawWebhookSigningString,
+} from './bridge/openclaw-bridge';
 export { MessageRenderer } from './bridge/message-renderer';
-export { BridgeManager } from './bridge/bridge-manager';
+export { BridgeManager, TOPICHUB_WEBHOOK_HMAC_ENV } from './bridge/bridge-manager';
 export type { BridgeManagerState } from './bridge/bridge-manager';
 export {
   OpenClawConfigSchema,
   OpenClawWebhookPayloadSchema,
+  OpenClawWebhookUnsignedPayloadSchema,
   TenantChannelEntrySchema,
   BridgeConfigSchema,
 } from './bridge/openclaw-types';
