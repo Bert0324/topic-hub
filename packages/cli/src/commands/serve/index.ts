@@ -71,6 +71,7 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     skillsDir: config.skillsDir,
     configExecutor: config.executor,
     cliExecutorFlag: executorFlag,
+    executorArgs: config.executorArgs,
     onEventUpdate,
   });
 

@@ -129,6 +129,7 @@ async function handleAiRun(args: string[]) {
   }
 
   const executorFlag = extractFlag(args, '--executor');
+  const executorArgsRaw = extractFlag(args, '--executor-args');
 
   const config = loadConfig();
   const token = await loadAdminToken();
@@ -194,10 +195,15 @@ async function handleAiRun(args: string[]) {
     allowedTools: frontmatter.allowedTools,
   });
 
+  const extraArgs = executorArgsRaw
+    ? executorArgsRaw.split(' ')
+    : config.executorArgs;
+
   try {
     const result = await executor.execute(prompt, systemPromptPath, {
       mcpConfigPath,
       maxTurns: frontmatter.maxTurns,
+      extraArgs,
     });
 
     console.log(`  Duration: ${(result.durationMs / 1000).toFixed(1)}s`);

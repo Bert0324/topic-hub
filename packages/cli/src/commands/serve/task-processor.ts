@@ -18,6 +18,7 @@ export interface TaskProcessorOptions {
   skillsDir: string;
   configExecutor: ExecutorType;
   cliExecutorFlag?: string;
+  executorArgs?: string[];
   onEventUpdate: (entry: EventLogEntry) => void;
 }
 
@@ -101,6 +102,7 @@ export class TaskProcessor {
         maxTurns: frontmatter?.maxTurns,
         allowedTools: frontmatter?.allowedTools,
         mcpConfigPath,
+        extraArgs: this.options.executorArgs,
       };
 
       const startMs = Date.now();

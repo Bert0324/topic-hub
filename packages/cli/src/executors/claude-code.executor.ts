@@ -14,7 +14,13 @@ export class ClaudeCodeExecutor implements AgentExecutor {
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const startTime = Date.now();
 
-    const args = ['-p', prompt, '--output-format', 'json', '--verbose'];
+    const args: string[] = [];
+
+    if (options.extraArgs?.length) {
+      args.push(...options.extraArgs);
+    }
+
+    args.push('-p', prompt, '--output-format', 'json', '--verbose');
 
     if (systemPromptPath) {
       args.push('--append-system-prompt-file', systemPromptPath);

@@ -1,6 +1,6 @@
 import { loadConfig } from '../../config/config.js';
 import { loadAdminToken } from '../../auth/auth.js';
-import { scaffoldRepo } from '../../scaffold/repo-scaffold.js';
+import { scaffoldRepo, initSkillScaffold } from '../../scaffold/repo-scaffold.js';
 
 const REPO_NAME_PATTERN = /^[a-z][a-z0-9-]{1,62}[a-z0-9]$/;
 
@@ -30,7 +30,7 @@ export async function handleSkillRepoCommand(
       }
 
       const pathIdx = args.indexOf('--path');
-      const parentDir = pathIdx !== -1 ? args[pathIdx + 1] : process.cwd();
+      const parentDir = pathIdx !== -1 ? args[pathIdx + 1] : (process.env.INIT_CWD ?? process.cwd());
 
       const config = await loadConfig();
       await scaffoldRepo(repoName, parentDir, {
@@ -39,8 +39,30 @@ export async function handleSkillRepoCommand(
       });
       break;
     }
+    case 'init': {
+      const token = await loadAdminToken();
+      if (!token) {
+        console.error('Not authenticated. Run `topichub init` first.');
+        process.exit(1);
+      }
+
+      const force = args.includes('--force');
+      const pathIdx = args.indexOf('--path');
+      const targetDir = pathIdx !== -1 ? args[pathIdx + 1] : (process.env.INIT_CWD ?? process.cwd());
+
+      const config = await loadConfig();
+      await initSkillScaffold(targetDir, {
+        tenantId: config.tenantId ?? '',
+        serverUrl: config.serverUrl ?? 'http://localhost:3000',
+        force,
+      });
+      break;
+    }
     default:
       console.log('Usage: topichub skill-repo <subcommand>');
-      console.log('Subcommands: create');
+      console.log('Subcommands: create, init');
+      console.log('');
+      console.log('  create <name>   Create a new skill repository');
+      console.log('  init            Add skill scaffolding to an existing repository');
   }
 }

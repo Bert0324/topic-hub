@@ -1,17 +1,23 @@
 import { loadAdminToken, loadIdToken } from '../auth/auth.js';
 import { loadConfigOrNull } from '../config/config.js';
 
+/** Strip trailing slashes so `${base}${path}` never produces `//` when path starts with `/`. */
+function normalizeBaseUrl(url: string): string {
+  return url.replace(/\/+$/, '');
+}
+
 export class ApiClient {
   readonly baseUrl: string;
   private token: string | null = null;
 
   constructor(baseUrl?: string, token?: string) {
     const config = baseUrl ? null : loadConfigOrNull();
-    this.baseUrl =
+    const raw =
       baseUrl ??
       config?.serverUrl ??
       process.env.TOPICHUB_SERVER_URL ??
       'http://localhost:3000';
+    this.baseUrl = normalizeBaseUrl(raw);
     if (token) this.token = token;
   }
 

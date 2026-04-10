@@ -44,7 +44,7 @@ Topic Hub is just an engine. All actual capabilities come from **Skill** plugins
 
 No Adapter? Just create Topics manually. **Mix and match — only install what you need.**
 
-Skills are organized by category: `skills/topics/`, `skills/platforms/`, `skills/adapters/`.
+Skills can be full TypeScript packages or **md-only** (just a `SKILL.md` file with AI instructions — no code required). Skills are organized by category: `skills/topics/`, `skills/platforms/`, `skills/adapters/`.
 
 ### AI-Powered Skills
 
@@ -269,12 +269,16 @@ The scaffolded repo includes AI agent skill files (`.cursor/rules/`, `AGENTS.md`
 
 ### Skill Structure
 
+Skills come in two flavors:
+
+**Code skills** — full TypeScript implementation with custom logic:
+
 ```
 my-skills/
 ├── skills/
 │   ├── topics/
 │   │   └── incident-handler/
-│   │       ├── package.json     # manifest with topichub.category
+│   │       ├── package.json     # manifest with topichub.category + main
 │   │       ├── SKILL.md         # agent instructions (gray-matter frontmatter)
 │   │       ├── src/index.ts     # implements TypeSkill interface
 │   │       └── README.md
@@ -285,7 +289,54 @@ my-skills/
 └── .topichub-repo.json          # repo metadata
 ```
 
-### Manifest Example (Type Skill)
+**Md-only skills** — just a SKILL.md, no code needed:
+
+```
+my-skills/
+├── skills/
+│   └── topics/
+│       └── github-trends/
+│           └── SKILL.md         # frontmatter + AI instructions (that's it!)
+```
+
+### Md-Only Skill Example
+
+Create a skill with just a single SKILL.md file. All logic is expressed as
+natural-language instructions for the AI agent:
+
+```yaml
+---
+name: github-trends
+description: Tracks GitHub trending repos and enriches topics with analysis
+topicType: github-trend
+executor: cursor
+maxTurns: 8
+allowedTools:
+  - topichub_update_topic
+  - topichub_add_timeline
+---
+
+# GitHub Trends Tracker
+
+You are a GitHub trends analysis agent. When a github-trend topic
+is created or updated, analyze and enrich it.
+
+## onTopicCreated
+
+1. Read the repo URL from topic metadata.
+2. Fetch the repository's current stats.
+3. Classify the repo by domain and add tags.
+4. Post an analysis summary to the timeline.
+
+## onTopicUpdated
+
+Re-check the repository stats and note any changes.
+```
+
+The system auto-generates a TypeSkill stub with `ai: true`, generic card
+rendering, and permissive metadata validation. No TypeScript code required.
+
+### Code Skill Manifest Example
 
 ```json
 {
@@ -344,6 +395,59 @@ export default {
   // ...
 };
 ```
+
+---
+
+## Embeddable Library (`@topichub/core`)
+
+You can embed TopicHub directly into your existing Node.js service — no separate deployment required.
+
+```bash
+npm install @topichub/core
+```
+
+### Zero-Config Start
+
+`@topichub/core` ships with built-in skills, so you can get started with just a MongoDB connection:
+
+```typescript
+import { TopicHub } from '@topichub/core';
+
+const hub = await TopicHub.create({
+  mongoUri: 'mongodb://localhost:27017/myapp',
+});
+
+// Built-in "generic" topic type is available immediately
+await hub.ingestion.ingest('my-tenant', {
+  type: 'generic',
+  title: 'Something happened',
+});
+```
+
+### Skill Loading
+
+Skills are loaded in two stages (later stages override earlier ones):
+
+1. **Built-in skills** — SKILL.md-based skills shipped with `@topichub/core` (disable with `builtins: false`)
+2. **Filesystem skills** — scanned from a `skillsDir` directory
+
+```typescript
+import { TopicHub } from '@topichub/core';
+
+const hub = await TopicHub.create({
+  mongoUri: process.env.MONGODB_URI!,
+  skillsDir: './skills',          // filesystem skills (optional)
+  builtins: true,                 // load built-in skills (default: true)
+});
+```
+
+### Built-in Skills
+
+| Skill | Type | Description |
+|-------|------|-------------|
+| `generic-type` | topic type | General-purpose topic with description, priority, labels, and standard status flow |
+
+See [`packages/core/README.md`](./packages/core/README.md) for full API documentation and embedding examples.
 
 ---
 

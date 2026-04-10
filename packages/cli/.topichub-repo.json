@@ -1,0 +1,9 @@
+{
+  "tenantId": "69d8ce67f10c19509d8cdf93",
+  "serverUrl": "http://localhost:3000",
+  "platforms": [
+    "cursor"
+  ],
+  "createdAt": "2026-04-10T10:43:28.299Z",
+  "cliVersion": "0.1.0"
+}

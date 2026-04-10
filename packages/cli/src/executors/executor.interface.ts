@@ -4,6 +4,7 @@ export interface ExecutorOptions {
   mcpConfigPath?: string;
   skillMdPath?: string;
   allowedTools?: string[];
+  extraArgs?: string[];
 }
 
 export interface ExecutionResult {
