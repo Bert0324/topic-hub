@@ -67,12 +67,16 @@ export class WebhookHandler {
     return { success: false, error: `No skill registered for platform: ${platform}` };
   }
 
-  async handleOpenClaw(payload: unknown, rawBody: string): Promise<WebhookResult> {
+  async handleOpenClaw(
+    payload: unknown,
+    rawBody?: Buffer | string,
+    headers?: Record<string, string | string[] | undefined>,
+  ): Promise<WebhookResult> {
     if (!this.bridge) {
       return { success: false, error: 'OpenClaw bridge not configured' };
     }
 
-    const result = this.bridge.handleInboundWebhook(payload, rawBody);
+    const result = this.bridge.handleInboundWebhook(payload, rawBody, headers);
     if (!result) {
       return { success: true, response: { status: 'ignored' } };
     }
@@ -138,20 +142,51 @@ export class WebhookHandler {
     const route = this.router.route(parsed, context);
 
     if (route.error) {
+      this.bridge
+        .sendMessage(result.platform, result.channel, route.error)
+        .catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
       return { success: false, error: route.error };
     }
 
     const execResult = await this.commandDispatcher(route.handler, result.tenantId, parsed, context);
 
-    const replyMessage = execResult?.success
-      ? 'Task dispatched to your local agent.'
-      : (execResult?.error ?? 'Command failed');
+    const replyMessage = this.formatOpenClawCommandReply(execResult);
 
     this.bridge
       .sendMessage(result.platform, result.channel, replyMessage)
       .catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
 
     return { success: true, response: execResult };
+  }
+
+  /** IM-friendly text: help lists commands/types; other successes keep a short default. */
+  private formatOpenClawCommandReply(execResult: any): string {
+    if (!execResult?.success) {
+      return execResult?.error ?? 'Command failed';
+    }
+    const data = execResult.data;
+    if (data?.commands && Array.isArray(data.commands)) {
+      const cmdLines = data.commands
+        .map(
+          (c: { command: string; description: string }) =>
+            `• \`${c.command}\` — ${c.description}`,
+        )
+        .join('\n');
+      const typeLines =
+        Array.isArray(data.types) && data.types.length > 0
+          ? data.types
+              .map(
+                (t: { type: string; description: string }) =>
+                  `• \`${t.type}\` — ${t.description}`,
+              )
+              .join('\n')
+          : '• _(none registered)_';
+      return `**Topic Hub** — prefix \`/topichub\`\n\n**Commands**\n${cmdLines}\n\n**Topic types**\n${typeLines}`;
+    }
+    if (typeof execResult.message === 'string' && execResult.message.trim()) {
+      return execResult.message.trim();
+    }
+    return 'Task dispatched to your local agent.';
   }
 
   private async handleRegister(result: OpenClawInboundResult): Promise<WebhookResult> {

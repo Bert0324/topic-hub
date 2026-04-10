@@ -110,8 +110,16 @@ export async function handleAiCommand(sub: string, args: string[]) {
       await handleAiRun(args);
       break;
     }
+    case 'summarize': {
+      await handleAiSummarize(args);
+      break;
+    }
+    case 'ask': {
+      await handleAiAsk(args);
+      break;
+    }
     default:
-      console.log('Usage: topichub-admin ai <status|enable|disable|config|usage|run>');
+      console.log('Usage: topichub-admin ai <status|enable|disable|config|usage|run|summarize|ask>');
   }
 }
 
@@ -238,6 +246,78 @@ async function handleAiRun(args: string[]) {
     process.exit(1);
   } finally {
     cleanupMcpConfig(mcpConfigPath);
+  }
+}
+
+async function handleAiSummarize(args: string[]) {
+  const topicId = args[0];
+  if (!topicId) {
+    console.error('Usage: topichub-admin ai summarize <topic-id>');
+    process.exit(1);
+  }
+
+  console.log(`  Summarizing topic ${topicId}...`);
+
+  try {
+    const data = await api.post<{
+      summary: string;
+      model: string;
+      usage: { inputTokens: number; outputTokens: number; totalTokens: number };
+      timelineEntryId: string;
+    }>('/api/v1/ai/summarize', { topicId });
+
+    console.log();
+    console.log('  Summary:');
+    console.log(`  ${data.summary.split('\n').join('\n  ')}`);
+    console.log();
+    console.log(`  ✓ Timeline entry written (id: ${data.timelineEntryId})`);
+    console.log(`  Model: ${data.model} | Tokens: ${data.usage.inputTokens}→${data.usage.outputTokens}`);
+  } catch (err: any) {
+    if (err?.statusCode === 404) {
+      console.error(`  ✗ Topic not found: ${topicId}`);
+    } else if (err?.statusCode === 503 || err?.body?.error === 'ai_unavailable') {
+      console.error(`  ✗ AI unavailable: ${err?.body?.message ?? err?.message ?? 'Service unavailable'}`);
+    } else {
+      console.error(`  ✗ Error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    process.exit(1);
+  }
+}
+
+async function handleAiAsk(args: string[]) {
+  const topicId = args[0];
+  const question = args.slice(1).join(' ');
+  if (!topicId || !question) {
+    console.error('Usage: topichub-admin ai ask <topic-id> "<question>"');
+    process.exit(1);
+  }
+
+  console.log(`  Asking about topic ${topicId}...`);
+
+  try {
+    const data = await api.post<{
+      answer: string;
+      model: string;
+      usage: { inputTokens: number; outputTokens: number; totalTokens: number };
+      timelineEntryId: string;
+    }>('/api/v1/ai/ask', { topicId, question });
+
+    console.log();
+    console.log(`  Q: ${question}`);
+    console.log();
+    console.log(`  A: ${data.answer.split('\n').join('\n  ')}`);
+    console.log();
+    console.log(`  ✓ Timeline entry written (id: ${data.timelineEntryId})`);
+    console.log(`  Model: ${data.model} | Tokens: ${data.usage.inputTokens}→${data.usage.outputTokens}`);
+  } catch (err: any) {
+    if (err?.statusCode === 404) {
+      console.error(`  ✗ Topic not found: ${topicId}`);
+    } else if (err?.statusCode === 503 || err?.body?.error === 'ai_unavailable') {
+      console.error(`  ✗ AI unavailable: ${err?.body?.message ?? err?.message ?? 'Service unavailable'}`);
+    } else {
+      console.error(`  ✗ Error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    process.exit(1);
   }
 }
 

@@ -6,7 +6,7 @@ alwaysApply: true
 
 # topic-hub Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2026-04-10
+Auto-generated from all feature plans. Last updated: 2026-04-11
 
 ## Active Technologies
 - TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Typegoose + Mongoose (ODM), zod (validation) (001-topic-hub-app)
@@ -29,6 +29,8 @@ Auto-generated from all feature plans. Last updated: 2026-04-10
 - MongoDB 7 (existing collections: `topics`, `timeline_entries`, `skill_registrations`, `tenant_skill_configs`) (007-openclaw-im-bridge)
 - TypeScript 5.5, Node.js 20 LTS + Mongoose 8 + Typegoose 12 (ODM), zod (validation), NestJS 10 (server), eventsource (SSE client in CLI), @inquirer/prompts (CLI interaction), @modelcontextprotocol/sdk (MCP) (008-secure-im-dispatch)
 - MongoDB 7 (existing collections: `task_dispatches`; new collections: `user_identity_bindings`, `pairing_codes`, `executor_heartbeats`, `qa_exchanges`) (008-secure-im-dispatch)
+- TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Typegoose + Mongoose 8 (ODM), zod (validation), gray-matter (SKILL.md parsing), @inquirer/prompts (CLI) (010-decouple-skill-ai)
+- MongoDB 7 (existing collections: `task_dispatches`, `topics`, `timeline_entries`, `skill_registrations`, `tenant_skill_configs`, `ai_usage_records`) (010-decouple-skill-ai)
 
 - TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Prisma (ORM), zod (validation) (001-topic-hub-app)
 
@@ -48,9 +50,9 @@ npm test && npm run lint
 TypeScript 5.x, Node.js 20 LTS: Follow standard conventions
 
 ## Recent Changes
+- 010-decouple-skill-ai: Added TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Typegoose + Mongoose 8 (ODM), zod (validation), gray-matter (SKILL.md parsing), @inquirer/prompts (CLI)
 - 008-secure-im-dispatch: Added TypeScript 5.5, Node.js 20 LTS + Mongoose 8 + Typegoose 12 (ODM), zod (validation), NestJS 10 (server), eventsource (SSE client in CLI), @inquirer/prompts (CLI interaction), @modelcontextprotocol/sdk (MCP)
 - 007-openclaw-im-bridge: Added TypeScript 5.5, Node.js 20 LTS + Mongoose 8 + Typegoose 12 (ODM), zod (validation), NestJS 10 (server), gray-matter (YAML frontmatter)
-- 006-extract-core-package: Added TypeScript 5.5, Node.js 20 LTS + Mongoose 8 + Typegoose 12 (ODM), zod (validation), gray-matter (YAML frontmatter parsing), jsonwebtoken + jwks-rsa (auth)
 
 
 <!-- MANUAL ADDITIONS START -->

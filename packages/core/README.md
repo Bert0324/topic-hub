@@ -162,7 +162,7 @@ The consumer only needs ONE webhook endpoint to complete integration:
 
 ```typescript
 app.post('/webhooks/openclaw', async (req, res) => {
-  const result = await hub.webhook.handleOpenClaw(req.body, JSON.stringify(req.body));
+  const result = await hub.webhook.handleOpenClaw(req.body, req.rawBody, req.headers);
   res.json(result);
 });
 ```
@@ -218,7 +218,7 @@ const hub = await TopicHub.create({
 
 // Single webhook endpoint — handles all IM inbound messages
 app.post('/webhooks/openclaw', async (req, res) => {
-  const result = await hub.webhook.handleOpenClaw(req.body, JSON.stringify(req.body));
+  const result = await hub.webhook.handleOpenClaw(req.body, req.rawBody, req.headers);
   res.json(result);
 });
 

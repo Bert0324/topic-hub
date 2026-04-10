@@ -31,6 +31,8 @@ const FeishuChannelSchema = z.object({
 const DiscordChannelSchema = z.object({
   botToken: z.string().min(1),
   applicationId: z.string().optional(),
+  /** When set, guild channels require @bot before the OpenClaw agent replies (relay still sees all messages). */
+  guildId: z.string().min(1).optional(),
 });
 
 const TelegramChannelSchema = z.object({
@@ -66,20 +68,30 @@ export const BridgeConfigSchema = z.object({
 
 export type BridgeConfig = z.infer<typeof BridgeConfigSchema>;
 
+/** Coerce JSON numbers (Discord snowflakes) to strings so HMAC matches topichub-relay. */
+const jsonString = (minLen: number) =>
+  z.preprocess((v) => (v == null ? '' : String(v)), z.string().min(minLen));
+
 const OpenClawWebhookDataSchema = z.object({
-  channel: z.string().min(1),
-  user: z.string().min(1),
-  message: z.string(),
-  sessionId: z.string().min(1),
+  channel: jsonString(1),
+  user: jsonString(1),
+  message: z.preprocess((v) => (v == null ? '' : String(v)), z.string()),
+  sessionId: jsonString(1),
 });
 
-export const OpenClawWebhookPayloadSchema = z.object({
-  event: z.string().min(1),
-  timestamp: z.string(),
+/** Body signed by HMAC (embedded relay sends this as raw bytes + `X-TopicHub-Signature` header). */
+export const OpenClawWebhookUnsignedPayloadSchema = z.object({
+  event: jsonString(1),
+  timestamp: z.preprocess((v) => (v == null ? '' : String(v)), z.string()),
   data: OpenClawWebhookDataSchema,
+});
+
+/** Legacy: signature embedded in JSON (external gateways; byte-stable signing is fragile). */
+export const OpenClawWebhookPayloadSchema = OpenClawWebhookUnsignedPayloadSchema.extend({
   signature: z.string().min(1),
 });
 
+export type OpenClawWebhookUnsignedPayload = z.infer<typeof OpenClawWebhookUnsignedPayloadSchema>;
 export type OpenClawWebhookPayload = z.infer<typeof OpenClawWebhookPayloadSchema>;
 
 export interface OpenClawInboundResult {

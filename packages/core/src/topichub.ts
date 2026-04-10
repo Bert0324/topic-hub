@@ -3,7 +3,7 @@ import { getModelForClass } from '@typegoose/typegoose';
 import { TopicHubConfigSchema, TopicHubConfig } from './config';
 import { defaultLoggerFactory, LoggerFactory, TopicHubLogger } from './common/logger';
 import { NotFoundError, UnauthorizedError, TopicHubError } from './common/errors';
-import { SkillCategory } from './common/enums';
+import { SkillCategory, TimelineActionType } from './common/enums';
 import { getBuiltinSkills } from './builtin-skills';
 
 import { Topic } from './entities/topic.entity';
@@ -41,7 +41,6 @@ import { SkillLoader } from './skill/registry/skill-loader';
 import { SkillMdParser } from './skill/registry/skill-md-parser';
 import { SkillRegistry } from './skill/registry/skill-registry';
 import { SkillConfigService } from './skill/config/skill-config.service';
-import { SkillAiRuntime } from './skill/pipeline/skill-ai-runtime';
 import { SkillPipeline } from './skill/pipeline/skill-pipeline';
 import { CommandParser } from './command/command-parser';
 import { CommandRouter, CommandContext } from './command/command-router';
@@ -123,7 +122,11 @@ export interface IngestionOperations {
 
 export interface WebhookOperations {
   handle(platform: string, payload: unknown, headers: Record<string, string>): Promise<WebhookResult>;
-  handleOpenClaw(payload: unknown, rawBody: string): Promise<WebhookResult>;
+  handleOpenClaw(
+    payload: unknown,
+    rawBody?: Buffer | string,
+    headers?: Record<string, string | string[] | undefined>,
+  ): Promise<WebhookResult>;
 }
 
 export interface MessagingOperations {
@@ -166,6 +169,19 @@ export interface DispatchOperations {
   claim(taskId: string, claimedBy: string, targetUserId?: string): Promise<boolean>;
   complete(taskId: string, result?: unknown): Promise<void>;
   fail(taskId: string, error: string): Promise<void>;
+}
+
+export interface AiOperationResult {
+  content: string;
+  model: string;
+  usage: { inputTokens: number; outputTokens: number; totalTokens: number };
+  timelineEntryId: string;
+}
+
+export interface AiOperations {
+  summarize(tenantId: string, topicId: string): Promise<AiOperationResult>;
+  ask(tenantId: string, topicId: string, question: string): Promise<AiOperationResult>;
+  isAvailable(): boolean;
 }
 
 export interface AdminOperations {
@@ -352,7 +368,6 @@ export class TopicHub {
       skillMdParser,
       SkillRegistrationModel,
       TenantSkillConfigModel,
-      aiService,
       loggerFactory('SkillRegistry'),
     );
 
@@ -362,18 +377,9 @@ export class TopicHub {
       loggerFactory('SkillConfigService'),
     );
 
-    const skillAiRuntime = new SkillAiRuntime(
-      skillRegistry,
-      aiService,
-      TimelineEntryModel,
-      TopicModel,
-      loggerFactory('SkillAiRuntime'),
-    );
-
     const skillPipeline = new SkillPipeline(
       skillRegistry,
       skillConfigService,
-      skillAiRuntime,
       dispatchService,
       loggerFactory('SkillPipeline'),
       bridge,
@@ -684,8 +690,11 @@ export class TopicHub {
     return {
       handle: (platform, payload, headers) =>
         this.webhookHandler.handle(platform, payload, headers),
-      handleOpenClaw: (payload: unknown, rawBody: string) =>
-        this.webhookHandler.handleOpenClaw(payload, rawBody),
+      handleOpenClaw: (
+        payload: unknown,
+        rawBody?: Buffer | string,
+        headers?: Record<string, string | string[] | undefined>,
+      ) => this.webhookHandler.handleOpenClaw(payload, rawBody, headers),
     };
   }
 
@@ -824,6 +833,96 @@ export class TopicHub {
         return dispatches as any;
       },
       getAiStatus: () => this.aiService.getConfig(),
+    };
+  }
+
+  get ai(): AiOperations {
+    return {
+      summarize: async (tenantId, topicId) => {
+        const topic = await this.topicService.findById(tenantId, topicId);
+        if (!topic) throw new NotFoundError(`Topic ${topicId} not found`);
+
+        const timeline = await this.timelineService.findByTopic(tenantId, topicId, 1, 20);
+        const entries = timeline?.entries ?? [];
+
+        const contextParts = [
+          `Title: ${topic.title}`,
+          `Type: ${topic.type}`,
+          `Status: ${topic.status}`,
+          topic.tags?.length ? `Tags: ${topic.tags.join(', ')}` : '',
+          topic.metadata ? `Metadata: ${JSON.stringify(topic.metadata)}` : '',
+          entries.length ? `\nTimeline (${entries.length} entries):\n${entries.map((e: any) => `- [${e.actionType}] ${e.actor}: ${JSON.stringify(e.payload ?? {})}`).join('\n')}` : '',
+        ].filter(Boolean).join('\n');
+
+        const response = await this.aiService.complete({
+          tenantId,
+          skillName: 'ai:summarize',
+          input: [
+            { role: 'system', content: [{ type: 'input_text', text: 'You are a topic summarizer. Provide a concise summary of the topic based on the provided context. Focus on key information, status, and any notable patterns or issues.' }] },
+            { role: 'user', content: [{ type: 'input_text', text: contextParts }] },
+          ],
+        });
+
+        if (!response) {
+          throw new TopicHubError('AI service unavailable');
+        }
+
+        const entry = await this.timelineService.append(
+          tenantId, topicId, 'ai:summarize', TimelineActionType.AI_RESPONSE,
+          { operation: 'summarize', content: response.content, model: response.model, usage: response.usage },
+        );
+
+        return {
+          content: response.content,
+          model: response.model,
+          usage: response.usage,
+          timelineEntryId: entry._id.toString(),
+        };
+      },
+
+      ask: async (tenantId, topicId, question) => {
+        const topic = await this.topicService.findById(tenantId, topicId);
+        if (!topic) throw new NotFoundError(`Topic ${topicId} not found`);
+
+        const timeline = await this.timelineService.findByTopic(tenantId, topicId, 1, 20);
+        const entries = timeline?.entries ?? [];
+
+        const contextParts = [
+          `Title: ${topic.title}`,
+          `Type: ${topic.type}`,
+          `Status: ${topic.status}`,
+          topic.tags?.length ? `Tags: ${topic.tags.join(', ')}` : '',
+          topic.metadata ? `Metadata: ${JSON.stringify(topic.metadata)}` : '',
+          entries.length ? `\nTimeline (${entries.length} entries):\n${entries.map((e: any) => `- [${e.actionType}] ${e.actor}: ${JSON.stringify(e.payload ?? {})}`).join('\n')}` : '',
+        ].filter(Boolean).join('\n');
+
+        const response = await this.aiService.complete({
+          tenantId,
+          skillName: 'ai:assistant',
+          input: [
+            { role: 'system', content: [{ type: 'input_text', text: `You are a topic assistant. Answer the user's question based on the topic context provided. Be concise and helpful.\n\nTopic context:\n${contextParts}` }] },
+            { role: 'user', content: [{ type: 'input_text', text: question }] },
+          ],
+        });
+
+        if (!response) {
+          throw new TopicHubError('AI service unavailable');
+        }
+
+        const entry = await this.timelineService.append(
+          tenantId, topicId, 'ai:assistant', TimelineActionType.AI_RESPONSE,
+          { operation: 'ask', question, content: response.content, model: response.model, usage: response.usage },
+        );
+
+        return {
+          content: response.content,
+          model: response.model,
+          usage: response.usage,
+          timelineEntryId: entry._id.toString(),
+        };
+      },
+
+      isAvailable: () => this.aiService.isAvailable(),
     };
   }
 
