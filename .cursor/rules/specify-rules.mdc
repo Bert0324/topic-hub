@@ -20,6 +20,10 @@ Auto-generated from all feature plans. Last updated: 2026-04-10
 - MongoDB 7 (existing collections + new `task_dispatches` collection) (003-local-agent-executor)
 - TypeScript 5.x, Node.js 20 LTS + NestJS 10, Typegoose + Mongoose 8, zod (server) (004-simplify-skill-types)
 - MongoDB 7 (existing `skill_registrations` collection may contain `category: 'auth'` records) (004-simplify-skill-types)
+- TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI, Ink unused so far — CLI uses plain console), Typegoose + Mongoose 8 (ODM), zod (validation), gray-matter (YAML frontmatter), @modelcontextprotocol/sdk (MCP), keytar (credential storage) (005-skill-dev-ecosystem)
+- MongoDB 7 (existing collections: `skill_registrations`, `tenant_skill_configs`, `task_dispatches`, `topics`, `timeline_entries`, `ai_usage_records`) (005-skill-dev-ecosystem)
+- TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI, Ink unused — CLI uses plain console), Typegoose + Mongoose 8 (ODM), zod (validation), gray-matter (YAML frontmatter), @modelcontextprotocol/sdk (MCP), keytar (credential storage) (005-skill-dev-ecosystem)
+- TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Typegoose + Mongoose 8, zod, gray-matter, @modelcontextprotocol/sdk, keytar (005-skill-dev-ecosystem)
 
 - TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Prisma (ORM), zod (validation) (001-topic-hub-app)
 
@@ -39,9 +43,9 @@ npm test && npm run lint
 TypeScript 5.x, Node.js 20 LTS: Follow standard conventions
 
 ## Recent Changes
-- 004-simplify-skill-types: Added TypeScript 5.x, Node.js 20 LTS + NestJS 10, Typegoose + Mongoose 8, zod (server)
-- 003-local-agent-executor: Added TypeScript 5.x, Node.js 20 LTS + NestJS 10, Typegoose + Mongoose 8, zod, gray-matter (server); Ink 5 + React 18, zod (CLI — existing deps, Ink unused so far); `@modelcontextprotocol/sdk` (new — MCP server for CLI)
-- 002-ai-driven-skills: Added TypeScript 5.x, Node.js 20 LTS + NestJS 10, Typegoose + Mongoose 8, zod, gray-matter (new — YAML frontmatter parsing)
+- 005-skill-dev-ecosystem: Added TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Typegoose + Mongoose 8, zod, gray-matter, @modelcontextprotocol/sdk, keytar
+- 005-skill-dev-ecosystem: Added TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI, Ink unused — CLI uses plain console), Typegoose + Mongoose 8 (ODM), zod (validation), gray-matter (YAML frontmatter), @modelcontextprotocol/sdk (MCP), keytar (credential storage)
+- 005-skill-dev-ecosystem: Added TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI, Ink unused so far — CLI uses plain console), Typegoose + Mongoose 8 (ODM), zod (validation), gray-matter (YAML frontmatter), @modelcontextprotocol/sdk (MCP), keytar (credential storage)
 
 
 <!-- MANUAL ADDITIONS START -->

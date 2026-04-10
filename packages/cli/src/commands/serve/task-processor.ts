@@ -58,25 +58,28 @@ export class TaskProcessor {
       topicTitle,
       status: 'running',
     };
+
+    console.log(
+      `[DISPATCH] Received: ${dispatch.topicId} / ${dispatch.skillName} / ${dispatch.eventType}`,
+    );
     this.options.onEventUpdate(logEntry);
 
     try {
-      // 1. Claim
       const claimed = await this.claimDispatch(dispatch.id);
       if (!claimed) {
         logEntry.status = 'failed';
         logEntry.error = 'Already claimed';
+        console.log(`[ERROR]    Failed: Already claimed (dispatch ${dispatch.id})`);
         this.options.onEventUpdate(logEntry);
         return;
       }
 
-      // 2. Load SKILL.md
+      console.log(`[CLAIM]    Claimed dispatch ${dispatch.id}`);
+
       const { systemPromptPath, frontmatter } = this.loadSkill(dispatch.skillName);
 
-      // 3. Build prompt from enriched payload
       const prompt = this.buildPrompt(claimed);
 
-      // 4. Resolve executor
       const executorType = resolveExecutorType({
         skillFrontmatter: frontmatter,
         cliFlag: this.options.cliExecutorFlag,
@@ -85,14 +88,14 @@ export class TaskProcessor {
       });
       const executor = createExecutor(executorType);
 
-      // 5. Write MCP config for agent
       const mcpConfigPath = writeMcpConfig({
         serverUrl: this.options.serverUrl,
         token: this.options.token,
         allowedTools: frontmatter?.allowedTools,
       });
 
-      // 6. Invoke agent
+      console.log(`[AGENT]    Running ${executorType} with ${dispatch.skillName}...`);
+
       const execOptions: ExecutorOptions = {
         timeoutMs: DEFAULT_TIMEOUT_MS,
         maxTurns: frontmatter?.maxTurns,
@@ -100,6 +103,7 @@ export class TaskProcessor {
         mcpConfigPath,
       };
 
+      const startMs = Date.now();
       let result: ExecutionResult;
       try {
         result = await executor.execute(prompt, systemPromptPath, execOptions);
@@ -107,24 +111,38 @@ export class TaskProcessor {
         cleanupMcpConfig(mcpConfigPath);
       }
 
-      // 7. Report result
+      const elapsed = result.durationMs ?? Date.now() - startMs;
+
       if (result.exitCode === 0) {
         await this.completeDispatch(dispatch.id, result);
         logEntry.status = 'completed';
-        logEntry.durationMs = result.durationMs;
+        logEntry.durationMs = elapsed;
+        console.log(`[RESULT]   Completed in ${elapsed}ms`);
       } else {
         await this.failDispatch(dispatch.id, result.text, true);
         logEntry.status = 'failed';
-        logEntry.durationMs = result.durationMs;
+        logEntry.durationMs = elapsed;
         logEntry.error = 'Agent error';
+        console.log(
+          `[ERROR]    Failed: Agent error (dispatch ${dispatch.id})`,
+        );
       }
 
-      // 8. Write timeline entry
       await this.writeTimelineEntry(dispatch, result);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : undefined;
       logEntry.status = 'failed';
       logEntry.error = msg;
+      console.error(
+        `[ERROR]    Failed: ${msg} (dispatch ${dispatch.id})`,
+      );
+      console.error(
+        `           Skill: ${dispatch.skillName} | Topic: ${dispatch.topicId}`,
+      );
+      if (stack) {
+        console.error(`           ${stack}`);
+      }
       try {
         await this.failDispatch(dispatch.id, msg, true);
       } catch {

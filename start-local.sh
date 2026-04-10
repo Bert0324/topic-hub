@@ -18,8 +18,8 @@ export AI_PROVIDER=""
 export AI_API_URL=""
 export AI_API_KEY=""
 export AI_MODEL=""
-# export AI_TIMEOUT_MS=""
-# export AI_RATE_LIMIT_GLOBAL=""
+AI_TIMEOUT_MS="60000"
+AI_RATE_LIMIT_GLOBAL="1000"
 
 # ── Skills ─────────────────────────────────────────────────
 # export SKILLS_DIR=""

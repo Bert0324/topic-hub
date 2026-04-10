@@ -37,6 +37,10 @@ export class TenantService {
     return { tenant, rawApiKey, adminToken };
   }
 
+  async findById(id: string) {
+    return this.tenantModel.findById(id).exec();
+  }
+
   async findAll() {
     return this.tenantModel.find().exec();
   }

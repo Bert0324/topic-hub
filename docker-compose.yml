@@ -1,8 +1,8 @@
 services:
   mongodb:
-    image: docker.1ms.run/library/mongo:7
+    image: mongo:7
     ports:
-      - "27017:27017"
+      - '27017:27017'
     volumes:
       - mongodb_data:/data/db
     environment:
@@ -13,10 +13,10 @@ services:
       context: .
       dockerfile: packages/server/Dockerfile
     ports:
-      - "3000:3000"
+      - '3000:3000'
     environment:
       MONGODB_URI: mongodb://mongodb:27017/topichub
-      PORT: "3000"
+      PORT: '3000'
       SKILLS_DIR: /app/skills
       LOG_FORMAT: json
       LOG_LEVEL: info

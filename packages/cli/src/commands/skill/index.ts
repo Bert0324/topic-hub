@@ -1,30 +1,94 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { ApiClient } from '../../api-client/api-client.js';
+
+const SKILL_NAME_PATTERN = /^[a-z][a-z0-9-]{1,62}[a-z0-9]$/;
 
 const api = new ApiClient();
 
+function findRepoRoot(from: string): string | null {
+  let dir = path.resolve(from);
+  while (true) {
+    if (fs.existsSync(path.join(dir, '.topichub-repo.json'))) {
+      return dir;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
 export async function handleSkillCommand(sub: string, args: string[]) {
   switch (sub) {
+    case 'create': {
+      const repoRoot = findRepoRoot(process.cwd());
+      if (!repoRoot) {
+        console.error('Not in a skill repo. Create one with: topichub skill-repo create <name>');
+        process.exit(1);
+      }
+
+      const categoryIdx = args.indexOf('--category');
+      const category = categoryIdx !== -1 ? args[categoryIdx + 1] : undefined;
+      const nameIdx = args.indexOf('--name');
+      let name: string | undefined;
+      if (nameIdx !== -1) {
+        const raw = args[nameIdx + 1];
+        if (!raw || raw.startsWith('-')) {
+          console.error('Usage: --name requires a non-empty value (e.g. topichub skill create --name my-skill)');
+          process.exit(3);
+        }
+        if (!SKILL_NAME_PATTERN.test(raw)) {
+          console.error(
+            'Invalid --name: must match /^[a-z][a-z0-9-]{1,62}[a-z0-9]$/ (3–64 chars, lowercase, hyphens allowed).',
+          );
+          process.exit(3);
+        }
+        name = raw;
+      }
+      const nonInteractive = args.includes('--non-interactive');
+
+      const { runQaFlow } = await import('../../scaffold/qa-flow.js');
+      const qa = await runQaFlow({ category, name, nonInteractive });
+
+      const { scaffoldSkill } = await import('../../scaffold/skill-scaffold.js');
+      const skillsDir = path.join(repoRoot, 'skills');
+      fs.mkdirSync(skillsDir, { recursive: true });
+      await scaffoldSkill(skillsDir, qa);
+      break;
+    }
     case 'list': {
-      const data = await api.get<{ skills?: Array<{ name: string; category: string; version: string; enabled: boolean }> }>(
-        '/admin/skills'
+      const scopeIdx = args.indexOf('--scope');
+      const scope = scopeIdx !== -1 ? args[scopeIdx + 1] : undefined;
+      const categoryIdx = args.indexOf('--category');
+      const category = categoryIdx !== -1 ? args[categoryIdx + 1] : undefined;
+
+      const params = new URLSearchParams();
+      if (scope && scope !== 'all') params.set('scope', scope);
+      if (category) params.set('category', category);
+      const qs = params.toString();
+      const endpoint = '/admin/skills' + (qs ? `?${qs}` : '');
+
+      const data = await api.get<{ skills?: Array<{ name: string; category: string; version: string; enabled: boolean; isPrivate?: boolean }> }>(
+        endpoint,
       );
       console.log('\nInstalled Skills:');
-      console.log('─'.repeat(60));
+      console.log('─'.repeat(72));
       if (!data.skills?.length) {
         console.log('  No skills installed.');
         return;
       }
       console.log(
-        '  ' + 'Name'.padEnd(20) + 'Category'.padEnd(12) + 'Version'.padEnd(10) + 'Enabled'
+        '  ' + 'Name'.padEnd(20) + 'Category'.padEnd(12) + 'Scope'.padEnd(10) + 'Version'.padEnd(10) + 'Enabled',
       );
-      console.log('  ' + '─'.repeat(52));
+      console.log('  ' + '─'.repeat(64));
       for (const s of data.skills) {
         console.log(
           '  ' +
             s.name.padEnd(20) +
             s.category.padEnd(12) +
+            (s.isPrivate ? 'private' : 'public').padEnd(10) +
             s.version.padEnd(10) +
-            (s.enabled ? '✓' : '✗')
+            (s.enabled ? '✓' : '✗'),
         );
       }
       break;
@@ -92,6 +156,6 @@ export async function handleSkillCommand(sub: string, args: string[]) {
       break;
     }
     default:
-      console.log('Usage: topichub-admin skill <list|install|enable|disable|setup|config|uninstall>');
+      console.log('Usage: topichub-admin skill <create|list|install|enable|disable|setup|config|uninstall>');
   }
 }

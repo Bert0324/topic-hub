@@ -5,13 +5,14 @@ export class ApiClient {
   readonly baseUrl: string;
   private token: string | null = null;
 
-  constructor(baseUrl?: string) {
+  constructor(baseUrl?: string, token?: string) {
     const config = baseUrl ? null : loadConfigOrNull();
     this.baseUrl =
       baseUrl ??
       config?.serverUrl ??
       process.env.TOPICHUB_SERVER_URL ??
       'http://localhost:3000';
+    if (token) this.token = token;
   }
 
   setToken(token: string) {
@@ -65,5 +66,13 @@ export class ApiClient {
   }
   delete<T = unknown>(path: string) {
     return this.request<T>('DELETE', path);
+  }
+
+  async publishSkills(payload: { tenantId: string; skills: unknown[] }): Promise<unknown> {
+    return this.post('/admin/skills/publish', payload);
+  }
+
+  async createGroup(payload: { name: string; platform: string; memberIds: string[]; topicType?: string }): Promise<unknown> {
+    return this.post('/admin/groups', payload);
   }
 }

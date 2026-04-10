@@ -41,6 +41,21 @@ async function main() {
       await handleServeCommand(restArgs);
       break;
     }
+    case 'skill-repo': {
+      const { handleSkillRepoCommand } = await import('./commands/skill-repo/index.js');
+      await handleSkillRepoCommand(subcommand, restArgs);
+      break;
+    }
+    case 'publish': {
+      const { handlePublishCommand } = await import('./commands/publish/index.js');
+      await handlePublishCommand(args.slice(1));
+      break;
+    }
+    case 'group': {
+      const { handleGroupCommand } = await import('./commands/group/index.js');
+      await handleGroupCommand(subcommand, restArgs);
+      break;
+    }
     case 'auth': {
       const { saveAdminToken } = await import('./auth/auth.js');
       if (args[1]) {
@@ -72,7 +87,7 @@ async function main() {
     }
     default:
       console.log('Usage: topichub-admin <command> [subcommand] [args]');
-      console.log('Commands: init, serve, skill, tenant, stats, health, ai, auth, login, logout');
+      console.log('Commands: init, serve, skill, skill-repo, publish, group, tenant, stats, health, ai, auth, login, logout');
   }
 }
 

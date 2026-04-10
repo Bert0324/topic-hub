@@ -1,0 +1,267 @@
+---
+description: "Guide for writing Topic Hub skills — covers manifests, interfaces, SKILL.md, publishing, and testing"
+globs: ["skills/**"]
+---
+
+# Writing Topic Hub Skills
+
+Skills are organized by category: `skills/topics/`, `skills/platforms/`, `skills/adapters/`.
+Each skill lives in `skills/{category}/<skill-name>/` and is a self-contained package
+that plugs into the Topic Hub dispatch loop via one of three category interfaces.
+
+## Skill Categories
+
+| Category   | `topichub.category` | Identifying key        | Purpose |
+|------------|---------------------|------------------------|---------|
+| **type**   | `type`              | `topicType`            | Defines a topic type with lifecycle hooks, field schema, status transitions, and card rendering |
+| **platform** | `platform`        | `platform`             | IM platform integration — webhook handling, slash-command parsing, card posting, group management |
+| **adapter** | `adapter`          | `sourceSystem`         | External system connector — transforms inbound webhooks into topic events (GitHub, Jira, PagerDuty, …) |
+
+## Skill Manifest (`package.json`)
+
+The manifest is declared in the skill's `package.json` under the `topichub` key.
+
+### Type skill
+
+```json
+{
+  "name": "my-bug-tracker",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "topichub": {
+    "category": "type",
+    "topicType": "bug",
+    "hooks": ["onTopicCreated", "onTopicUpdated", "onTopicStatusChanged"],
+    "schema": {
+      "severity": "string",
+      "stepsToReproduce": "string"
+    }
+  }
+}
+```
+
+### Platform skill
+
+```json
+{
+  "name": "lark-platform",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "topichub": {
+    "category": "platform",
+    "platform": "lark",
+    "capabilities": ["group_management", "push", "commands"],
+    "webhookPath": "/webhooks/lark",
+    "auth": { "type": "oauth2", "scopes": ["im:message", "im:chat"] }
+  }
+}
+```
+
+### Adapter skill
+
+```json
+{
+  "name": "github-adapter",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "topichub": {
+    "category": "adapter",
+    "sourceSystem": "github",
+    "webhookPath": "/webhooks/github",
+    "supportedEvents": ["issues.opened", "issues.closed", "pull_request.merged"]
+  }
+}
+```
+
+## SKILL.md Frontmatter
+
+Every skill **should** have a `SKILL.md` file. The YAML frontmatter controls how
+the AI agent executor processes dispatches for this skill.
+
+```yaml
+---
+name: my-bug-tracker
+description: Triages incoming bug reports and assigns severity
+executor: claude          # claude | cursor | codex | none
+maxTurns: 5               # max agent loop iterations
+allowedTools:             # MCP tools the agent may call
+  - topichub_update_topic
+  - topichub_add_timeline
+  - topichub_transition_status
+---
+
+# System prompt content below the frontmatter
+
+You are a bug-triage agent. When a new bug topic is created, analyse the
+description and metadata, then:
+1. Set severity to P0–P3.
+2. Assign to the on-call engineer if P0/P1.
+3. Post a triage summary to the timeline.
+```
+
+The Markdown body (everything below the frontmatter) becomes the **system prompt**
+passed to the agent executor.
+
+### Event-specific prompts
+
+Add headings of the form `## on<EventName>` to provide per-event instructions:
+
+```markdown
+## onTopicCreated
+Perform initial triage…
+
+## onTopicStatusChanged
+Validate the status transition…
+```
+
+## Interface Contracts
+
+### TypeSkill
+
+```typescript
+interface TypeSkill {
+  manifest: TypeSkillManifest;
+  init?(ctx: SkillContext): void;
+  onTopicCreated?(ctx: TopicContext): Promise<void> | void;
+  onTopicUpdated?(ctx: TopicContext): Promise<void> | void;
+  onTopicStatusChanged?(ctx: TopicContext & { from: string; to: string }): Promise<void> | void;
+  onTopicAssigned?(ctx: TopicContext & { userId: string }): Promise<void> | void;
+  onTopicClosed?(ctx: TopicContext): Promise<void> | void;
+  onTopicReopened?(ctx: TopicContext): Promise<void> | void;
+  onSignalAttached?(ctx: TopicContext & { signal: any }): Promise<void> | void;
+  onTagChanged?(ctx: TopicContext & { added?: string[]; removed?: string[] }): Promise<void> | void;
+  renderCard(topic: any): CardData;
+  validateMetadata(metadata: unknown): ValidationResult;
+}
+```
+
+Required exports: `manifest`, `renderCard`, `validateMetadata`.
+Lifecycle hooks are optional — only implement the events your skill cares about.
+
+### PlatformSkill
+
+```typescript
+interface PlatformSkill {
+  manifest: PlatformSkillManifest;
+  init?(ctx: SkillContext): void;
+  createGroup?(params: CreateGroupParams): Promise<GroupResult>;
+  inviteToGroup?(params: { tenantId: string; groupId: string; userIds: string[] }): Promise<void>;
+  postCard?(params: PostCardParams): Promise<void>;
+  updateCard?(params: PostCardParams): Promise<void>;
+  handleWebhook?(payload: unknown, headers: Record<string, string>): Promise<CommandResult | null>;
+  sendMessage?(params: { tenantId: string; groupId: string; message: string }): Promise<void>;
+  resolveTenantId?(webhookPayload: unknown): Promise<string> | string;
+  runSetup?(ctx: SetupContext): Promise<void>;
+}
+```
+
+The webhook pipeline is: `handleWebhook` → command parsing → routing → response.
+`resolveTenantId` must be implemented for multi-tenant webhook dispatch.
+
+### AdapterSkill
+
+```typescript
+interface AdapterSkill {
+  manifest: AdapterSkillManifest;
+  init?(ctx: SkillContext): void;
+  transformWebhook(payload: unknown, headers: Record<string, string>): TopicEventPayload | null;
+  runSetup?(ctx: SetupContext): Promise<void>;
+}
+```
+
+`transformWebhook` is **required** — it converts an inbound webhook into a
+`TopicEventPayload` (or `null` to ignore the event).
+
+## Publish Workflow
+
+```bash
+# Publish all skills in the repo to the server
+topichub publish
+
+# What happens:
+# 1. CLI scans skills/{topics,platforms,adapters}/<name>/package.json
+# 2. Validates manifest against SkillManifestSchema (zod)
+# 3. Reads SKILL.md raw content
+# 4. Reads entry point source
+# 5. POSTs batch to POST /admin/skills/publish
+# 6. Server upserts SkillRegistration + enables for tenant
+```
+
+Skills are published as a batch per-tenant. The server stores the full
+`publishedContent` (manifest, SKILL.md, entry point, supporting files).
+
+## Testing Patterns
+
+### Unit test a type skill
+
+```typescript
+import { myBugTracker } from './index';
+
+test('renderCard includes severity badge', () => {
+  const card = myBugTracker.renderCard({
+    title: 'Login crash',
+    status: 'open',
+    metadata: { severity: 'P0' },
+  });
+  expect(card.fields).toContainEqual(
+    expect.objectContaining({ label: 'Severity', value: 'P0' }),
+  );
+});
+
+test('validateMetadata rejects missing severity', () => {
+  const result = myBugTracker.validateMetadata({ stepsToReproduce: '…' });
+  expect(result.valid).toBe(false);
+});
+```
+
+### Unit test an adapter skill
+
+```typescript
+import { githubAdapter } from './index';
+
+test('transforms issues.opened webhook', () => {
+  const payload = githubAdapter.transformWebhook(
+    { action: 'opened', issue: { title: 'Bug', html_url: '…' } },
+    { 'x-github-event': 'issues' },
+  );
+  expect(payload).toMatchObject({ type: 'bug', title: 'Bug' });
+});
+
+test('ignores unsupported events', () => {
+  const payload = githubAdapter.transformWebhook(
+    { action: 'labeled' },
+    { 'x-github-event': 'issues' },
+  );
+  expect(payload).toBeNull();
+});
+```
+
+### Integration test with `topichub serve`
+
+```bash
+# Start serve in dev mode (reads skills from disk, hot-reloads SKILL.md)
+topichub serve --executor none
+
+# Trigger a dispatch via the server API, then check logs for
+# [DISPATCH], [CLAIM], [AGENT], [RESULT] prefixes
+```
+
+## File Layout Reference
+
+```
+skills/
+  topics/
+    my-bug-tracker/
+      package.json        # manifest with topichub.category = "type"
+      SKILL.md            # agent instructions (frontmatter + system prompt)
+      src/
+        index.ts          # exports: manifest, renderCard, validateMetadata, lifecycle hooks
+      tests/
+        index.test.ts
+  platforms/
+    lark-platform/
+      ...
+  adapters/
+    github-adapter/
+      ...
+```

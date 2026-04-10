@@ -19,6 +19,10 @@ interface RegisteredSkill {
   registration: SkillRegistration;
 }
 
+interface ResolveOptions {
+  tenantId?: string;
+}
+
 @Injectable()
 export class SkillRegistry implements OnModuleInit {
   private readonly logger = new Logger(SkillRegistry.name);
@@ -55,19 +59,50 @@ export class SkillRegistry implements OnModuleInit {
     this.logger.log(`Unregistered skill: ${name}`);
   }
 
+  resolve(name: string, opts?: ResolveOptions): RegisteredSkill | undefined {
+    if (opts?.tenantId) {
+      const privateMatch = [...this.skills.values()].find(
+        (s) =>
+          s.registration.name === name &&
+          s.registration.isPrivate &&
+          s.registration.tenantId === opts.tenantId,
+      );
+      if (privateMatch) return privateMatch;
+    }
+
+    const publicMatch = [...this.skills.values()].find(
+      (s) => s.registration.name === name && !s.registration.isPrivate,
+    );
+    return publicMatch ?? this.skills.get(name);
+  }
+
   getByCategory(category: SkillCategory): RegisteredSkill[] {
     return [...this.skills.values()].filter(
       (s) => s.registration.category === category,
     );
   }
 
-  getTypeSkillForType(topicType: string): TypeSkill | undefined {
-    const found = [...this.skills.values()].find(
+  getTypeSkillForType(
+    topicType: string,
+    opts?: ResolveOptions,
+  ): TypeSkill | undefined {
+    const candidates = [...this.skills.values()].filter(
       (s) =>
         s.registration.category === SkillCategory.TYPE &&
         (s.registration.metadata as any)?.topicType === topicType,
     );
-    return found?.skill as TypeSkill | undefined;
+
+    if (opts?.tenantId) {
+      const privateMatch = candidates.find(
+        (s) =>
+          s.registration.isPrivate &&
+          s.registration.tenantId === opts.tenantId,
+      );
+      if (privateMatch) return privateMatch.skill as TypeSkill;
+    }
+
+    const publicMatch = candidates.find((s) => !s.registration.isPrivate);
+    return (publicMatch ?? candidates[0])?.skill as TypeSkill | undefined;
   }
 
   getPlatformSkills(): PlatformSkill[] {

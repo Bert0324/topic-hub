@@ -38,12 +38,13 @@ Topic Hub 本身只是一个引擎。所有具体能力都通过 Skill 插件提
 
 | 类别 | 干什么 | 举例 |
 |------|--------|------|
-| **Type** | 定义话题类型——字段、卡片样式、状态规则 | `deploy-type`、`incident-type` |
-| **Platform** | 对接 IM 平台——建群、发卡片、接收命令 | `feishu`、`slack` |
-| **Auth** | 控制权限——谁能做什么 | `rbac-auth`、`ldap-auth` |
-| **Adapter** | 转换外部 webhook 为 Topic Hub 事件 | `github-adapter`、`jenkins-adapter` |
+| **Type** | 定义话题类型——字段、卡片、生命周期钩子 | `deploy-type`、`incident-type` |
+| **Platform** | 对接 IM 平台——webhook、命令、卡片、群管理 | `feishu`、`slack` |
+| **Adapter** | 连接外部系统——转换 webhook、处理认证 | `github-adapter`、`jenkins-adapter` |
 
-不装 Auth Skill？所有人都有全部权限。不装 Adapter？手动创建 Topic 就好。**按需组合，不用的不装。**
+不装 Adapter？手动创建 Topic 就好。**按需组合，不用的不装。**
+
+Skill 按类别组织在目录中：`skills/topics/`、`skills/platforms/`、`skills/adapters/`。
 
 ### AI 增强 Skill
 
@@ -153,12 +154,31 @@ topichub-admin login                 # OAuth2 登录（浏览器跳转）
 ### Skill 管理
 
 ```bash
-topichub-admin skill install <包名或路径>   # 安装 Skill
-topichub-admin skill list                   # 查看已安装的 Skill
-topichub-admin skill enable <name>          # 启用
-topichub-admin skill disable <name>         # 禁用
-topichub-admin skill setup <name>           # 引导配置（OAuth 等）
-topichub-admin skill config <name> --show   # 查看配置（密钥显示为 ***）
+topichub-admin skill list                          # 查看已安装的 Skill
+topichub-admin skill list --scope private          # 仅查看私有 Skill
+topichub-admin skill list --category adapter       # 按类别过滤
+topichub-admin skill install <包名或路径>           # 安装 Skill（服务器本地）
+topichub-admin skill enable <name>                 # 启用
+topichub-admin skill disable <name>                # 禁用
+topichub-admin skill setup <name>                  # 引导配置（OAuth 等）
+topichub-admin skill config <name> --show          # 查看配置（密钥显示为 ***）
+```
+
+### Skill 开发
+
+```bash
+topichub-admin init                                # 配置服务器地址、token、租户
+topichub-admin skill-repo create <name>            # 创建 Skill 仓库项目
+topichub-admin skill create                        # 创建 Skill（交互式 Q&A）
+topichub-admin publish                             # 发布全部 Skill（私有）
+topichub-admin publish --public                    # 发布为通用（需超级管理员）
+topichub-admin publish --dry-run                   # 仅验证，不实际发布
+```
+
+### 群组管理
+
+```bash
+topichub-admin group create <名称> --platform <p> --members <ids>  # 创建 IM 群组
 ```
 
 ### 租户管理
@@ -215,56 +235,78 @@ https://your-hub.com/webhooks/adapter/github
 
 ## 自定义 Skill
 
-创建一个目录，包含 `package.json` 和入口文件：
+### 统一开发流程（推荐）
 
-```typescript
-import { z } from 'zod';
-
-export default {
-  manifest: {
-    name: 'incident-type',
-    category: 'type',
-    topicType: 'incident',
-    version: '1.0.0',
-    fieldSchema: z.object({
-      severity: z.enum(['P0', 'P1', 'P2', 'P3']),
-      affectedService: z.string(),
-    }),
-    groupNamingTemplate: '🚨 {title} - {severity}',
-    customArgs: [
-      { name: 'severity', type: 'string', required: true, description: 'P0-P3' },
-      { name: 'affected-service', type: 'string', required: true },
-    ],
-  },
-
-  renderCard(topic) {
-    return {
-      title: `🚨 Incident: ${topic.title}`,
-      status: topic.status,
-      fields: [
-        { label: 'Severity', value: topic.metadata.severity, type: 'badge' },
-        { label: 'Service', value: topic.metadata.affectedService, type: 'text' },
-      ],
-    };
-  },
-
-  validateMetadata(metadata) {
-    return this.manifest.fieldSchema.safeParse(metadata);
-  },
-};
-```
-
-安装并启用：
+通用和私有 Skill 使用完全相同的开发流程：
 
 ```bash
-topichub-admin skill install ./my-skills/incident-type
-topichub-admin skill enable incident-type
+# 1. 初始化 CLI
+topichub-admin init
+
+# 2. 创建 Skill 仓库
+topichub-admin skill-repo create my-skills
+cd my-skills
+
+# 3. 创建 Skill（交互式 Q&A）
+topichub-admin skill create
+# ? Skill name: incident-handler
+# ? Category: Topic Type
+# ? Topic type name: incident
+# ? Lifecycle hooks: created, updated
+
+# 4. 开发（AI 辅助——用 Cursor / Claude Code / Codex 打开）
+cursor .
+
+# 5. 本地测试
+topichub-admin serve --executor claude-code
+
+# 6. 发布
+topichub-admin publish                # 私有（仅你的租户可见）
+topichub-admin publish --public       # 通用（所有租户可见，需超级管理员）
 ```
 
-现在用户可以在 IM 中输入：
+脚手架生成的仓库自带 AI Agent 配置文件（`.cursor/rules/`、`AGENTS.md`），让你的 AI 编程工具自动了解 Skill 开发规范。
+
+### Skill 目录结构
 
 ```
-/topichub create incident --severity P0 --affected-service payments
+my-skills/
+├── skills/
+│   ├── topics/
+│   │   └── incident-handler/
+│   │       ├── package.json     # 清单：topichub.category
+│   │       ├── SKILL.md         # Agent 指令（YAML 前置元数据）
+│   │       ├── src/index.ts     # 实现 TypeSkill 接口
+│   │       └── README.md
+│   ├── platforms/
+│   └── adapters/
+├── .cursor/rules/               # Cursor AI 规则
+├── AGENTS.md                    # Claude Code / Codex 指引
+└── .topichub-repo.json          # 仓库元数据
+```
+
+### 清单示例（Topic 类型）
+
+```json
+{
+  "name": "incident-handler",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "topichub": {
+    "category": "type",
+    "topicType": "incident",
+    "hooks": ["created", "updated"]
+  }
+}
+```
+
+### 服务器本地加载（通用 Skill 快捷路径）
+
+通用 Skill 也可以直接放在 `packages/skills/` 下（按 `topics/`、`platforms/`、`adapters/` 分类），服务器启动时自动加载，无需 `publish`。
+
+```bash
+topichub-admin skill install ./packages/skills/topics/incident-handler
+topichub-admin skill enable incident-handler
 ```
 
 ### AI 增强 Skill 示例
