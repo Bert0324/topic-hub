@@ -162,6 +162,13 @@ export class TopicHubService implements OnModuleInit, OnModuleDestroy {
       return undefined;
     }
 
+    if (Object.keys(tenantMapping).length === 0) {
+      this.logger.warn(
+        'Bridge channels configured but TOPICHUB_OPENCLAW_TENANT_MAPPING is empty — bridge disabled',
+      );
+      return undefined;
+    }
+
     const port = this.config.get<string>('TOPICHUB_BRIDGE_PORT');
 
     return {

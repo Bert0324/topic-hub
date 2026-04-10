@@ -80,8 +80,20 @@ export { OpenClawBridge } from './bridge/openclaw-bridge';
 export { MessageRenderer } from './bridge/message-renderer';
 export { BridgeManager } from './bridge/bridge-manager';
 export type { BridgeManagerState } from './bridge/bridge-manager';
-export { OpenClawConfigSchema, BridgeConfigSchema } from './bridge/openclaw-types';
-export type { OpenClawConfig, BridgeConfig } from './bridge/openclaw-types';
+export {
+  OpenClawConfigSchema,
+  OpenClawWebhookPayloadSchema,
+  TenantChannelEntrySchema,
+  BridgeConfigSchema,
+} from './bridge/openclaw-types';
+export type {
+  OpenClawConfig,
+  OpenClawWebhookPayload,
+  TenantChannelEntry,
+  OpenClawInboundResult,
+  OpenClawSendParams,
+  BridgeConfig,
+} from './bridge/openclaw-types';
 
 // Services
 export { IdentityService } from './identity/identity.service';

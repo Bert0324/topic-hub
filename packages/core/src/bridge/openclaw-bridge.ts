@@ -57,14 +57,21 @@ export class OpenClawBridge {
     }
   }
 
-  verifySignature(rawBody: string, signature: string): boolean {
+  /**
+   * Verify HMAC-SHA256 signature.  The signature covers the JSON body
+   * **without** the `signature` field, so we strip it before hashing.
+   */
+  verifySignature(payload: Record<string, unknown>, signature: string): boolean {
+    const { signature: _sig, ...bodyWithoutSig } = payload;
+    const canonical = JSON.stringify(bodyWithoutSig);
     const computed = crypto
       .createHmac('sha256', this.config.webhookSecret)
-      .update(rawBody)
+      .update(canonical)
       .digest('hex');
     const expected = signature.startsWith('sha256=')
       ? signature.slice(7)
       : signature;
+    if (computed.length !== expected.length) return false;
     return crypto.timingSafeEqual(
       Buffer.from(computed, 'hex'),
       Buffer.from(expected, 'hex'),
@@ -73,7 +80,7 @@ export class OpenClawBridge {
 
   handleInboundWebhook(
     payload: unknown,
-    rawBody: string,
+    _rawBody: string,
   ): OpenClawInboundResult | null {
     const parsed = OpenClawWebhookPayloadSchema.safeParse(payload);
     if (!parsed.success) {
@@ -83,7 +90,7 @@ export class OpenClawBridge {
 
     const webhook: OpenClawWebhookPayload = parsed.data;
 
-    if (!this.verifySignature(rawBody, webhook.signature)) {
+    if (!this.verifySignature(payload as Record<string, unknown>, webhook.signature)) {
       this.logger.warn('OpenClaw webhook signature verification failed');
       return null;
     }
