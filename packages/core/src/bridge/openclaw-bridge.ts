@@ -24,10 +24,21 @@ const DEDUP_TTL_MS = 60_000;
  */
 export function normalizeImCommandMessage(raw: string): string {
   let s = raw.trim();
+  // Strip raw Discord mentions: <@id>, <@!id>, <@&id>
   for (;;) {
     const m = s.match(/^(<@!?\d+>|<@&\d+>)\s*/);
     if (!m) break;
     s = s.slice(m[0].length).trim();
+  }
+  // OpenClaw resolves <@id> to @DisplayName before hooks see the content.
+  // Strip leading @mention text before the first /topichub or /answer command.
+  if (s.startsWith('@')) {
+    const cmdIdx = s.indexOf('/topichub');
+    const ansIdx = s.indexOf('/answer');
+    const idx = cmdIdx >= 0 && ansIdx >= 0 ? Math.min(cmdIdx, ansIdx) : cmdIdx >= 0 ? cmdIdx : ansIdx;
+    if (idx > 0) {
+      s = s.slice(idx);
+    }
   }
   return s;
 }
@@ -238,7 +249,10 @@ export class OpenClawBridge {
     const { channel, user, message, sessionId } = webhook.data;
     const normalized = normalizeImCommandMessage(message);
 
+    this.logger.debug(`Inbound webhook: channel=${channel} user=${user} message=${JSON.stringify(normalized)} sessionId=${sessionId}`);
+
     if (!normalized.startsWith(COMMAND_PREFIX) && !normalized.startsWith(ANSWER_PREFIX)) {
+      this.logger.debug(`Message does not start with ${COMMAND_PREFIX} or ${ANSWER_PREFIX}, ignoring`);
       return null;
     }
 
@@ -249,7 +263,7 @@ export class OpenClawBridge {
 
     const mapping = this.config.tenantMapping[channel];
     if (!mapping) {
-      this.logger.warn(`No tenant mapping found for channel: ${channel}`);
+      this.logger.warn(`No tenant mapping found for channel: ${channel} (available: ${Object.keys(this.config.tenantMapping).join(', ')})`);
       return null;
     }
 
@@ -264,7 +278,7 @@ export class OpenClawBridge {
   }
 
   async sendMessage(channel: string, target: string, message: string): Promise<void> {
-    const url = `${this.config.gatewayUrl}/api/v1/send`;
+    const url = `${this.config.gatewayUrl}/tools/invoke`;
 
     try {
       const res = await fetch(url, {
@@ -274,10 +288,13 @@ export class OpenClawBridge {
           Authorization: `Bearer ${this.config.token}`,
         },
         body: JSON.stringify({
+          tool: 'message',
           action: 'send',
-          channel,
-          target,
-          message,
+          args: {
+            to: target,
+            message,
+          },
+          sessionKey: `agent:main:${channel}:channel:${target}`,
         }),
       });
 

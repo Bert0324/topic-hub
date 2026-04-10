@@ -110,16 +110,38 @@ function buildOpenClawJson(
       auth: { token: webhookSecret },
       reload: { mode: 'off' },
     },
-    // Topic Hub handles /topichub via relay → webhook; disable OpenClaw command surfaces so
-    // Discord slash / text /foo is not routed to the gateway agent (model "none" would error).
+    // Topic Hub handles all commands via the inbound-relay hook → webhook; disable
+    // OpenClaw's own command surfaces. The agent model points to a noop endpoint on
+    // the Topic Hub server so agent runs succeed silently (empty response) instead of
+    // crashing with "Unknown model".
     commands: {
       native: false,
       nativeSkills: false,
       text: false,
     },
+    models: {
+      providers: {
+        topichub: {
+          baseUrl: new URL(bridgeConfig.webhookUrl).origin + '/v1',
+          apiKey: 'noop',
+          api: 'openai-completions',
+          models: [
+            {
+              id: 'noop',
+              name: 'Noop',
+              reasoning: false,
+              input: ['text'],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 128000,
+              maxTokens: 1,
+            },
+          ],
+        },
+      },
+    },
     agents: {
       defaults: {
-        model: { primary: 'none' },
+        model: { primary: 'topichub/noop' },
         skills: [],
       },
     },
@@ -190,9 +212,15 @@ const SECRET = process.env.TOPICHUB_WEBHOOK_HMAC_SECRET ?? ${JSON.stringify(secr
 function normalizeImCommandMessage(raw) {
   let s = String(raw ?? "").trim();
   for (;;) {
-    const m = s.match(/^(<@!?\d+>|<@&\d+>)\s*/);
+    const m = s.match(/^(<@!?\\d+>|<@&\\d+>)\\s*/);
     if (!m) break;
     s = s.slice(m[0].length).trim();
+  }
+  if (s.startsWith("@")) {
+    const ci = s.indexOf("/topichub");
+    const ai = s.indexOf("/answer");
+    const idx = ci >= 0 && ai >= 0 ? Math.min(ci, ai) : ci >= 0 ? ci : ai;
+    if (idx > 0) s = s.slice(idx);
   }
   return s;
 }
@@ -203,15 +231,25 @@ const handler = async (event) => {
   const ctx = event.context || {};
   const content = normalizeImCommandMessage(ctx.content ?? "");
 
-  // HMAC covers exact POST body bytes; signature is sent in X-TopicHub-Signature.
+  // Resolve the actual channel ID. OpenClaw sets ctx.channelId to the provider
+  // name (e.g. "discord"), so extract the real ID from the sessionKey
+  // (format: agent:main:<provider>:channel:<channelId>).
+  let channelId = String(ctx.channelId ?? "");
+  const sk = String(event.sessionKey ?? "");
+  const skParts = sk.split(":");
+  const chIdx = skParts.indexOf("channel");
+  if (chIdx >= 0 && chIdx + 1 < skParts.length) {
+    channelId = skParts[chIdx + 1];
+  }
+
   const body = {
     event: "message.received",
     timestamp: new Date().toISOString(),
     data: {
-      channel: String(ctx.channelId ?? ""),
+      channel: channelId,
       user: String(ctx.metadata?.senderId ?? ctx.from ?? ""),
       message: String(content),
-      sessionId: String(event.sessionKey ?? ""),
+      sessionId: sk,
     },
   };
 

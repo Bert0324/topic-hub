@@ -615,3 +615,31 @@ export class IdentityController {
     }
   }
 }
+
+// ── Noop OpenAI-compatible endpoint (used by OpenClaw bridge) ───────
+//
+// OpenClaw's agent pipeline runs on every inbound message. Topic Hub doesn't
+// use the agent — commands are handled via the relay hook. This endpoint
+// returns a valid but empty chat completion so the agent "succeeds" silently
+// instead of crashing with "Unknown model: openai/none".
+
+@Controller('v1')
+export class NoopModelController {
+  @Post('chat/completions')
+  handleChatCompletion() {
+    return {
+      id: 'chatcmpl-noop',
+      object: 'chat.completion',
+      created: Math.floor(Date.now() / 1000),
+      model: 'noop',
+      choices: [
+        {
+          index: 0,
+          message: { role: 'assistant', content: '' },
+          finish_reason: 'stop',
+        },
+      ],
+      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    };
+  }
+}
