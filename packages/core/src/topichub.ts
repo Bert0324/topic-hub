@@ -33,8 +33,6 @@ import { SkillRegistry } from './skill/registry/skill-registry';
 import { SkillConfigService } from './skill/config/skill-config.service';
 import { SkillAiRuntime } from './skill/pipeline/skill-ai-runtime';
 import { SkillPipeline } from './skill/pipeline/skill-pipeline';
-import type { PlatformSkill } from './skill/interfaces/platform-skill';
-
 import { CommandParser } from './command/command-parser';
 import { CommandRouter, CommandContext } from './command/command-router';
 import { CreateHandler } from './command/handlers/create.handler';
@@ -48,6 +46,8 @@ import { HelpHandler } from './command/handlers/help.handler';
 
 import { IngestionService } from './ingestion/ingestion.service';
 import { WebhookHandler, WebhookResult } from './webhook/webhook-handler';
+import { OpenClawBridge } from './bridge/openclaw-bridge';
+import type { OpenClawConfig } from './bridge/openclaw-types';
 
 // --- Operation namespace types ---
 
@@ -106,6 +106,7 @@ export interface IngestionOperations {
 
 export interface WebhookOperations {
   handle(platform: string, payload: unknown, headers: Record<string, string>): Promise<WebhookResult>;
+  handleOpenClaw(payload: unknown, rawBody: string): Promise<WebhookResult>;
 }
 
 export interface MessagingOperations {
@@ -113,11 +114,6 @@ export interface MessagingOperations {
     tenantId: string;
     groupId: string;
     message: string;
-  }): Promise<void>;
-  postCard(platform: string, params: {
-    tenantId: string;
-    groupId: string;
-    card: any;
   }): Promise<void>;
 }
 
@@ -182,6 +178,7 @@ export class TopicHub {
     private readonly aiService: AiService,
     private readonly handlers: Map<string, any>,
     private readonly logger: TopicHubLogger,
+    private readonly bridge: OpenClawBridge | null,
   ) {}
 
   static async create(config: TopicHubConfig): Promise<TopicHub> {
@@ -265,6 +262,16 @@ export class TopicHub {
       loggerFactory('AiService'),
     );
 
+    const bridge = validated.openclaw
+      ? new OpenClawBridge(validated.openclaw as OpenClawConfig, loggerFactory('OpenClawBridge'))
+      : null;
+
+    if (bridge) {
+      mainLogger.log('OpenClaw bridge configured — IM messaging enabled');
+    } else {
+      mainLogger.log('OpenClaw bridge not configured — IM messaging disabled');
+    }
+
     // Skill system
     const skillLoader = new SkillLoader(validated.skillsDir, loggerFactory('SkillLoader'));
     const skillMdParser = new SkillMdParser(loggerFactory('SkillMdParser'));
@@ -297,6 +304,7 @@ export class TopicHub {
       skillAiRuntime,
       dispatchService,
       loggerFactory('SkillPipeline'),
+      bridge,
     );
 
     // Command system
@@ -352,6 +360,7 @@ export class TopicHub {
       ingestionService,
       commandDispatcher,
       loggerFactory('WebhookHandler'),
+      bridge ?? undefined,
     );
 
     // Stage 1: Load built-in md-only skills (unless builtins: false)
@@ -388,6 +397,7 @@ export class TopicHub {
       aiService,
       handlers,
       mainLogger,
+      bridge,
     );
   }
 
@@ -498,24 +508,19 @@ export class TopicHub {
     return {
       handle: (platform, payload, headers) =>
         this.webhookHandler.handle(platform, payload, headers),
+      handleOpenClaw: (payload: unknown, rawBody: string) =>
+        this.webhookHandler.handleOpenClaw(payload, rawBody),
     };
   }
 
   get messaging(): MessagingOperations {
     return {
       send: async (platform, params) => {
-        const skill = this.findPlatformSkill(platform);
-        if (!skill?.sendMessage) {
-          throw new NotFoundError(`Platform ${platform} does not support messaging`);
+        if (this.bridge) {
+          await this.bridge.sendMessage(platform, params.groupId, params.message);
+          return;
         }
-        await skill.sendMessage(params);
-      },
-      postCard: async (platform, params) => {
-        const skill = this.findPlatformSkill(platform);
-        if (!skill?.postCard) {
-          throw new NotFoundError(`Platform ${platform} does not support cards`);
-        }
-        await skill.postCard({ ...params, platform });
+        throw new NotFoundError(`Platform ${platform} does not support messaging`);
       },
     };
   }
@@ -565,7 +570,6 @@ export class TopicHub {
       listRegistered: () => {
         const all = [
           ...this.skillRegistry.getByCategory(SkillCategory.TYPE),
-          ...this.skillRegistry.getByCategory(SkillCategory.PLATFORM),
           ...this.skillRegistry.getByCategory(SkillCategory.ADAPTER),
         ];
         return all.map((s) => ({
@@ -625,17 +629,11 @@ export class TopicHub {
   }
 
   async shutdown(): Promise<void> {
+    this.bridge?.destroy();
     this.dispatchService.destroy();
     if (this.ownsConnection) {
       await this.connection.close();
     }
   }
 
-  private findPlatformSkill(platform: string): PlatformSkill | undefined {
-    const platformSkills = this.skillRegistry.getByCategory(SkillCategory.PLATFORM);
-    const found = platformSkills.find(
-      (s) => (s.registration.metadata as any)?.platform === platform,
-    );
-    return found?.skill as PlatformSkill | undefined;
-  }
 }

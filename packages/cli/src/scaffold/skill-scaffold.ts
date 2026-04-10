@@ -4,7 +4,6 @@ import type { QaResult } from './qa-flow.js';
 
 const CATEGORY_SUBDIRS: Record<string, string> = {
   type: 'topics',
-  platform: 'platforms',
   adapter: 'adapters',
 };
 
@@ -22,11 +21,6 @@ export async function scaffoldSkill(skillsDir: string, qa: QaResult): Promise<vo
     case 'type': {
       const { generateTopicSkill } = await import('./templates/topic-skill.js');
       files = generateTopicSkill(qa);
-      break;
-    }
-    case 'platform': {
-      const { generatePlatformSkill } = await import('./templates/platform-skill.js');
-      files = generatePlatformSkill(qa);
       break;
     }
     case 'adapter': {

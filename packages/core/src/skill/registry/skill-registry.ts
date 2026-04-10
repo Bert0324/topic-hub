@@ -1,7 +1,6 @@
 import { Model } from 'mongoose';
 import { SkillCategory } from '../../common/enums';
 import { TypeSkill } from '../interfaces/type-skill';
-import { PlatformSkill } from '../interfaces/platform-skill';
 import { AdapterSkill } from '../interfaces/adapter-skill';
 import { ParsedSkillMd } from '../interfaces/skill-md';
 import { SkillLoader } from './skill-loader';
@@ -11,7 +10,7 @@ import type { AiCompletionPort } from '../interfaces/skill-context';
 import type { TopicHubLogger } from '../../common/logger';
 import type { SkillRegistryPort } from '../../command/command-router';
 
-type AnySkill = TypeSkill | PlatformSkill | AdapterSkill;
+type AnySkill = TypeSkill | AdapterSkill;
 
 export interface RegisteredSkill {
   skill: AnySkill;
@@ -91,12 +90,6 @@ export class SkillRegistry implements SkillRegistryPort {
 
     const publicMatch = candidates.find((s) => !s.registration.isPrivate);
     return (publicMatch ?? candidates[0])?.skill as TypeSkill | undefined;
-  }
-
-  getPlatformSkills(): PlatformSkill[] {
-    return this.getByCategory(SkillCategory.PLATFORM).map(
-      (s) => s.skill as PlatformSkill,
-    );
   }
 
   async isTypeAvailable(
@@ -278,13 +271,11 @@ export class SkillRegistry implements SkillRegistryPort {
   private resolveCategory(skill: AnySkill): SkillCategory {
     const manifest = skill.manifest as any;
     if ('topicType' in manifest) return SkillCategory.TYPE;
-    if ('platform' in manifest) return SkillCategory.PLATFORM;
     if ('sourceSystem' in manifest) return SkillCategory.ADAPTER;
     return SkillCategory.TYPE;
   }
 
   private resolveCategoryFromFrontmatter(frontmatter: import('../interfaces/skill-md').SkillMdFrontmatter): SkillCategory {
-    if (frontmatter.category === 'platform') return SkillCategory.PLATFORM;
     if (frontmatter.category === 'adapter') return SkillCategory.ADAPTER;
     return SkillCategory.TYPE;
   }
@@ -297,8 +288,6 @@ export class SkillRegistry implements SkillRegistryPort {
     switch (category) {
       case SkillCategory.TYPE:
         return { topicType: manifest.topicType };
-      case SkillCategory.PLATFORM:
-        return { platform: manifest.platform };
       case SkillCategory.ADAPTER:
         return { sourceSystem: manifest.sourceSystem };
       default:

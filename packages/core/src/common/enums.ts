@@ -23,7 +23,6 @@ export enum TimelineActionType {
 
 export enum SkillCategory {
   TYPE = 'type',
-  PLATFORM = 'platform',
   ADAPTER = 'adapter',
 }
 

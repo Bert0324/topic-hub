@@ -46,15 +46,6 @@ export {
 // Skill interfaces
 export type { AiCompletionPort, SkillContext } from './skill/interfaces/skill-context';
 export type {
-  PlatformSkill,
-  PlatformSkillManifest,
-  PlatformCapability,
-  CommandResult,
-  CreateGroupParams,
-  GroupResult,
-  PostCardParams,
-} from './skill/interfaces/platform-skill';
-export type {
   AdapterSkill,
   AdapterSkillManifest,
   TopicEventPayload,
@@ -79,3 +70,9 @@ export type { EventPayload } from './ingestion/event-payload';
 
 // Webhook result
 export type { WebhookResult } from './webhook/webhook-handler';
+
+// Bridge
+export { OpenClawBridge } from './bridge/openclaw-bridge';
+export { MessageRenderer } from './bridge/message-renderer';
+export { OpenClawConfigSchema } from './bridge/openclaw-types';
+export type { OpenClawConfig } from './bridge/openclaw-types';

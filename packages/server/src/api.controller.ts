@@ -45,6 +45,15 @@ function toHttpError(err: unknown): never {
 export class WebhookController {
   constructor(private readonly hub: TopicHubService) {}
 
+  @Post('openclaw')
+  async handleOpenClaw(
+    @Req() req: Request,
+    @Body() payload: unknown,
+  ) {
+    const rawBody = JSON.stringify(payload);
+    return this.hub.getHub().webhook.handleOpenClaw(payload, rawBody);
+  }
+
   @Post(':platform')
   handle(
     @Param('platform') platform: string,
