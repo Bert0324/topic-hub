@@ -49,7 +49,6 @@ export interface TypeSkillManifest {
   invitationRules?: InvitationRule[];
   customArgs?: CustomArgDefinition[];
   cardTemplate: CardTemplate;
-  ai?: boolean;
 }
 
 export interface ValidationResult {

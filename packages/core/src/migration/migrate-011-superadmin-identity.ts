@@ -92,7 +92,6 @@ export async function migrate(mongoUri: string): Promise<MigrationResult> {
       'timeline_entries',
       'task_dispatches',
       'qa_exchanges',
-      'ai_usage_records',
     ];
 
     for (const colName of collectionsToStrip) {

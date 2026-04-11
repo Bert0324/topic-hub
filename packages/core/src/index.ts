@@ -11,8 +11,6 @@ export type {
   SkillOperations,
   DispatchOperations,
   AdminOperations,
-  AiOperations,
-  AiOperationResult,
   IdentityOperations,
   HeartbeatOperations,
   QaOperations,
@@ -22,7 +20,7 @@ export type {
 
 // Config
 export { TopicHubConfigSchema } from './config';
-export type { TopicHubConfig, AiProviderConfig, EncryptionConfig } from './config';
+export type { TopicHubConfig, EncryptionConfig } from './config';
 
 // Built-in skills
 export { getBuiltinSkills, GENERIC_TYPE_SKILL_MD, GENERIC_TYPE_VERSION } from './builtin-skills';
@@ -52,7 +50,7 @@ export {
 } from './common/enums';
 
 // Skill interfaces
-export type { AiCompletionPort, SkillContext } from './skill/interfaces/skill-context';
+export type { SkillContext } from './skill/interfaces/skill-context';
 export type {
   AdapterSkill,
   AdapterSkillManifest,

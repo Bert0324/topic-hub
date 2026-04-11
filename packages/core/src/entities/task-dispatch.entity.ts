@@ -59,24 +59,6 @@ export class EventContext {
 }
 
 @modelOptions({ schemaOptions: { _id: false } })
-export class AiClassification {
-  @prop()
-  topicType?: string;
-
-  @prop()
-  severity?: string;
-
-  @prop()
-  matchedSkill?: string;
-
-  @prop()
-  reasoning?: string;
-
-  @prop()
-  confidence?: number;
-}
-
-@modelOptions({ schemaOptions: { _id: false } })
 export class SkillFrontmatterSnapshot {
   @prop({ required: true })
   name!: string;
@@ -119,9 +101,6 @@ export class EnrichedPayload {
 
   @prop({ required: true, type: () => EventContext })
   event!: EventContext;
-
-  @prop({ type: () => AiClassification })
-  aiClassification?: AiClassification;
 
   @prop({ type: () => SkillInstructions })
   skillInstructions?: SkillInstructions;

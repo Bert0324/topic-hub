@@ -25,7 +25,6 @@ export function createMdOnlyTypeSkill(
       fields: [],
       actions: [],
     },
-    ai: true,
   };
 
   return {

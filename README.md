@@ -54,10 +54,6 @@ IM platform connectivity (Lark, Slack, Telegram, Discord, etc.) is handled by th
 
 Adding a new IM platform requires only configuring a channel in OpenClaw — **zero code changes in Topic Hub**.
 
-### AI-Powered Skills
-
-Skills can optionally use AI. When `AI_ENABLED=true`, Skills that declare `ai: true` in their manifest receive an `AiService` they can call in their lifecycle hooks (e.g., auto-analyzing alerts, generating summaries). The AI provider is pluggable — the default is Volcengine Ark (Doubao Seed model), configurable via environment variables. When AI is unavailable, Skills degrade gracefully — core operations are never blocked.
-
 ### Tenant
 
 One deployment serves many teams. Each team gets isolated data, independent Skill config, and their own IM app credentials. Teams are invisible to each other.
@@ -498,14 +494,6 @@ Starts MongoDB 7 + Topic Hub server at `http://localhost:3000`.
 | `TOPICHUB_OPENCLAW_TOKEN` | — | Bearer token for OpenClaw API authentication |
 | `TOPICHUB_OPENCLAW_WEBHOOK_SECRET` | — | HMAC-SHA256 secret for verifying inbound OpenClaw webhooks |
 | `TOPICHUB_OPENCLAW_TENANT_MAPPING` | — | JSON mapping of OpenClaw channels to tenants (e.g., `{"lark-main":{"tenantId":"t1","platform":"lark"}}`) |
-| **AI** | | |
-| `AI_ENABLED` | `false` | Enable AI for Skills (`true` / `false`) |
-| `AI_PROVIDER` | `ark` | AI provider (`ark` for Volcengine) |
-| `AI_API_URL` | `https://ark.cn-beijing.volces.com/api/v3` | AI API endpoint (change for internal deployments) |
-| `AI_API_KEY` | — | AI API Bearer token |
-| `AI_MODEL` | `doubao-seed-2-0-pro-260215` | AI model identifier |
-| `AI_TIMEOUT_MS` | `10000` | AI request timeout (ms) |
-| `AI_RATE_LIMIT_GLOBAL` | `1000` | Platform-wide AI requests/hour |
 
 ### Production checklist
 

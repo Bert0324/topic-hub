@@ -299,7 +299,7 @@ export class SkillRegistry implements SkillRegistryPort {
     const manifest = skill.manifest as any;
 
     try {
-      (skill as any).init({ aiService: null });
+      (skill as any).init({});
     } catch (err) {
       this.logger.error(`Failed to init skill ${manifest.name}`, String(err));
     }

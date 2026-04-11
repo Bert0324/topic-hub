@@ -41,24 +41,6 @@ export interface EventContext {
   extra?: Record<string, unknown>;
 }
 
-export interface SkillAiUserPrompt {
-  event: EventContext;
-  topic: TopicSnapshot;
-}
-
-export interface SkillAiResult {
-  skillName: string;
-  content: string;
-  model: string;
-  reasoning?: string;
-  usage: {
-    inputTokens: number;
-    outputTokens: number;
-    totalTokens: number;
-  };
-  timestamp: string;
-}
-
 export const KNOWN_LIFECYCLE_EVENTS = [
   'onTopicCreated',
   'onTopicUpdated',

@@ -21,11 +21,6 @@ async function main() {
       await handleHealthCommand();
       break;
     }
-    case 'ai': {
-      const { handleAiCommand } = await import('./commands/ai/index.js');
-      await handleAiCommand(subcommand, restArgs);
-      break;
-    }
     case 'init': {
       const { handleInitCommand } = await import('./commands/init/index.js');
       await handleInitCommand();

@@ -45,13 +45,6 @@ cd packages/server && pnpm dev
 | `SKILLS_DIR` | `./skills` | Skill 自动发现目录 |
 | `ENCRYPTION_KEY` | 开发默认值 | AES-256 加密密钥（生产环境必须设置） |
 | `JWKS_CONFIGS` | 内置 Feishu/Slack | JWKS 端点配置（JSON） |
-| `AI_ENABLED` | `false` | AI 总开关 |
-| `AI_PROVIDER` | `ark` | AI 提供商（目前支持 `ark`） |
-| `AI_API_URL` | `https://ark.cn-beijing.volces.com/api/v3` | AI API 地址（内部部署改为内网地址） |
-| `AI_API_KEY` | — | AI API Bearer Token |
-| `AI_MODEL` | `doubao-seed-2-0-pro-260215` | 模型标识符 |
-| `AI_TIMEOUT_MS` | `10000` | 单次 AI 请求超时（毫秒） |
-| `AI_RATE_LIMIT_GLOBAL` | `1000` | 平台级每小时请求上限 |
 
 开发时推荐使用 pretty 日志：
 
@@ -208,29 +201,6 @@ curl -X POST http://localhost:3000/admin/groups \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <admin-token>" \
   -d '{"name": "Bug 值班群", "platform": "feishu", "memberIds": ["user1", "user2"]}'
-```
-
-### AI 管理
-
-```bash
-# AI 提供商状态
-curl http://localhost:3000/admin/ai/status
-
-# 租户 AI 配置
-curl http://localhost:3000/admin/tenants/<tenant-id>/ai
-
-# 启用 AI
-curl -X PATCH http://localhost:3000/admin/tenants/<tenant-id>/ai \
-  -H "Content-Type: application/json" \
-  -d '{"enabled": true}'
-
-# 设置速率限制
-curl -X PATCH http://localhost:3000/admin/tenants/<tenant-id>/ai \
-  -H "Content-Type: application/json" \
-  -d '{"rateLimit": 50}'
-
-# 查看 AI 用量
-curl "http://localhost:3000/admin/tenants/<tenant-id>/ai/usage?hours=24"
 ```
 
 ### 搜索

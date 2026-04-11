@@ -3,7 +3,7 @@ import { getModelForClass } from '@typegoose/typegoose';
 import { TopicHubConfigSchema, TopicHubConfig } from './config';
 import { defaultLoggerFactory, LoggerFactory, TopicHubLogger } from './common/logger';
 import { NotFoundError, UnauthorizedError, TopicHubError } from './common/errors';
-import { SkillCategory, TimelineActionType } from './common/enums';
+import { SkillCategory } from './common/enums';
 import { getBuiltinSkills } from './builtin-skills';
 
 import { Topic } from './entities/topic.entity';
@@ -12,7 +12,7 @@ import { SkillRegistration } from './entities/skill-registration.entity';
 import { TenantSkillConfig } from './entities/tenant-skill-config.entity';
 import { Tenant } from './entities/tenant.entity';
 import { TaskDispatch } from './entities/task-dispatch.entity';
-import { AiUsageRecord } from './entities/ai-usage.entity';
+
 import { UserIdentityBinding } from './entities/user-identity-binding.entity';
 import { ExecutorHeartbeat } from './entities/executor-heartbeat.entity';
 import { QaExchange } from './entities/qa-exchange.entity';
@@ -40,12 +40,6 @@ import { ExecutorRegistration } from './entities/executor-registration.entity';
 import { ImBinding } from './entities/im-binding.entity';
 import { SkillLike } from './entities/skill-like.entity';
 import { SkillUsage } from './entities/skill-usage.entity';
-
-import { AiUsageService } from './ai/ai-usage.service';
-import { AiService } from './ai/ai.service';
-import { ArkProvider } from './ai/ark-provider';
-import { AI_CONFIG_DEFAULTS, loadAiConfig } from './ai/ai-config';
-import type { AiProvider } from './ai/ai-provider.interface';
 
 import { SkillLoader } from './skill/registry/skill-loader';
 import { SkillMdParser } from './skill/registry/skill-md-parser';
@@ -181,25 +175,11 @@ export interface DispatchOperations {
   fail(taskId: string, error: string): Promise<void>;
 }
 
-export interface AiOperationResult {
-  content: string;
-  model: string;
-  usage: { inputTokens: number; outputTokens: number; totalTokens: number };
-  timelineEntryId: string;
-}
-
-export interface AiOperations {
-  summarize(tenantId: string, topicId: string): Promise<AiOperationResult>;
-  ask(tenantId: string, topicId: string, question: string): Promise<AiOperationResult>;
-  isAvailable(): boolean;
-}
-
 export interface AdminOperations {
   listTenants(): Promise<any[]>;
   createTenant(name: string): Promise<{ id: string; apiKey: string; adminToken: string; isSuperAdmin: boolean }>;
   regenerateToken(tenantId: string): Promise<{ adminToken: string }>;
   getStats(tenantId: string): Promise<Record<string, number>>;
-  getAiStatus(): { enabled: boolean; provider: string | null; model: string };
 }
 
 export interface IdentityOperations {
@@ -270,7 +250,6 @@ export class TopicHub {
     private readonly commandParser: CommandParser,
     private readonly commandRouter: CommandRouter,
     private readonly webhookHandler: WebhookHandler,
-    private readonly aiService: AiService,
     private readonly handlers: Map<string, any>,
     private readonly logger: TopicHubLogger,
     private readonly bridge: OpenClawBridge | null,
@@ -317,7 +296,6 @@ export class TopicHub {
     const TenantSkillConfigModel = model(TenantSkillConfig, 'tenant_skill_configs');
     const TenantModel = model(Tenant, 'tenants');
     const TaskDispatchModel = model(TaskDispatch, 'task_dispatches');
-    const AiUsageRecordModel = model(AiUsageRecord, 'ai_usage_records');
     const UserIdentityBindingModel = model(UserIdentityBinding, 'user_identity_bindings');
     const PairingCodeModel = model(PairingCode, 'pairing_codes');
     const ExecutorHeartbeatModel = model(ExecutorHeartbeat, 'executor_heartbeats');
@@ -346,36 +324,6 @@ export class TopicHub {
     const qaService = new QaService(QaExchangeModel, loggerFactory('QaService'));
     const superadminService = new SuperadminService(IdentityModel, ExecutorRegistrationModel, loggerFactory('SuperadminService'));
     const authServiceNew = new AuthService(IdentityModel, ExecutorRegistrationModel);
-
-    // AI
-    const aiUsageService = new AiUsageService(AiUsageRecordModel, loggerFactory('AiUsageService'));
-
-    let aiProvider: AiProvider | null = null;
-    let aiConfig = loadAiConfig({});
-
-    if (validated.ai) {
-      aiProvider = new ArkProvider({
-        apiUrl: validated.ai.baseUrl ?? `https://ark.cn-beijing.volces.com/api/v3`,
-        apiKey: validated.ai.apiKey,
-        model: validated.ai.model ?? AI_CONFIG_DEFAULTS.model,
-        timeoutMs: AI_CONFIG_DEFAULTS.timeoutMs,
-      });
-      aiConfig = loadAiConfig({
-        AI_ENABLED: 'true',
-        AI_PROVIDER: validated.ai.provider,
-        AI_API_KEY: validated.ai.apiKey,
-        AI_MODEL: validated.ai.model ?? AI_CONFIG_DEFAULTS.model,
-        AI_API_URL: validated.ai.baseUrl,
-      });
-    }
-
-    const aiService = new AiService(
-      aiConfig,
-      aiProvider,
-      aiUsageService,
-      TenantSkillConfigModel,
-      loggerFactory('AiService'),
-    );
 
     let bridge: OpenClawBridge | null = null;
     let bridgeManager: BridgeManager | null = null;
@@ -533,7 +481,6 @@ export class TopicHub {
       commandParser,
       commandRouter,
       webhookHandler,
-      aiService,
       handlers,
       mainLogger,
       bridge,
@@ -872,97 +819,6 @@ export class TopicHub {
         const dispatches = await this.dispatchService.countByStatus(tenantId);
         return dispatches as any;
       },
-      getAiStatus: () => this.aiService.getConfig(),
-    };
-  }
-
-  get ai(): AiOperations {
-    return {
-      summarize: async (tenantId, topicId) => {
-        const topic = await this.topicService.findById(tenantId, topicId);
-        if (!topic) throw new NotFoundError(`Topic ${topicId} not found`);
-
-        const timeline = await this.timelineService.findByTopic(tenantId, topicId, 1, 20);
-        const entries = timeline?.entries ?? [];
-
-        const contextParts = [
-          `Title: ${topic.title}`,
-          `Type: ${topic.type}`,
-          `Status: ${topic.status}`,
-          topic.tags?.length ? `Tags: ${topic.tags.join(', ')}` : '',
-          topic.metadata ? `Metadata: ${JSON.stringify(topic.metadata)}` : '',
-          entries.length ? `\nTimeline (${entries.length} entries):\n${entries.map((e: any) => `- [${e.actionType}] ${e.actor}: ${JSON.stringify(e.payload ?? {})}`).join('\n')}` : '',
-        ].filter(Boolean).join('\n');
-
-        const response = await this.aiService.complete({
-          tenantId,
-          skillName: 'ai:summarize',
-          input: [
-            { role: 'system', content: [{ type: 'input_text', text: 'You are a topic summarizer. Provide a concise summary of the topic based on the provided context. Focus on key information, status, and any notable patterns or issues.' }] },
-            { role: 'user', content: [{ type: 'input_text', text: contextParts }] },
-          ],
-        });
-
-        if (!response) {
-          throw new TopicHubError('AI service unavailable');
-        }
-
-        const entry = await this.timelineService.append(
-          tenantId, topicId, 'ai:summarize', TimelineActionType.AI_RESPONSE,
-          { operation: 'summarize', content: response.content, model: response.model, usage: response.usage },
-        );
-
-        return {
-          content: response.content,
-          model: response.model,
-          usage: response.usage,
-          timelineEntryId: entry._id.toString(),
-        };
-      },
-
-      ask: async (tenantId, topicId, question) => {
-        const topic = await this.topicService.findById(tenantId, topicId);
-        if (!topic) throw new NotFoundError(`Topic ${topicId} not found`);
-
-        const timeline = await this.timelineService.findByTopic(tenantId, topicId, 1, 20);
-        const entries = timeline?.entries ?? [];
-
-        const contextParts = [
-          `Title: ${topic.title}`,
-          `Type: ${topic.type}`,
-          `Status: ${topic.status}`,
-          topic.tags?.length ? `Tags: ${topic.tags.join(', ')}` : '',
-          topic.metadata ? `Metadata: ${JSON.stringify(topic.metadata)}` : '',
-          entries.length ? `\nTimeline (${entries.length} entries):\n${entries.map((e: any) => `- [${e.actionType}] ${e.actor}: ${JSON.stringify(e.payload ?? {})}`).join('\n')}` : '',
-        ].filter(Boolean).join('\n');
-
-        const response = await this.aiService.complete({
-          tenantId,
-          skillName: 'ai:assistant',
-          input: [
-            { role: 'system', content: [{ type: 'input_text', text: `You are a topic assistant. Answer the user's question based on the topic context provided. Be concise and helpful.\n\nTopic context:\n${contextParts}` }] },
-            { role: 'user', content: [{ type: 'input_text', text: question }] },
-          ],
-        });
-
-        if (!response) {
-          throw new TopicHubError('AI service unavailable');
-        }
-
-        const entry = await this.timelineService.append(
-          tenantId, topicId, 'ai:assistant', TimelineActionType.AI_RESPONSE,
-          { operation: 'ask', question, content: response.content, model: response.model, usage: response.usage },
-        );
-
-        return {
-          content: response.content,
-          model: response.model,
-          usage: response.usage,
-          timelineEntryId: entry._id.toString(),
-        };
-      },
-
-      isAvailable: () => this.aiService.isAvailable(),
     };
   }
 
