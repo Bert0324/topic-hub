@@ -11,11 +11,6 @@ async function main() {
       await handleSkillCommand(subcommand, restArgs);
       break;
     }
-    case 'tenant': {
-      const { handleTenantCommand } = await import('./commands/tenant/index.js');
-      await handleTenantCommand(subcommand, restArgs);
-      break;
-    }
     case 'stats': {
       const { handleStatsCommand } = await import('./commands/stats.js');
       await handleStatsCommand(restArgs);
@@ -56,6 +51,11 @@ async function main() {
       await handleGroupCommand(subcommand, restArgs);
       break;
     }
+    case 'identity': {
+      const { handleIdentityCommand } = await import('./commands/identity/index.js');
+      await handleIdentityCommand(subcommand, restArgs);
+      break;
+    }
     case 'link': {
       const { handleLinkCommand } = await import('./commands/link/index.js');
       await handleLinkCommand(args.slice(1));
@@ -70,7 +70,7 @@ async function main() {
       const { saveAdminToken } = await import('./auth/auth.js');
       if (args[1]) {
         await saveAdminToken(args[1]);
-        console.log('Authenticated as tenant admin.');
+        console.log('Authenticated.');
       } else {
         console.log('Usage: topichub-admin auth <token>');
       }
@@ -97,7 +97,7 @@ async function main() {
     }
     default:
       console.log('Usage: topichub-admin <command> [subcommand] [args]');
-      console.log('Commands: init, serve, skill, skill-repo, publish, group, tenant, stats, health, ai, auth, login, logout, link, unlink');
+      console.log('Commands: init, serve, skill, skill-repo, publish, group, identity, stats, health, ai, auth, login, logout, link, unlink');
   }
 }
 

@@ -34,7 +34,6 @@ export async function handleSkillRepoCommand(
 
       const config = await loadConfig();
       await scaffoldRepo(repoName, parentDir, {
-        tenantId: config.tenantId ?? '',
         serverUrl: config.serverUrl ?? 'http://localhost:3000',
       });
       break;
@@ -52,7 +51,6 @@ export async function handleSkillRepoCommand(
 
       const config = await loadConfig();
       await initSkillScaffold(targetDir, {
-        tenantId: config.tenantId ?? '',
         serverUrl: config.serverUrl ?? 'http://localhost:3000',
         force,
       });

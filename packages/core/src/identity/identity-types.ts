@@ -66,6 +66,18 @@ export const AnswerTextSchema = z.string().min(1).max(5000);
 
 export type AnswerText = z.infer<typeof AnswerTextSchema>;
 
+export const CreateIdentitySchema = z.object({
+  uniqueId: z.string().min(1).max(128),
+  displayName: z.string().min(1).max(256),
+});
+
+export type CreateIdentityInput = z.infer<typeof CreateIdentitySchema>;
+
+export const IDENTITY_STATUS = {
+  ACTIVE: 'active' as const,
+  REVOKED: 'revoked' as const,
+};
+
 export function generatePairingCode(length = PAIRING_CODE_LENGTH): string {
   const bytes = crypto.randomBytes(length);
   let code = '';

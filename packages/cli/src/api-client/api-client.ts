@@ -74,7 +74,7 @@ export class ApiClient {
     return this.request<T>('DELETE', path);
   }
 
-  async publishSkills(payload: { tenantId: string; skills: unknown[] }): Promise<unknown> {
+  async publishSkills(payload: { skills: unknown[] }): Promise<unknown> {
     return this.post('/admin/skills/publish', payload);
   }
 

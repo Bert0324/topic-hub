@@ -31,7 +31,7 @@ export function generateAdapterSkill(qa: QaResult): Record<string, string> {
 
   if (authType !== 'none') {
     stubMethods.push(
-      `  async runSetup(tenantId: string): Promise<void> {\n    // TODO: configure ${authType} credentials for ${sourceSystem}\n  }`,
+      `  async runSetup(): Promise<void> {\n    // TODO: configure ${authType} credentials for ${sourceSystem}\n  }`,
     );
   }
 

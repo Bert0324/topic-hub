@@ -13,7 +13,7 @@ export PORT="3000"
 DISCORD_CHANNEL_ID="1492073611782258771"
 export TOPICHUB_BRIDGE_WEBHOOK_URL="http://127.0.0.1:${PORT}/webhooks/openclaw"
 export TOPICHUB_BRIDGE_DISCORD_BOT_TOKEN="MTQ5MjA3ODQ4NDQwMTQyMjM5OQ.GIKUHm.1p0BiwRHMQWYYsJOp7fENuHR9aDcpFR1dZ6fXE"
-export TOPICHUB_OPENCLAW_TENANT_MAPPING="{\"${DISCORD_CHANNEL_ID}\":{\"tenantId\":\"tenant_local\",\"platform\":\"discord\"}}"
+export TOPICHUB_BRIDGE_PLATFORM_MAPPING="{\"${DISCORD_CHANNEL_ID}\":{\"platform\":\"discord\"}}"
 
 # Optional: Discord server (guild) ID — OpenClaw agent only replies when @mentioned; topichub-relay still forwards all messages.
 # export TOPICHUB_BRIDGE_DISCORD_GUILD_ID=""

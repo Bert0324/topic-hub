@@ -2,14 +2,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { loadAdminToken } from '../../auth/auth.js';
 import { ApiClient } from '../../api-client/api-client.js';
-import { loadConfig } from '../../config/config.js';
 import {
   PublishPayloadSchema,
   SkillManifestSchema,
 } from '../../validation/skill-manifest.js';
 
 interface RepoMeta {
-  tenantId: string;
   serverUrl: string;
   createdAt: string;
   cliVersion: string;
@@ -158,9 +156,7 @@ export async function handlePublishCommand(args: string[]): Promise<void> {
   const scope = isPublic ? 'public' : 'private';
   console.log(`Publishing ${skills.length} skill(s) from ${path.basename(repoRoot)}... (${scope})`);
 
-  const config = await loadConfig();
-  const tenantId = (repoMeta.tenantId ?? config.tenantId ?? '').trim();
-  const payloadParsed = PublishPayloadSchema.safeParse({ tenantId, isPublic, skills });
+  const payloadParsed = PublishPayloadSchema.safeParse({ isPublic, skills });
   if (!payloadParsed.success) {
     console.error('Invalid publish payload:', payloadParsed.error.flatten());
     process.exit(2);

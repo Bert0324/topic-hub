@@ -27,9 +27,17 @@ import { DispatchService } from './services/dispatch.service';
 import { IdentityService } from './identity/identity.service';
 import type { ClaimResult, ResolvedPlatformUser, ResolvedClaimTokenUser } from './identity/identity.service';
 import { DISPATCH_UNCLAIMED_REMINDER_MS } from './identity/identity-types';
+import type { CreateIdentityInput } from './identity/identity-types';
 import { HeartbeatService } from './services/heartbeat.service';
 import type { ExecutorHeartbeatMeta, RegisterExecutorResult } from './services/heartbeat.service';
 import { QaService } from './services/qa.service';
+import { SuperadminService } from './services/superadmin.service';
+import type { InitResult, CreateIdentityResult } from './services/superadmin.service';
+import { AuthService } from './services/auth.service';
+import type { ResolvedAuth } from './services/auth.service';
+import { Identity } from './entities/identity.entity';
+import { ExecutorRegistration } from './entities/executor-registration.entity';
+import { ImBinding } from './entities/im-binding.entity';
 
 import { AiUsageService } from './ai/ai-usage.service';
 import { AiService } from './ai/ai.service';
@@ -220,6 +228,25 @@ export interface QaOperations {
   findByDispatchAndStatus(dispatchId: string, status?: string): Promise<any[]>;
 }
 
+export interface SuperadminOperations {
+  init(): Promise<InitResult>;
+  createIdentity(input: CreateIdentityInput): Promise<CreateIdentityResult>;
+  listIdentities(): Promise<any[]>;
+  revokeIdentity(identityId: string): Promise<{ executorsRevoked: number }>;
+  regenerateToken(identityId: string): Promise<{ token: string; executorsRevoked: number }>;
+  registerExecutor(identityToken: string, executorMeta?: { agentType: string; maxConcurrentAgents: number; hostname: string; pid: number }): Promise<{ executorToken: string; identityId: string; identityUniqueId: string }>;
+  revokeExecutor(executorToken: string): Promise<void>;
+  listExecutors(): Promise<any[]>;
+  resolveExecutorToken(executorToken: string): Promise<{ identityId: string; executorToken: string } | null>;
+  resolveIdentityToken(identityToken: string): Promise<{ identityId: string; isSuperAdmin: boolean } | null>;
+}
+
+export interface IdentityAuthOperations {
+  resolveFromHeaders(headers: Record<string, string | string[] | undefined>): Promise<ResolvedAuth>;
+  requireSuperadmin(headers: Record<string, string | string[] | undefined>): Promise<{ identityId: string }>;
+  requireExecutor(headers: Record<string, string | string[] | undefined>): Promise<{ identityId: string; executorToken: string }>;
+}
+
 // --- TopicHub Facade ---
 
 const REMINDER_CHECK_INTERVAL_MS = 60_000;
@@ -249,6 +276,8 @@ export class TopicHub {
     private readonly identityService: IdentityService,
     private readonly heartbeatService: HeartbeatService,
     private readonly qaService: QaService,
+    private readonly superadminService: SuperadminService,
+    private readonly authServiceNew: AuthService,
   ) {}
 
   static async create(config: TopicHubConfig): Promise<TopicHub> {
@@ -291,6 +320,9 @@ export class TopicHub {
     const PairingCodeModel = model(PairingCode, 'pairing_codes');
     const ExecutorHeartbeatModel = model(ExecutorHeartbeat, 'executor_heartbeats');
     const QaExchangeModel = model(QaExchange, 'qa_exchanges');
+    const IdentityModel = model(Identity, 'identities');
+    const ExecutorRegistrationModel = model(ExecutorRegistration, 'executor_registrations');
+    const ImBindingModel = model(ImBinding, 'im_bindings');
 
     // Crypto
     const secretManager = new SecretManager(
@@ -308,6 +340,8 @@ export class TopicHub {
     const identityService = new IdentityService(UserIdentityBindingModel, PairingCodeModel, loggerFactory('IdentityService'));
     const heartbeatService = new HeartbeatService(ExecutorHeartbeatModel, loggerFactory('HeartbeatService'));
     const qaService = new QaService(QaExchangeModel, loggerFactory('QaService'));
+    const superadminService = new SuperadminService(IdentityModel, ExecutorRegistrationModel, loggerFactory('SuperadminService'));
+    const authServiceNew = new AuthService(IdentityModel, ExecutorRegistrationModel);
 
     // AI
     const aiUsageService = new AiUsageService(AiUsageRecordModel, loggerFactory('AiUsageService'));
@@ -503,6 +537,8 @@ export class TopicHub {
       identityService,
       heartbeatService,
       qaService,
+      superadminService,
+      authServiceNew,
     );
 
     hub.startReminderTimer();
@@ -976,6 +1012,29 @@ export class TopicHub {
         this.qaService.findAnsweredByDispatch(dispatchId),
       findByDispatchAndStatus: (dispatchId, status) =>
         this.qaService.findByDispatchAndStatus(dispatchId, status),
+    };
+  }
+
+  get superadmin(): SuperadminOperations {
+    return {
+      init: () => this.superadminService.init(),
+      createIdentity: (input) => this.superadminService.createIdentity(input),
+      listIdentities: () => this.superadminService.listIdentities(),
+      revokeIdentity: (identityId) => this.superadminService.revokeIdentity(identityId),
+      regenerateToken: (identityId) => this.superadminService.regenerateToken(identityId),
+      registerExecutor: (identityToken, executorMeta) => this.superadminService.registerExecutor(identityToken, executorMeta),
+      revokeExecutor: (executorToken) => this.superadminService.revokeExecutor(executorToken),
+      listExecutors: () => this.superadminService.listExecutors(),
+      resolveExecutorToken: (executorToken) => this.superadminService.resolveExecutorToken(executorToken),
+      resolveIdentityToken: (identityToken) => this.superadminService.resolveIdentityToken(identityToken),
+    };
+  }
+
+  get identityAuth(): IdentityAuthOperations {
+    return {
+      resolveFromHeaders: (headers) => this.authServiceNew.resolveFromHeaders(headers),
+      requireSuperadmin: (headers) => this.authServiceNew.requireSuperadmin(headers),
+      requireExecutor: (headers) => this.authServiceNew.requireExecutor(headers),
     };
   }
 
