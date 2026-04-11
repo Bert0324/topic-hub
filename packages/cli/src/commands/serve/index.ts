@@ -33,7 +33,7 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     );
   }
 
-  // ── Executor registration (T023) ──────────────────────────────────
+  // ── Executor registration ──────────────────────────────────────────
   const baseUrl = config.serverUrl.replace(/\/+$/, '');
   const regRes = await fetch(`${baseUrl}/api/v1/executors/register`, {
     method: 'POST',
@@ -42,7 +42,6 @@ export async function handleServeCommand(args: string[]): Promise<void> {
       'Authorization': `Bearer ${token}`,
     },
     body: JSON.stringify({
-      force: forceFlag,
       executorMeta: {
         agentType: activeExecutor,
         maxConcurrentAgents,
@@ -52,33 +51,31 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     }),
   });
 
-  if (regRes.status === 409) {
-    const conflict = await regRes.json() as { error: string; activeExecutor?: { hostname: string; lastSeenAt: string } };
-    console.error(`✗ ${conflict.error}`);
-    if (conflict.activeExecutor) {
-      console.error(`  Active executor: hostname=${conflict.activeExecutor.hostname}, lastSeenAt=${conflict.activeExecutor.lastSeenAt}`);
-    }
-    console.error('  Use --force to override.');
-    process.exit(1);
-  }
   if (!regRes.ok) {
     const err = await regRes.json().catch(() => ({ message: regRes.statusText })) as { message?: string };
     console.error(`✗ Executor registration failed: ${err.message ?? `HTTP ${regRes.status}`}`);
     process.exit(1);
   }
 
-  const regData = await regRes.json() as { status: string; topichubUserId: string };
-  console.log(`  ✓ Executor registered (topichubUserId=${regData.topichubUserId})`);
+  const regData = await regRes.json() as {
+    executorToken: string;
+    identityId: string;
+    identityUniqueId: string;
+  };
+  const executorToken = regData.executorToken;
+
+  console.log(`  ✓ Executor registered (identity=${regData.identityUniqueId})`);
+  console.log(`  ✓ Executor token: ${executorToken.slice(0, 16)}...`);
   console.log(`  ✓ Max concurrent agents: ${maxConcurrentAgents}`);
 
-  // ── Heartbeat timer (T024) ────────────────────────────────────────
+  // ── Heartbeat timer ────────────────────────────────────────────────
   const heartbeatTimer = setInterval(async () => {
     try {
       await fetch(`${baseUrl}/api/v1/executors/heartbeat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
+          'Authorization': `Bearer ${executorToken}`,
         },
       });
     } catch {
@@ -90,7 +87,6 @@ export async function handleServeCommand(args: string[]): Promise<void> {
   const status: ServeStatus = {
     connected: false,
     serverUrl: config.serverUrl,
-    tenantId: config.tenantId,
     executor: activeExecutor,
     skillsDir: config.skillsDir,
     maxConcurrentAgents,
@@ -129,12 +125,12 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     updateDisplay();
   };
 
-  const qaApiClient = new ApiClient(config.serverUrl, token);
+  const qaApiClient = new ApiClient(config.serverUrl, executorToken);
   const qaRelay = new QaRelay(qaApiClient);
 
   const processor = new TaskProcessor({
     serverUrl: config.serverUrl,
-    token,
+    token: executorToken,
     skillsDir: config.skillsDir,
     configExecutor: config.executor,
     cliExecutorFlag: executorFlag,
@@ -168,9 +164,8 @@ export async function handleServeCommand(args: string[]): Promise<void> {
 
   const consumer = new EventConsumer({
     serverUrl: config.serverUrl,
-    tenantId: config.tenantId,
-    token,
-    topichubUserId: regData.topichubUserId,
+    token: executorToken,
+    executorToken,
     onDispatch: (event) => {
       taskQueue.push(event);
       drainQueue();
@@ -199,7 +194,7 @@ export async function handleServeCommand(args: string[]): Promise<void> {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
+          'Authorization': `Bearer ${executorToken}`,
         },
       });
     } catch {

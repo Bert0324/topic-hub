@@ -6,7 +6,6 @@ import { checkbox } from '@inquirer/prompts';
 export type AgentPlatform = 'cursor' | 'claude-code' | 'codex';
 
 interface RepoOptions {
-  tenantId: string;
   serverUrl: string;
 }
 
@@ -304,7 +303,6 @@ export async function initSkillScaffold(
   });
 
   fs.writeFileSync(markerPath, JSON.stringify({
-    tenantId: options.tenantId,
     serverUrl: options.serverUrl,
     platforms,
     createdAt: new Date().toISOString(),
@@ -355,7 +353,6 @@ export async function scaffoldRepo(
   fs.mkdirSync(repoDir, { recursive: true });
 
   fs.writeFileSync(path.join(repoDir, '.topichub-repo.json'), JSON.stringify({
-    tenantId: options.tenantId,
     serverUrl: options.serverUrl,
     createdAt: new Date().toISOString(),
     cliVersion: '0.1.0',
@@ -366,7 +363,6 @@ export async function scaffoldRepo(
     version: '1.0.0',
     private: true,
     topichub: {
-      tenantId: options.tenantId,
       serverUrl: options.serverUrl,
     },
   }, null, 2));

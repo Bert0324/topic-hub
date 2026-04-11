@@ -18,15 +18,13 @@ interface AiStatusResponse {
   circuitState?: string;
 }
 
-interface AiTenantConfig {
-  tenantId: string;
+interface AiConfig {
   aiEnabled: boolean;
   rateLimit: number;
   usageThisHour: number;
 }
 
 interface AiUsageResponse {
-  tenantId: string;
   period: string;
   totalRequests: number;
   totalTokens: number;
@@ -51,18 +49,18 @@ export async function handleAiCommand(sub: string, args: string[]) {
       break;
     }
     case 'enable': {
-      await api.patch('/admin/tenants/current/ai', { enabled: true });
-      console.log('✓ AI enabled for current tenant');
+      await api.patch('/admin/ai/config', { enabled: true });
+      console.log('✓ AI enabled');
       break;
     }
     case 'disable': {
-      await api.patch('/admin/tenants/current/ai', { enabled: false });
-      console.log('✓ AI disabled for current tenant');
+      await api.patch('/admin/ai/config', { enabled: false });
+      console.log('✓ AI disabled');
       break;
     }
     case 'config': {
       if (args.includes('--show')) {
-        const data = await api.get<AiTenantConfig>('/admin/tenants/current/ai');
+        const data = await api.get<AiConfig>('/admin/ai/config');
         console.log('\nAI Configuration');
         console.log(`  AI Enabled:   ${data.aiEnabled ? '✓ yes' : '✗ no'}`);
         console.log(`  Rate Limit:   ${data.rateLimit} requests/hour`);
@@ -73,7 +71,7 @@ export async function handleAiCommand(sub: string, args: string[]) {
           const value = args[args.indexOf(setArg) + 1] ?? setArg.split('=')[1];
           if (value?.startsWith('rate-limit=')) {
             const limit = parseInt(value.split('=')[1], 10);
-            await api.patch('/admin/tenants/current/ai', { rateLimit: limit });
+            await api.patch('/admin/ai/config', { rateLimit: limit });
             console.log(`✓ Rate limit updated: ${limit} requests/hour`);
           }
         } else {
@@ -85,7 +83,7 @@ export async function handleAiCommand(sub: string, args: string[]) {
     case 'usage': {
       const hours = args.find((a) => a.startsWith('--hours='))?.split('=')[1] ?? '24';
       const data = await api.get<AiUsageResponse>(
-        `/admin/tenants/current/ai/usage?hours=${hours}`,
+        `/admin/ai/usage?hours=${hours}`,
       );
       console.log(`\nAI Usage (${data.period})`);
       console.log('┌──────────────┬───────┬────────────┐');

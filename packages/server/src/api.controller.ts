@@ -27,6 +27,7 @@ import {
   LinkRequestSchema,
   UnlinkRequestSchema,
   PostQuestionRequestSchema,
+  CreateIdentitySchema,
   TopicHubError,
   ValidationError,
   NotFoundError,
@@ -93,6 +94,114 @@ export class ApiController {
       req.headers as Record<string, string>,
     );
     return tenantId;
+  }
+
+  private async requireSuperadmin(req: Request) {
+    return this.hub.getHub().identityAuth.requireSuperadmin(
+      req.headers as Record<string, string>,
+    );
+  }
+
+  private async requireExecutor(req: Request) {
+    return this.hub.getHub().identityAuth.requireExecutor(
+      req.headers as Record<string, string>,
+    );
+  }
+
+  private async resolveAuth(req: Request) {
+    return this.hub.getHub().identityAuth.resolveFromHeaders(
+      req.headers as Record<string, string>,
+    );
+  }
+
+  // ─── System Init (Phase 4) ────────────────────────────────────────
+
+  @Post('api/v1/init')
+  async init() {
+    try {
+      const result = await this.hub.getHub().superadmin.init();
+      return {
+        superadminToken: result.superadminToken,
+        uniqueId: result.uniqueId,
+        displayName: result.displayName,
+        message: 'System initialized. Store this token securely — it cannot be retrieved again.',
+      };
+    } catch (err) {
+      toHttpError(err);
+    }
+  }
+
+  // ─── Admin: Identities (Phase 5) ──────────────────────────────────
+
+  @Post('api/v1/admin/identities')
+  async createIdentity(@Req() req: Request) {
+    try {
+      await this.requireSuperadmin(req);
+      const body = CreateIdentitySchema.parse(req.body);
+      const result = await this.hub.getHub().superadmin.createIdentity(body);
+      return { ...result, message: 'Identity created. Distribute this token to the user securely.' };
+    } catch (err) {
+      if (err instanceof ZodError)
+        throw new BadRequestException({ message: 'Validation failed', errors: err.errors });
+      toHttpError(err);
+    }
+  }
+
+  @Get('api/v1/admin/identities')
+  async listIdentities(@Req() req: Request) {
+    try {
+      await this.requireSuperadmin(req);
+      const identities = await this.hub.getHub().superadmin.listIdentities();
+      return { identities };
+    } catch (err) {
+      toHttpError(err);
+    }
+  }
+
+  @Post('api/v1/admin/identities/:id/revoke')
+  async revokeIdentity(@Req() req: Request, @Param('id') id: string) {
+    try {
+      await this.requireSuperadmin(req);
+      const result = await this.hub.getHub().superadmin.revokeIdentity(id);
+      return { status: 'revoked', ...result };
+    } catch (err) {
+      toHttpError(err);
+    }
+  }
+
+  @Post('api/v1/admin/identities/:id/regenerate-token')
+  async regenerateIdentityToken(@Req() req: Request, @Param('id') id: string) {
+    try {
+      await this.requireSuperadmin(req);
+      const result = await this.hub.getHub().superadmin.regenerateToken(id);
+      return { ...result, message: 'Token regenerated. All existing executors for this identity have been revoked.' };
+    } catch (err) {
+      toHttpError(err);
+    }
+  }
+
+  // ─── Admin: Executors (Phase 6) ───────────────────────────────────
+
+  @Get('api/v1/admin/executors')
+  async listExecutors(@Req() req: Request) {
+    try {
+      await this.requireSuperadmin(req);
+      const executors = await this.hub.getHub().superadmin.listExecutors();
+      return { executors };
+    } catch (err) {
+      toHttpError(err);
+    }
+  }
+
+  @Post('api/v1/admin/executors/:executorToken/revoke')
+  async revokeExecutor(@Req() req: Request, @Param('executorToken') executorToken: string) {
+    try {
+      await this.requireSuperadmin(req);
+      await this.hub.getHub().superadmin.revokeExecutor(executorToken);
+      return { status: 'revoked' };
+    } catch (err) {
+      toHttpError(err);
+    }
   }
 
   // ─── Auth ─────────────────────────────────────────────────────────
@@ -437,12 +546,14 @@ export class ApiController {
   stream(@Req() req: Request): Observable<{ data: string; type?: string }> {
     const tenantId = (req.query as any).tenantId as string;
     const targetUserId = (req.query as any).targetUserId as string | undefined;
+    const executorToken = (req.query as any).executorToken as string | undefined;
     const hub = this.hub.getHub();
 
     const dispatches$ = new Observable<{ data: string; type?: string }>((sub) => {
       const unsub = hub.dispatch.onTask((task: any) => {
-        if (task.tenantId !== tenantId) return;
+        if (tenantId && task.tenantId !== tenantId) return;
         if (targetUserId && task.targetUserId && task.targetUserId !== targetUserId) return;
+        if (executorToken && task.targetExecutorToken && task.targetExecutorToken !== executorToken) return;
         sub.next({ type: 'dispatch', data: JSON.stringify(task) });
       });
       return () => unsub();
@@ -462,67 +573,55 @@ export class ApiController {
 export class ExecutorController {
   constructor(private readonly hub: TopicHubService) {}
 
-  private async resolveUser(req: Request) {
+  private extractBearerToken(req: Request): string {
     const auth = req.headers['authorization'] ?? '';
-    const token = typeof auth === 'string' && auth.startsWith('Bearer ')
-      ? auth.slice(7)
-      : '';
-    if (!token) throw new UnauthorizedException('Missing authorization');
+    if (typeof auth === 'string' && auth.startsWith('Bearer ')) {
+      return auth.slice(7);
+    }
+    throw new UnauthorizedException('Missing authorization');
+  }
 
-    const hub = this.hub.getHub();
-    const resolved = await hub.identity.resolveUserByClaimToken(token);
-    if (resolved) return { tenantId: resolved.tenantId, topichubUserId: resolved.topichubUserId, claimToken: token };
-
-    const { tenantId } = await hub.auth.resolveFromHeaders(
+  private async requireExecutor(req: Request) {
+    return this.hub.getHub().identityAuth.requireExecutor(
       req.headers as Record<string, string>,
     );
-    return { tenantId, topichubUserId: tenantId, claimToken: token };
   }
 
   @Post('register')
-  async register(
-    @Req() req: Request,
-    @Body() body: unknown,
-    @Res({ passthrough: true }) res: Response,
-  ) {
-    const { tenantId, topichubUserId, claimToken } = await this.resolveUser(req);
-
-    let parsed;
+  async register(@Req() req: Request, @Body() body: unknown) {
+    const token = this.extractBearerToken(req);
     try {
-      parsed = RegisterExecutorRequestSchema.parse(body);
+      const result = await this.hub.getHub().superadmin.registerExecutor(
+        token,
+        (body as any)?.executorMeta,
+      );
+      return result;
     } catch (err) {
-      if (err instanceof ZodError)
-        throw new BadRequestException({ message: 'Validation failed', errors: err.errors });
-      throw err;
+      toHttpError(err);
     }
-
-    const result = await this.hub.getHub().heartbeat.registerExecutor(
-      tenantId, topichubUserId, claimToken, parsed.force, parsed.executorMeta,
-    );
-
-    if (result.conflict) {
-      res.status(HttpStatus.CONFLICT);
-      return {
-        error: 'An executor is already active for your account',
-        activeExecutor: result.existing,
-      };
-    }
-
-    return { status: 'registered', topichubUserId };
   }
 
   @Post('heartbeat')
   async heartbeat(@Req() req: Request) {
-    const { tenantId, topichubUserId } = await this.resolveUser(req);
-    const result = await this.hub.getHub().heartbeat.heartbeat(tenantId, topichubUserId);
-    return { status: 'ok', pendingDispatches: result.pendingDispatches };
+    try {
+      const { executorToken } = await this.requireExecutor(req);
+      const executor = await this.hub.getHub().superadmin.resolveExecutorToken(executorToken);
+      if (!executor) throw new UnauthorizedException('Invalid executor token');
+      return { status: 'ok', executorToken: executorToken.slice(0, 12) + '...' };
+    } catch (err) {
+      toHttpError(err);
+    }
   }
 
   @Post('deregister')
   async deregister(@Req() req: Request) {
-    const { tenantId, topichubUserId } = await this.resolveUser(req);
-    await this.hub.getHub().heartbeat.deregister(tenantId, topichubUserId);
-    return { status: 'deregistered' };
+    try {
+      const { executorToken } = await this.requireExecutor(req);
+      await this.hub.getHub().superadmin.revokeExecutor(executorToken);
+      return { status: 'deregistered' };
+    } catch (err) {
+      toHttpError(err);
+    }
   }
 }
 

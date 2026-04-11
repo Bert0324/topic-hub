@@ -11,8 +11,8 @@ export interface DispatchEvent {
 
 export interface EventConsumerOptions {
   serverUrl: string;
-  tenantId: string;
   token: string;
+  executorToken?: string;
   topichubUserId?: string;
   onDispatch: (event: DispatchEvent) => void;
   onConnected: () => void;
@@ -61,9 +61,11 @@ export class EventConsumer {
   private connectSse(): void {
     if (this.closed) return;
 
-    let url = `${this.options.serverUrl}/api/v1/dispatches/stream?tenantId=${this.options.tenantId}`;
-    if (this.options.topichubUserId) {
-      url += `&targetUserId=${encodeURIComponent(this.options.topichubUserId)}`;
+    let url = `${this.options.serverUrl}/api/v1/dispatches/stream`;
+    if (this.options.executorToken) {
+      url += `?executorToken=${encodeURIComponent(this.options.executorToken)}`;
+    } else if (this.options.topichubUserId) {
+      url += `?targetUserId=${encodeURIComponent(this.options.topichubUserId)}`;
     }
     const es = new EventSource(url, {
       fetch: (input: any, init?: any) =>

@@ -16,6 +16,8 @@ export type {
   IdentityOperations,
   HeartbeatOperations,
   QaOperations,
+  SuperadminOperations,
+  IdentityAuthOperations,
 } from './topichub';
 
 // Config
@@ -109,11 +111,18 @@ export { HeartbeatService } from './services/heartbeat.service';
 export type { ExecutorHeartbeatMeta, RegisterExecutorResult } from './services/heartbeat.service';
 export { QaService } from './services/qa.service';
 export type { DispatchMeta } from './services/dispatch.service';
+export { SuperadminService } from './services/superadmin.service';
+export type { InitResult, CreateIdentityResult } from './services/superadmin.service';
+export { AuthService } from './services/auth.service';
+export type { ResolvedAuth } from './services/auth.service';
 
 // Entities
 export { UserIdentityBinding } from './entities/user-identity-binding.entity';
 export { ExecutorHeartbeat } from './entities/executor-heartbeat.entity';
 export { QaExchange } from './entities/qa-exchange.entity';
+export { Identity } from './entities/identity.entity';
+export { ExecutorRegistration } from './entities/executor-registration.entity';
+export { ImBinding } from './entities/im-binding.entity';
 
 // Identity
 export { PairingCode } from './identity/pairing-code.entity';
@@ -123,6 +132,7 @@ export {
   RegisterExecutorRequestSchema,
   PostQuestionRequestSchema,
   AnswerTextSchema,
+  CreateIdentitySchema,
   HEARTBEAT_INTERVAL_MS,
   HEARTBEAT_STALE_THRESHOLD_MS,
   PAIRING_CODE_TTL_MS,
@@ -132,6 +142,7 @@ export {
   QA_TIMEOUT_MS,
   DEFAULT_MAX_CONCURRENT_AGENTS,
   SAFE_ALPHABET,
+  IDENTITY_STATUS,
   generatePairingCode,
 } from './identity/identity-types';
 export type {
@@ -140,4 +151,14 @@ export type {
   RegisterExecutorRequest,
   PostQuestionRequest,
   AnswerText,
+  CreateIdentityInput,
 } from './identity/identity-types';
+export {
+  ExecutorMetaSchema,
+  RegisterExecutorSchema,
+  EXECUTOR_STATUS,
+} from './identity/executor-types';
+export type { ExecutorMeta, RegisterExecutorInput, ExecutorStatus } from './identity/executor-types';
+
+// Token utilities
+export { maskToken } from './common/token-utils';

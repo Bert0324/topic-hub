@@ -111,7 +111,7 @@ export async function handleSkillCommand(sub: string, args: string[]) {
         console.log('Usage: skill enable <name>');
         return;
       }
-      await api.patch(`/admin/tenants/current/skills/${name}`, { enabled: true });
+      await api.patch(`/admin/skills/${name}`, { enabled: true });
       console.log(`✓ Enabled ${name}`);
       break;
     }
@@ -121,7 +121,7 @@ export async function handleSkillCommand(sub: string, args: string[]) {
         console.log('Usage: skill disable <name>');
         return;
       }
-      await api.patch(`/admin/tenants/current/skills/${name}`, { enabled: false });
+      await api.patch(`/admin/skills/${name}`, { enabled: false });
       console.log(`✓ Disabled ${name}`);
       break;
     }
@@ -141,7 +141,7 @@ export async function handleSkillCommand(sub: string, args: string[]) {
         console.log('Usage: skill config <name> --show');
         return;
       }
-      const config = await api.get(`/admin/tenants/current/skills/${name}`);
+      const config = await api.get(`/admin/skills/${name}`);
       console.log(JSON.stringify(config, null, 2));
       break;
     }

@@ -23,7 +23,7 @@ export async function promptAdminToken(serverUrl: string): Promise<string> {
   // Validate token against server
   process.stdout.write('  Validating token... ');
   try {
-    const res = await fetch(`${serverUrl}/admin/tenants`, {
+    const res = await fetch(`${serverUrl}/admin/identities`, {
       headers: { Authorization: `Bearer ${tokenToUse}` },
       signal: AbortSignal.timeout(5000),
     });

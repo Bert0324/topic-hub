@@ -43,7 +43,6 @@ export const PublishSkillItemSchema = z.object({
 });
 
 export const PublishPayloadSchema = z.object({
-  tenantId: z.string().min(1),
   isPublic: z.boolean().optional().default(false),
   skills: z.array(PublishSkillItemSchema).min(1).max(50),
 });
