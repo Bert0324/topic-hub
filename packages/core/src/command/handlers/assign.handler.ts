@@ -1,12 +1,9 @@
 import type { TopicService } from '../../services/topic.service';
 import type { TopicHubLogger } from '../../common/logger';
-import type { DispatchMeta } from '../../services/dispatch.service';
 import type { ParsedCommand } from '../command-parser';
 import type { CommandContext } from '../command-router';
-
-export interface SkillPipelinePort {
-  execute(operation: string, topic: any, actor: string, extra?: Record<string, unknown>, dispatchMeta?: DispatchMeta): Promise<void>;
-}
+import type { SkillPipelinePort } from './create.handler';
+import { denyReasonIfCannotMutateTopic } from '../topic-mutation-access';
 
 export class AssignHandler {
   constructor(
@@ -18,7 +15,7 @@ export class AssignHandler {
   async execute(parsed: ParsedCommand, context: CommandContext) {
     const userId = (parsed.args.user as string) || (parsed.args.userId as string);
     if (!userId) {
-      return { success: false, error: 'Missing --user flag. Usage: /topichub assign --user <userId>' };
+      return { success: false, error: 'Missing --user flag. Usage: /assign --user <userId>' };
     }
 
     const topic = await this.topicService.findActiveTopicByGroup(
@@ -29,6 +26,11 @@ export class AssignHandler {
       return { success: false, error: 'No active topic found in this group.' };
     }
 
+    const deny = denyReasonIfCannotMutateTopic(topic, context.userId);
+    if (deny) {
+      return { success: false, error: deny };
+    }
+
     try {
       const updated = await this.topicService.assignUser(
         topic._id.toString(),
@@ -36,13 +38,7 @@ export class AssignHandler {
         context.userId,
       );
 
-      await this.skillPipeline.execute(
-        'assigned',
-        updated,
-        context.userId,
-        { userId },
-        context.dispatchMeta,
-      );
+      await this.skillPipeline.notifyChannelsOnly('assigned', updated);
 
       return {
         success: true,

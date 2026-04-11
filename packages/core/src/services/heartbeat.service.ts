@@ -98,6 +98,21 @@ export class HeartbeatService {
     return this.isFresh(doc.lastSeenAt);
   }
 
+  async isBoundExecutorSessionLive(
+    topichubUserId: string,
+    boundExecutorToken: string,
+  ): Promise<boolean> {
+    const doc = await this.heartbeatModel
+      .findOne({ topichubUserId })
+      .exec();
+    if (!doc) return false;
+    return (
+      this.isFresh(doc.lastSeenAt) &&
+      typeof doc.claimToken === 'string' &&
+      doc.claimToken === boundExecutorToken
+    );
+  }
+
   async getHeartbeat(
     topichubUserId: string,
   ): Promise<any | null> {

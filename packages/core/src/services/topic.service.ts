@@ -224,7 +224,7 @@ export class TopicService {
       .findOne({
         'groups.platform': platform,
         'groups.groupId': groupId,
-        status: { $in: [TopicStatus.OPEN, TopicStatus.IN_PROGRESS] },
+        status: { $ne: TopicStatus.CLOSED },
       })
       .exec();
   }

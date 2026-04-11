@@ -3,16 +3,24 @@ import type { TopicHubLogger } from '../../common/logger';
 import type { DispatchMeta } from '../../services/dispatch.service';
 import type { ParsedCommand } from '../command-parser';
 import type { CommandContext } from '../command-router';
-import type { SkillRegistryPort } from '../command-router';
 
+/** Shared by handlers; {@link RelayHandler} and {@link SkillInvokeHandler} use {@link SkillPipelinePort.execute} for executor dispatch. */
 export interface SkillPipelinePort {
-  execute(operation: string, topic: any, actor: string, extra?: Record<string, unknown>, dispatchMeta?: DispatchMeta): Promise<void>;
+  execute(
+    operation: string,
+    topic: unknown,
+    actor: string,
+    extra?: Record<string, unknown>,
+    dispatchMeta?: DispatchMeta,
+    options?: { dispatchSkillName?: string },
+  ): Promise<void>;
+  /** IM bridge line only — does not enqueue a local executor task. */
+  notifyChannelsOnly(operation: string, topicData: unknown): Promise<void>;
 }
 
 export class CreateHandler {
   constructor(
     private readonly topicService: TopicService,
-    private readonly skillRegistry: SkillRegistryPort,
     private readonly skillPipeline: SkillPipelinePort,
     private readonly logger: TopicHubLogger,
   ) {}
@@ -20,22 +28,11 @@ export class CreateHandler {
   async execute(parsed: ParsedCommand, context: CommandContext) {
     const topicType = parsed.type;
     if (!topicType) {
-      return { success: false, error: 'Topic type is required. Usage: /topichub create <type> --title "Title"' };
-    }
-
-    const typeSkill = this.skillRegistry.getTypeSkillForType(topicType);
-    if (!typeSkill) {
-      return { success: false, error: `Unknown topic type: ${topicType}` };
+      return { success: false, error: 'Topic type is required. Usage: /create <type> --title "Title"' };
     }
 
     const metadata: Record<string, unknown> = { ...parsed.args };
     delete metadata.title;
-
-    const validation = typeSkill.validateMetadata(metadata);
-    if (!validation.valid) {
-      const errorMessages = validation.errors?.map((e: any) => `${e.field}: ${e.message}`).join('; ');
-      return { success: false, error: `Validation failed: ${errorMessages}` };
-    }
 
     const existing = await this.topicService.findActiveTopicByGroup(
       context.platform,
@@ -44,7 +41,8 @@ export class CreateHandler {
     if (existing) {
       return {
         success: false,
-        error: 'An active topic already exists in this group. Close or resolve it first.',
+        error:
+          'This group already has a topic that is not closed. Close it before creating another.',
       };
     }
 
@@ -62,13 +60,7 @@ export class CreateHandler {
         },
       });
 
-      await this.skillPipeline.execute(
-        'created',
-        topic,
-        context.userId,
-        undefined,
-        context.dispatchMeta,
-      );
+      await this.skillPipeline.notifyChannelsOnly('created', topic);
 
       return { success: true, data: topic, message: `Topic "${title}" created successfully.` };
     } catch (err) {

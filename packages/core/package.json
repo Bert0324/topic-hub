@@ -17,7 +17,7 @@
     "jsonwebtoken": "^9.0.0",
     "jwks-rsa": "^3.1.0",
     "mongoose": "^8.0.0",
-    "openclaw": ">=2026.2.25",
+    "openclaw": ">=2026.3.22",
     "zod": "^3.23.0"
   },
   "devDependencies": {

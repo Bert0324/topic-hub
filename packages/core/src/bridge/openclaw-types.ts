@@ -35,11 +35,17 @@ const SlackChannelSchema = z.object({
   appToken: z.string().min(1),
 });
 
+/** WeChat via the openclaw-weixin plugin (QR-code login; no static credentials). */
+const WeixinChannelSchema = z.object({
+  enabled: z.boolean().optional().default(true),
+});
+
 const ChannelsSchema = z.object({
   feishu: FeishuChannelSchema.optional(),
   discord: DiscordChannelSchema.optional(),
   telegram: TelegramChannelSchema.optional(),
   slack: SlackChannelSchema.optional(),
+  weixin: WeixinChannelSchema.optional(),
 }).refine(
   (ch) => Object.values(ch).some((v) => v !== undefined),
   { message: 'At least one channel must be configured' },
@@ -65,6 +71,7 @@ const OpenClawWebhookDataSchema = z.object({
   message: z.preprocess((v) => (v == null ? '' : String(v)), z.string()),
   sessionId: jsonString(1),
   platform: z.string().min(1).optional(),
+  isDm: z.boolean().optional(),
 });
 
 /** Body signed by HMAC (embedded relay sends this as raw bytes + `X-TopicHub-Signature` header). */
@@ -87,7 +94,10 @@ export interface OpenClawInboundResult {
   channel: string;
   userId: string;
   rawCommand: string;
+  /** Original inbound text before mention normalization (for relay to executor). */
+  originalMessage: string;
   sessionId: string;
+  isDm: boolean;
 }
 
 export interface OpenClawSendParams {

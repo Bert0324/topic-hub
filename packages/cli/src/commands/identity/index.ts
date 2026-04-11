@@ -1,4 +1,5 @@
 import { ApiClient } from '../../api-client/api-client.js';
+import { loadConfig } from '../../config/config.js';
 
 function extractFlag(args: string[], flag: string): string | undefined {
   const idx = args.indexOf(flag);
@@ -7,16 +8,15 @@ function extractFlag(args: string[], flag: string): string | undefined {
   return eqFlag?.split('=')[1];
 }
 
-function buildClient(args: string[], token?: string): { client: ApiClient; token: string } {
-  const serverUrl = extractFlag(args, '--server') ?? process.env.TOPICHUB_SERVER_URL;
-  const resolvedToken = token ?? extractFlag(args, '--token') ?? process.env.TOPICHUB_SUPERADMIN_TOKEN ?? '';
-  if (!resolvedToken) {
-    console.error('Missing --token flag or TOPICHUB_SUPERADMIN_TOKEN env var.');
+function buildClient(): ApiClient {
+  let serverUrl: string;
+  try {
+    serverUrl = loadConfig().serverUrl;
+  } catch {
+    console.error('No configuration. Run `topichub-admin init` first.');
     process.exit(1);
   }
-  const client = new ApiClient(serverUrl);
-  client.setToken(resolvedToken);
-  return { client, token: resolvedToken };
+  return new ApiClient(serverUrl);
 }
 
 export async function handleIdentityCommand(
@@ -24,14 +24,40 @@ export async function handleIdentityCommand(
   args: string[],
 ): Promise<void> {
   switch (subcommand) {
+    case 'me': {
+      const client = buildClient();
+      try {
+        const result = await client.get<{
+          uniqueId: string;
+          displayName: string;
+          isSuperAdmin: boolean;
+          status: string;
+          executorCount: number;
+          createdAt: string;
+        }>('/api/v1/identity/me');
+
+        const badge = result.isSuperAdmin ? ' [superadmin]' : '';
+        console.log(`\n  ${result.uniqueId}${badge} — ${result.displayName}`);
+        console.log(`  Status: ${result.status}`);
+        console.log(`  Active executors: ${result.executorCount}`);
+        console.log(`  Created: ${result.createdAt}\n`);
+      } catch (err) {
+        console.error(`✗ ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+      break;
+    }
     case 'create': {
       const uniqueId = extractFlag(args, '--unique-id');
       const name = extractFlag(args, '--name');
       if (!uniqueId || !name) {
-        console.error('Usage: topichub-admin identity create --token <superadmin-token> --unique-id <id> --name <display-name> [--server <url>]');
+        console.error(
+          'Usage: topichub-admin identity create --unique-id <id> --name <display-name>',
+        );
+        console.error('Requires superadmin token from `topichub-admin init` or `login`.');
         process.exit(1);
       }
-      const { client } = buildClient(args);
+      const client = buildClient();
       try {
         const result = await client.post<{
           id: string;
@@ -54,7 +80,7 @@ export async function handleIdentityCommand(
       break;
     }
     case 'list': {
-      const { client } = buildClient(args);
+      const client = buildClient();
       try {
         const result = await client.get<{ identities: Array<{
           id: string;
@@ -86,10 +112,11 @@ export async function handleIdentityCommand(
     case 'revoke': {
       const id = extractFlag(args, '--id');
       if (!id) {
-        console.error('Usage: topichub-admin identity revoke --token <superadmin-token> --id <identity-id> [--server <url>]');
+        console.error('Usage: topichub-admin identity revoke --id <identity-id>');
+        console.error('Requires superadmin token from `topichub-admin init` or `login`.');
         process.exit(1);
       }
-      const { client } = buildClient(args);
+      const client = buildClient();
       try {
         const result = await client.post<{ status: string; executorsRevoked: number }>(
           `/api/v1/admin/identities/${id}/revoke`,
@@ -104,10 +131,11 @@ export async function handleIdentityCommand(
     case 'regenerate-token': {
       const id = extractFlag(args, '--id');
       if (!id) {
-        console.error('Usage: topichub-admin identity regenerate-token --token <superadmin-token> --id <identity-id> [--server <url>]');
+        console.error('Usage: topichub-admin identity regenerate-token --id <identity-id>');
+        console.error('Requires superadmin token from `topichub-admin init` or `login`.');
         process.exit(1);
       }
-      const { client } = buildClient(args);
+      const client = buildClient();
       try {
         const result = await client.post<{ token: string; executorsRevoked: number; message: string }>(
           `/api/v1/admin/identities/${id}/regenerate-token`,
@@ -125,9 +153,10 @@ export async function handleIdentityCommand(
     default:
       console.log('Usage: topichub-admin identity <subcommand> [options]');
       console.log('Subcommands:');
-      console.log('  create              Create a new identity');
-      console.log('  list                List all identities');
-      console.log('  revoke              Revoke an identity');
-      console.log('  regenerate-token    Regenerate identity token');
+      console.log('  me                  View your own identity details');
+      console.log('  create              Create a new identity (superadmin)');
+      console.log('  list                List all identities (superadmin)');
+      console.log('  revoke              Revoke an identity (superadmin)');
+      console.log('  regenerate-token    Regenerate identity token (superadmin)');
   }
 }

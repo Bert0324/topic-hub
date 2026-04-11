@@ -15,7 +15,6 @@ export class ApiClient {
     const raw =
       baseUrl ??
       config?.serverUrl ??
-      process.env.TOPICHUB_SERVER_URL ??
       'http://localhost:3000';
     this.baseUrl = normalizeBaseUrl(raw);
     if (token) this.token = token;
@@ -38,12 +37,20 @@ export class ApiClient {
     }
   }
 
-  async request<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
-    await this.ensureAuth();
+  async request<T = unknown>(
+    method: string,
+    path: string,
+    body?: unknown,
+    options?: { auth?: boolean },
+  ): Promise<T> {
+    const withAuth = options?.auth !== false;
+    if (withAuth) {
+      await this.ensureAuth();
+    }
 
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
+    if (withAuth && this.token) headers['Authorization'] = `Bearer ${this.token}`;
 
     const res = await fetch(url, {
       method,
@@ -61,17 +68,17 @@ export class ApiClient {
     return res.json() as Promise<T>;
   }
 
-  get<T = unknown>(path: string) {
-    return this.request<T>('GET', path);
+  get<T = unknown>(path: string, options?: { auth?: boolean }) {
+    return this.request<T>('GET', path, undefined, options);
   }
-  post<T = unknown>(path: string, body?: unknown) {
-    return this.request<T>('POST', path, body);
+  post<T = unknown>(path: string, body?: unknown, options?: { auth?: boolean }) {
+    return this.request<T>('POST', path, body, options);
   }
-  patch<T = unknown>(path: string, body?: unknown) {
-    return this.request<T>('PATCH', path, body);
+  patch<T = unknown>(path: string, body?: unknown, options?: { auth?: boolean }) {
+    return this.request<T>('PATCH', path, body, options);
   }
-  delete<T = unknown>(path: string) {
-    return this.request<T>('DELETE', path);
+  delete<T = unknown>(path: string, options?: { auth?: boolean }) {
+    return this.request<T>('DELETE', path, undefined, options);
   }
 
   async publishSkills(payload: { skills: unknown[] }): Promise<unknown> {

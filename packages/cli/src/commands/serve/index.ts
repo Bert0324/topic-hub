@@ -2,12 +2,13 @@ import os from 'node:os';
 import { HEARTBEAT_INTERVAL_MS, DEFAULT_MAX_CONCURRENT_AGENTS } from '@topichub/core';
 import { loadConfig } from '../../config/config.js';
 import { loadAdminToken } from '../../auth/auth.js';
-import { isAgentAvailable } from '../../executors/detector.js';
+import { detectAgents, isAgentAvailable } from '../../executors/detector.js';
 import { ApiClient } from '../../api-client/api-client.js';
 import { EventConsumer, type DispatchEvent } from './event-consumer.js';
 import { TaskProcessor } from './task-processor.js';
 import { QaRelay } from './qa-relay.js';
 import { renderStatus, type ServeStatus, type EventLogEntry } from './status-display.js';
+import { resolveServeExecutorArgs } from './resolve-executor-args.js';
 
 export async function handleServeCommand(args: string[]): Promise<void> {
   const config = loadConfig();
@@ -15,6 +16,7 @@ export async function handleServeCommand(args: string[]): Promise<void> {
   const executorFlag = extractFlag(args, '--executor');
   const maxAgentsFlag = extractFlag(args, '--max-agents');
   const forceFlag = args.includes('--force');
+  const skipExecutorPrompts = args.includes('--yes');
 
   const maxConcurrentAgents = maxAgentsFlag
     ? Math.max(1, Math.min(10, parseInt(maxAgentsFlag, 10) || DEFAULT_MAX_CONCURRENT_AGENTS))
@@ -35,21 +37,37 @@ export async function handleServeCommand(args: string[]): Promise<void> {
 
   // ── Executor registration ──────────────────────────────────────────
   const baseUrl = config.serverUrl.replace(/\/+$/, '');
-  const regRes = await fetch(`${baseUrl}/api/v1/executors/register`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      executorMeta: {
-        agentType: activeExecutor,
-        maxConcurrentAgents,
-        hostname: os.hostname(),
-        pid: process.pid,
+  let regRes: Response;
+  try {
+    regRes = await fetch(`${baseUrl}/api/v1/executors/register`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
       },
-    }),
-  });
+      body: JSON.stringify({
+        executorMeta: {
+          agentType: activeExecutor,
+          maxConcurrentAgents,
+          hostname: os.hostname(),
+          pid: process.pid,
+        },
+      }),
+    });
+  } catch (err) {
+    const code =
+      err instanceof Error && err.cause && typeof err.cause === 'object' && 'code' in err.cause
+        ? String((err.cause as { code?: unknown }).code)
+        : undefined;
+    if (code === 'ECONNREFUSED') {
+      console.error(
+        `Cannot reach Topic Hub at ${baseUrl} (connection refused). ` +
+          'Start the API first, e.g. from the repo root: ./start-local.sh — or `pnpm --filter @topichub/server run dev` with MongoDB running.',
+      );
+      process.exit(1);
+    }
+    throw err;
+  }
 
   if (!regRes.ok) {
     const err = await regRes.json().catch(() => ({ message: regRes.statusText })) as { message?: string };
@@ -64,9 +82,51 @@ export async function handleServeCommand(args: string[]): Promise<void> {
   };
   const executorToken = regData.executorToken;
 
-  console.log(`  ✓ Executor registered (identity=${regData.identityUniqueId})`);
-  console.log(`  ✓ Executor token: ${executorToken.slice(0, 16)}...`);
-  console.log(`  ✓ Max concurrent agents: ${maxConcurrentAgents}`);
+  let pairingCode: string | null = null;
+  let pairingExpiresAt: string | null = null;
+  let pairingWarning: string | null = null;
+
+  // Generate pairing code for IM binding (shown in renderStatus — avoid console.log here: console.clear wipes it)
+  try {
+    const pairingRes = await fetch(`${baseUrl}/api/v1/executors/pairing-code`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${executorToken}`,
+      },
+    });
+    if (pairingRes.ok) {
+      const pairingData = await pairingRes.json() as { code: string; expiresAt: string };
+      pairingCode = pairingData.code;
+      pairingExpiresAt = pairingData.expiresAt;
+    } else {
+      const errBody = await pairingRes.text().catch(() => '');
+      const snippet = errBody.trim().slice(0, 160);
+      pairingWarning = `pairing-code HTTP ${pairingRes.status}${snippet ? `: ${snippet}` : ''}`;
+    }
+  } catch (err) {
+    pairingWarning =
+      err instanceof Error ? err.message : 'Could not reach pairing-code endpoint';
+  }
+
+  const agents = detectAgents();
+  const agentMatch =
+    activeExecutor === 'claude-code' || activeExecutor === 'codex'
+      ? agents.find((a) => a.type === activeExecutor)
+      : undefined;
+  const agentCliLine = agentMatch
+    ? `${agentMatch.command} ${agentMatch.version} — ${agentMatch.path}`
+    : undefined;
+
+  const resolvedExecutorArgs = await resolveServeExecutorArgs(
+    activeExecutor,
+    config.executorArgs,
+    { skipPrompts: skipExecutorPrompts },
+  );
+  const executorLaunchArgsLine =
+    resolvedExecutorArgs && resolvedExecutorArgs.length > 0
+      ? resolvedExecutorArgs.join(' ')
+      : undefined;
 
   // ── Heartbeat timer ────────────────────────────────────────────────
   const heartbeatTimer = setInterval(async () => {
@@ -90,6 +150,13 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     executor: activeExecutor,
     skillsDir: config.skillsDir,
     maxConcurrentAgents,
+    identityUniqueId: regData.identityUniqueId,
+    agentCliLine,
+    executorLaunchArgsLine,
+    pairingCode,
+    pairingExpiresAt,
+    pairingWarning,
+    pairingRotatedNotice: null,
     events: [],
     startedAt: new Date(),
     counters: { completed: 0, running: 0, failed: 0 },
@@ -97,29 +164,34 @@ export async function handleServeCommand(args: string[]): Promise<void> {
 
   const updateDisplay = () => renderStatus(status);
 
+  let pairingRotatedNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+
   const taskQueue: DispatchEvent[] = [];
 
   const onEventUpdate = (entry: EventLogEntry) => {
-    const idx = status.events.findIndex(
-      (e) =>
-        e.skillName === entry.skillName &&
-        e.topicTitle === entry.topicTitle &&
-        e.status === 'running',
-    );
+    let idx =
+      entry.dispatchId != null
+        ? status.events.findIndex((e) => e.dispatchId === entry.dispatchId)
+        : -1;
+    if (idx < 0) {
+      idx = status.events.findIndex(
+        (e) =>
+          e.skillName === entry.skillName &&
+          e.topicTitle === entry.topicTitle &&
+          e.status === 'running',
+      );
+    }
     if (idx >= 0) {
       status.events[idx] = entry;
     } else {
       status.events.push(entry);
     }
 
-    if (entry.status === 'completed') {
-      status.counters.completed++;
-      status.counters.running = Math.max(0, status.counters.running - 1);
-    } else if (entry.status === 'failed') {
-      status.counters.failed++;
-      status.counters.running = Math.max(0, status.counters.running - 1);
-    } else if (entry.status === 'running') {
-      status.counters.running++;
+    status.counters = { completed: 0, running: 0, failed: 0 };
+    for (const e of status.events) {
+      if (e.status === 'completed') status.counters.completed++;
+      else if (e.status === 'failed') status.counters.failed++;
+      else if (e.status === 'running') status.counters.running++;
     }
 
     updateDisplay();
@@ -134,7 +206,7 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     skillsDir: config.skillsDir,
     configExecutor: config.executor,
     cliExecutorFlag: executorFlag,
-    executorArgs: config.executorArgs,
+    executorArgs: resolvedExecutorArgs,
     maxConcurrentAgents,
     onEventUpdate,
     onAgentQuestion: async (dispatchId, question, context) => {
@@ -165,7 +237,6 @@ export async function handleServeCommand(args: string[]): Promise<void> {
   const consumer = new EventConsumer({
     serverUrl: config.serverUrl,
     token: executorToken,
-    executorToken,
     onDispatch: (event) => {
       taskQueue.push(event);
       drainQueue();
@@ -181,12 +252,32 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     onHeartbeat: () => {
       updateDisplay();
     },
+    onPairingRotated: (payload) => {
+      status.pairingCode = payload.code;
+      status.pairingExpiresAt = payload.expiresAt;
+      status.pairingWarning = null;
+      status.pairingRotatedNotice =
+        'Pairing code was rotated (previous code was exposed). Copy the new code below; use /register in DM only.';
+      if (pairingRotatedNoticeTimer) {
+        clearTimeout(pairingRotatedNoticeTimer);
+      }
+      pairingRotatedNoticeTimer = setTimeout(() => {
+        status.pairingRotatedNotice = null;
+        pairingRotatedNoticeTimer = undefined;
+        updateDisplay();
+      }, 90_000);
+      (pairingRotatedNoticeTimer as NodeJS.Timeout).unref();
+      updateDisplay();
+    },
   });
 
   // Graceful shutdown (T025)
   const shutdown = async () => {
     console.log('\n  Shutting down...');
     clearInterval(heartbeatTimer);
+    if (pairingRotatedNoticeTimer) {
+      clearTimeout(pairingRotatedNoticeTimer);
+    }
     consumer.stop();
 
     try {

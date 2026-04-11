@@ -43,6 +43,8 @@ function buildOpenClawJson(
 
   if (bridgeConfig.channels.feishu) {
     const f = bridgeConfig.channels.feishu;
+    // Per-channel `commands` is rejected by OpenClaw FeishuConfigSchema (.strict());
+    // disabling built-in commands is done via root-level `commands` below.
     channels.feishu = {
       enabled: true,
       dmPolicy: 'open',
@@ -68,10 +70,6 @@ function buildOpenClawJson(
       allowFrom: ['*'],
       groupPolicy: 'open',
       token: d.botToken,
-      commands: {
-        native: false,
-        nativeSkills: false,
-      },
     };
     if (d.guildId) {
       discordEntry.guilds = {
@@ -103,6 +101,20 @@ function buildOpenClawJson(
     };
   }
 
+  if (bridgeConfig.channels.weixin) {
+    channels['openclaw-weixin'] = {
+      enabled: true,
+      dmPolicy: 'open',
+      allowFrom: ['*'],
+      groupPolicy: 'open',
+    };
+  }
+
+  const plugins: Record<string, unknown> = {};
+  if (bridgeConfig.channels.weixin) {
+    plugins['openclaw-weixin'] = { enabled: true };
+  }
+
   const config = {
     gateway: {
       port,
@@ -111,9 +123,7 @@ function buildOpenClawJson(
       reload: { mode: 'off' },
     },
     // Topic Hub handles all commands via the inbound-relay hook → webhook; disable
-    // OpenClaw's own command surfaces. The agent model points to a noop endpoint on
-    // the Topic Hub server so agent runs succeed silently (empty response) instead of
-    // crashing with "Unknown model".
+    // OpenClaw's own command surfaces completely (including built-in /help).
     commands: {
       native: false,
       nativeSkills: false,
@@ -146,6 +156,7 @@ function buildOpenClawJson(
       },
     },
     channels,
+    ...(Object.keys(plugins).length > 0 ? { plugins: { entries: plugins } } : {}),
     hooks: {
       enabled: true,
       token: crypto.randomBytes(32).toString('hex'),
@@ -211,15 +222,49 @@ const SECRET = process.env.TOPICHUB_WEBHOOK_HMAC_SECRET ?? ${JSON.stringify(secr
 
 function normalizeImCommandMessage(raw) {
   let s = String(raw ?? "").trim();
+  s = s.replace(/\\uFF0F/g, "/");
+  // Discord / Slack raw mentions: <@id>, <@!id>, <@&id> (alphanumeric IDs)
   for (;;) {
-    const m = s.match(/^(<@!?\\d+>|<@&\\d+>)\\s*/);
+    const m = s.match(/^(<@[!&]?[\\w]+>)\\s*/);
     if (!m) break;
     s = s.slice(m[0].length).trim();
   }
+  // Feishu/Lark self-closing <at …/> (before paired tags and before indexOf("/"))
+  for (;;) {
+    const m = s.match(/^<at\\b[^>]*\\/>\\s*/);
+    if (!m) break;
+    s = s.slice(m[0].length).trim();
+  }
+  // Feishu/Lark rich-text <at> tags
+  for (;;) {
+    const m = s.match(/^<at\\b[^>]*>.*?<\\/at>\\s*/);
+    if (!m) break;
+    s = s.slice(m[0].length).trim();
+  }
+  // Telegram: /command@BotName → /command
+  s = s.replace(/^(\\/\\w+)@\\S+/, "$1");
+  // Short label before /command (e.g. Feishu "Topic Hub /help")
+  {
+    const slashIdx = s.indexOf("/");
+    if (slashIdx > 0) {
+      const prefix = s.slice(0, slashIdx).trim();
+      const tail = s.slice(slashIdx).trimStart();
+      if (
+        prefix.indexOf("/") === -1 &&
+        new RegExp("^/[A-Za-z0-9_-]+").test(tail) &&
+        prefix.length > 0 &&
+        prefix.length <= 48
+      ) {
+        const words = prefix.split(/\\s+/).filter(Boolean);
+        if (words.length >= 1 && words.length <= 3) {
+          s = tail;
+        }
+      }
+    }
+  }
+  // Plain @mention text before a slash command
   if (s.startsWith("@")) {
-    const ci = s.indexOf("/topichub");
-    const ai = s.indexOf("/answer");
-    const idx = ci >= 0 && ai >= 0 ? Math.min(ci, ai) : ci >= 0 ? ci : ai;
+    const idx = s.indexOf("/");
     if (idx > 0) s = s.slice(idx);
   }
   return s;
@@ -231,30 +276,77 @@ const handler = async (event) => {
   const ctx = event.context || {};
   const content = normalizeImCommandMessage(ctx.content ?? "");
 
-  // Resolve the actual channel ID. OpenClaw sets ctx.channelId to the provider
-  // name (e.g. "discord"), so extract the real ID from the sessionKey
-  // (format: agent:main:<provider>:channel:<channelId>).
-  let channelId = String(ctx.channelId ?? "");
   const sk = String(event.sessionKey ?? "");
-  const skParts = sk.split(":");
-  const chIdx = skParts.indexOf("channel");
-  if (chIdx >= 0 && chIdx + 1 < skParts.length) {
-    channelId = skParts[chIdx + 1];
+  const senderId = String(ctx.metadata?.senderId ?? ctx.from ?? "");
+  const ctxChannelId = String(ctx.channelId ?? "").trim();
+
+  function inferPlatformFromSessionKey(sessionKey) {
+    const low = String(sessionKey || "").toLowerCase();
+    if (low.includes(":feishu:") || low.includes(":lark:")) return "feishu";
+    if (low.includes(":discord:")) return "discord";
+    if (low.includes(":telegram:")) return "telegram";
+    if (low.includes(":slack:")) return "slack";
+    if (low.includes("weixin")) return "openclaw-weixin";
+    return "";
   }
+
+  const PLUGIN_IDS = new Set(["feishu", "lark", "discord", "telegram", "slack", "openclaw-weixin"]);
+  const platformOut =
+    inferPlatformFromSessionKey(sk)
+    || (PLUGIN_IDS.has(ctxChannelId.toLowerCase()) ? ctxChannelId : "");
+
+  // Resolve the reply target (chat or user ID) for the IM provider.
+  // 1) ctx.metadata.chatId — set by Feishu/Discord plugins
+  // 2) session key group segment — agent:main:<provider>:group:<chatId>
+  // 3) session key dm segment — agent:main:<provider>:dm:<userId>
+  // 4) ctx.channelId when it is NOT a plugin id (some runtimes put chat id here)
+  // 5) "user:<senderId>" — DM fallback (Feishu user:openId format)
+  let replyTarget = "";
+  if (ctx.metadata?.chatId) {
+    replyTarget = String(ctx.metadata.chatId);
+  } else {
+    const skParts = sk.split(":");
+    const grpIdx = skParts.indexOf("group");
+    const chIdx = skParts.indexOf("channel");
+    const dmIdx = skParts.indexOf("dm");
+    if (grpIdx >= 0 && grpIdx + 1 < skParts.length) {
+      replyTarget = skParts[grpIdx + 1];
+    } else if (chIdx >= 0 && chIdx + 1 < skParts.length) {
+      replyTarget = skParts[chIdx + 1];
+    } else if (dmIdx >= 0 && dmIdx + 1 < skParts.length) {
+      replyTarget = "user:" + skParts[dmIdx + 1];
+    } else if (ctxChannelId && !PLUGIN_IDS.has(ctxChannelId.toLowerCase())) {
+      replyTarget = ctxChannelId;
+    } else if (senderId) {
+      replyTarget = "user:" + senderId;
+    }
+  }
+
+  // DM detection: OpenClaw sets ctx.scope or we infer from session key structure.
+  // Group sessions: agent:main:<provider>:group:<chatId>
+  // DM sessions:   agent:main:main  or  agent:main:<provider>:dm:<userId>
+  const isDm = ctx.scope === "dm"
+    || (ctx.scope !== "group" && !sk.includes(":group:"));
+
+  const imChannel = replyTarget || (senderId ? "user:" + senderId : "");
 
   const body = {
     event: "message.received",
     timestamp: new Date().toISOString(),
     data: {
-      channel: channelId,
-      user: String(ctx.metadata?.senderId ?? ctx.from ?? ""),
+      channel: imChannel,
+      user: senderId,
       message: String(content),
       sessionId: sk,
+      ...(platformOut ? { platform: platformOut } : {}),
+      isDm,
     },
   };
 
   const bodyStr = JSON.stringify(body);
   const sig = "sha256=" + crypto.createHmac("sha256", SECRET).update(bodyStr).digest("hex");
+
+  console.log("[topichub-relay] forwarding:", JSON.stringify({ platform: platformOut, target: imChannel, content }));
 
   try {
     const res = await fetch(WEBHOOK_URL, {
@@ -272,6 +364,7 @@ const handler = async (event) => {
   } catch (err) {
     console.error("[topichub-relay] webhook POST error:", err?.message ?? err);
   }
+
 };
 
 export default handler;

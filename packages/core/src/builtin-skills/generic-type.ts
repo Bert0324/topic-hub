@@ -1,11 +1,9 @@
 export const GENERIC_TYPE_SKILL_MD = `---
 name: generic-type
 description: >-
-  General-purpose topic type for any trackable item.
+  General-purpose topic handler for any trackable item.
   Supports description, priority, and labels metadata.
   Standard status flow: open → in_progress → resolved → closed.
-category: type
-topicType: generic
 ---
 
 # Generic Topic Handler

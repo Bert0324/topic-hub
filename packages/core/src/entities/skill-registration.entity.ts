@@ -1,6 +1,5 @@
 import { prop, modelOptions, Severity, index } from '@typegoose/typegoose';
 import mongoose from 'mongoose';
-import { SkillCategory } from '../common/enums';
 
 export interface SkillMdData {
   name: string;
@@ -34,8 +33,8 @@ export class SkillRegistration {
   @prop({ required: true })
   name!: string;
 
-  @prop({ required: true, enum: SkillCategory })
-  category!: SkillCategory;
+  @prop()
+  category?: string;
 
   @prop({ required: true })
   version!: string;
@@ -54,4 +53,17 @@ export class SkillRegistration {
 
   @prop({ type: () => PublishedSkillContent, default: null, _id: false })
   publishedContent!: PublishedSkillContent | null;
+
+  /** Identity that published this skill to the catalog (superadmin or future author flows). */
+  @prop()
+  authorIdentityId?: string;
+
+  @prop({ default: 0 })
+  likeCount!: number;
+
+  @prop({ default: 0 })
+  usageCount!: number;
+
+  @prop()
+  publishedAt?: Date;
 }

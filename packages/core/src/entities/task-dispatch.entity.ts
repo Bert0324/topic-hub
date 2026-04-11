@@ -111,6 +111,10 @@ export class DispatchResult {
   @prop()
   text?: string;
 
+  /** Short plain-text summary for IM (from local executor); full output remains in `text`. */
+  @prop()
+  imSummary?: string;
+
   @prop()
   executorType?: string;
 
@@ -130,6 +134,7 @@ const DISPATCH_TTL_DAYS = 30;
 })
 @index({ status: 1, createdAt: 1 })
 @index({ targetUserId: 1, status: 1, createdAt: 1 })
+@index({ targetExecutorToken: 1, status: 1, createdAt: 1 })
 @index({ topicId: 1 })
 @index({ status: 1, claimExpiry: 1 })
 @index({ createdAt: 1 }, { expireAfterSeconds: DISPATCH_TTL_DAYS * 86400 })
@@ -168,6 +173,10 @@ export class TaskDispatch {
 
   @prop({ default: null })
   targetUserId?: string | null;
+
+  /** Routes dispatch to the serve session that generated the pairing code (same as binding.claimToken). */
+  @prop({ default: null })
+  targetExecutorToken?: string | null;
 
   @prop({ default: null })
   sourceChannel?: string | null;

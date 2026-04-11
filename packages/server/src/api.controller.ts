@@ -16,16 +16,15 @@ import {
   ConflictException,
   InternalServerErrorException,
   UnauthorizedException,
+  ForbiddenException,
   RawBodyRequest,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
-import { Observable, interval, map, merge } from 'rxjs';
+import { Observable, defer, from, interval, map, merge, mergeMap } from 'rxjs';
 import { ZodError } from 'zod';
 import {
   EventPayloadSchema,
   RegisterExecutorRequestSchema,
-  LinkRequestSchema,
-  UnlinkRequestSchema,
   PostQuestionRequestSchema,
   CreateIdentitySchema,
   TopicHubError,
@@ -33,6 +32,7 @@ import {
   NotFoundError,
   ConflictError,
   UnauthorizedError,
+  ForbiddenError,
 } from '@topichub/core';
 import { TopicHubService } from './topichub.provider';
 
@@ -41,6 +41,7 @@ function toHttpError(err: unknown): never {
   if (err instanceof ValidationError) throw new BadRequestException(err.message);
   if (err instanceof ConflictError) throw new ConflictException(err.message);
   if (err instanceof UnauthorizedError) throw new UnauthorizedException(err.message);
+  if (err instanceof ForbiddenError) throw new ForbiddenException(err.message);
   if (err instanceof TopicHubError) throw new InternalServerErrorException(err.message);
   throw err;
 }
@@ -63,14 +64,6 @@ export class WebhookController {
     );
   }
 
-  @Post(':platform')
-  handle(
-    @Param('platform') platform: string,
-    @Body() payload: unknown,
-    @Headers() headers: Record<string, string>,
-  ) {
-    return this.hub.getHub().webhook.handle(platform, payload, headers);
-  }
 }
 
 // ── All other routes ────────────────────────────────────────────────
@@ -204,6 +197,18 @@ export class ApiController {
     return { skills: this.hub.getHub().skills.listRegistered() };
   }
 
+  @Post('admin/skills/publish')
+  async publishSkills(@Req() req: Request) {
+    try {
+      const auth = await this.hub.getHub().identityAuth.resolveFromHeaders(
+        req.headers as Record<string, string | string[] | undefined>,
+      );
+      return await this.hub.getHub().skillCenter.publishSkills(req.body, auth.identityId);
+    } catch (err) {
+      toHttpError(err);
+    }
+  }
+
   // ─── Ingestion ─────────────────────────────────────────────────────
 
   @Post('api/v1/events')
@@ -308,15 +313,16 @@ export class ApiController {
 
   @Get('api/v1/dispatches')
   async listDispatches(
+    @Req() req: Request,
     @Query('status') status?: string,
     @Query('limit') limit?: string,
-    @Query('targetUserId') targetUserId?: string,
   ) {
     try {
+      const { executorToken } = await this.requireExecutor(req);
       const dispatches = await this.hub.getHub().dispatch.list({
         status,
         limit: limit ? parseInt(limit, 10) : undefined,
-        targetUserId,
+        executorToken,
       });
       return { dispatches };
     } catch (err) {
@@ -325,22 +331,58 @@ export class ApiController {
   }
 
   @Post('api/v1/dispatches/:id/claim')
-  async claim(@Param('id') id: string, @Body() body: { claimedBy: string; targetUserId?: string }) {
-    const ok = await this.hub.getHub().dispatch.claim(id, body.claimedBy, body.targetUserId);
-    if (!ok) throw new ConflictException('Already claimed or not found');
-    return { id, status: 'claimed', claimedBy: body.claimedBy };
+  async claim(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() body: { claimedBy: string },
+  ) {
+    try {
+      const { executorToken } = await this.requireExecutor(req);
+      const doc = await this.hub.getHub().dispatch.claim(id, body.claimedBy, executorToken);
+      if (!doc) throw new ConflictException('Already claimed or not found');
+      const plain = typeof doc.toObject === 'function' ? doc.toObject() : { ...doc };
+      return {
+        id,
+        status: 'claimed',
+        claimedBy: body.claimedBy,
+        enrichedPayload: plain.enrichedPayload,
+        skillName: plain.skillName,
+        eventType: plain.eventType,
+        topicId: plain.topicId != null ? String(plain.topicId) : undefined,
+      };
+    } catch (err) {
+      toHttpError(err);
+    }
   }
 
   @Post('api/v1/dispatches/:id/complete')
-  async complete(@Param('id') id: string, @Body() body: { result: unknown }) {
-    await this.hub.getHub().dispatch.complete(id, body.result);
-    return { id, status: 'completed' };
+  async complete(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() body: { result: unknown },
+  ) {
+    try {
+      const { executorToken } = await this.requireExecutor(req);
+      await this.hub.getHub().dispatch.complete(id, body.result, executorToken);
+      return { id, status: 'completed' };
+    } catch (err) {
+      toHttpError(err);
+    }
   }
 
   @Post('api/v1/dispatches/:id/fail')
-  async fail(@Param('id') id: string, @Body() body: { error: string }) {
-    await this.hub.getHub().dispatch.fail(id, body.error);
-    return { id, status: 'failed' };
+  async fail(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() body: { error: string; retryable?: boolean },
+  ) {
+    try {
+      const { executorToken } = await this.requireExecutor(req);
+      await this.hub.getHub().dispatch.fail(id, body.error, executorToken, body.retryable ?? false);
+      return { id, status: 'failed' };
+    } catch (err) {
+      toHttpError(err);
+    }
   }
 
   // ─── Q&A Relay ─────────────────────────────────────────────────────
@@ -408,24 +450,41 @@ export class ApiController {
 
   @Sse('api/v1/dispatches/stream')
   stream(@Req() req: Request): Observable<{ data: string; type?: string }> {
-    const targetUserId = (req.query as any).targetUserId as string | undefined;
-    const executorToken = (req.query as any).executorToken as string | undefined;
     const hub = this.hub.getHub();
 
-    const dispatches$ = new Observable<{ data: string; type?: string }>((sub) => {
-      const unsub = hub.dispatch.onTask((task: any) => {
-        if (targetUserId && task.targetUserId && task.targetUserId !== targetUserId) return;
-        if (executorToken && task.targetExecutorToken && task.targetExecutorToken !== executorToken) return;
-        sub.next({ type: 'dispatch', data: JSON.stringify(task) });
-      });
-      return () => unsub();
-    });
+    return defer(() => from(this.requireExecutor(req))).pipe(
+      mergeMap(({ executorToken }) => {
+        const dispatches$ = new Observable<{ data: string; type?: string }>((sub) => {
+          const unsub = hub.dispatch.onTask((task: any) => {
+            if (task.targetExecutorToken !== executorToken) return;
+            sub.next({ type: 'dispatch', data: JSON.stringify(task) });
+          });
+          return () => unsub();
+        });
 
-    const heartbeat$ = interval(30_000).pipe(
-      map(() => ({ type: 'heartbeat', data: JSON.stringify({ ts: new Date().toISOString() }) })),
+        const heartbeat$ = interval(30_000).pipe(
+          map(() => ({ type: 'heartbeat', data: JSON.stringify({ ts: new Date().toISOString() }) })),
+        );
+
+        const pairingRotated$ = new Observable<{ data: string; type?: string }>((sub) => {
+          const unsub = hub.identity.subscribePairingRotations(executorToken, (payload) => {
+            sub.next({
+              type: 'pairing_rotated',
+              data: JSON.stringify({
+                code: payload.code,
+                expiresAt:
+                  payload.expiresAt instanceof Date
+                    ? payload.expiresAt.toISOString()
+                    : String(payload.expiresAt),
+              }),
+            });
+          });
+          return () => unsub();
+        });
+
+        return merge(dispatches$, heartbeat$, pairingRotated$);
+      }),
     );
-
-    return merge(dispatches$, heartbeat$);
   }
 }
 
@@ -453,9 +512,14 @@ export class ExecutorController {
   async register(@Req() req: Request, @Body() body: unknown) {
     const token = this.extractBearerToken(req);
     try {
-      const result = await this.hub.getHub().superadmin.registerExecutor(
-        token,
-        (body as any)?.executorMeta,
+      const meta = (body as { executorMeta?: { agentType: string; maxConcurrentAgents: number; hostname: string; pid: number } })?.executorMeta;
+      const result = await this.hub.getHub().superadmin.registerExecutor(token, meta);
+      // IM commands use HeartbeatService.isAvailable(identityId); it must be populated here and refreshed by POST …/heartbeat.
+      await this.hub.getHub().heartbeat.registerExecutor(
+        result.identityId,
+        result.executorToken,
+        true,
+        meta,
       );
       return result;
     } catch (err) {
@@ -469,6 +533,7 @@ export class ExecutorController {
       const { executorToken } = await this.requireExecutor(req);
       const executor = await this.hub.getHub().superadmin.resolveExecutorToken(executorToken);
       if (!executor) throw new UnauthorizedException('Invalid executor token');
+      await this.hub.getHub().heartbeat.heartbeat(executor.identityId);
       return { status: 'ok', executorToken: executorToken.slice(0, 12) + '...' };
     } catch (err) {
       toHttpError(err);
@@ -479,8 +544,26 @@ export class ExecutorController {
   async deregister(@Req() req: Request) {
     try {
       const { executorToken } = await this.requireExecutor(req);
+      const executor = await this.hub.getHub().superadmin.resolveExecutorToken(executorToken);
+      if (!executor) throw new UnauthorizedException('Invalid executor token');
       await this.hub.getHub().superadmin.revokeExecutor(executorToken);
+      await this.hub.getHub().identity.deactivateAllBindings(executorToken);
+      await this.hub.getHub().heartbeat.deregister(executor.identityId);
       return { status: 'deregistered' };
+    } catch (err) {
+      toHttpError(err);
+    }
+  }
+
+  @Post('pairing-code')
+  async generatePairingCode(@Req() req: Request) {
+    try {
+      const { executorToken, identityId } = await this.requireExecutor(req);
+      const result = await this.hub.getHub().identity.generateExecutorPairingCode(
+        identityId,
+        executorToken,
+      );
+      return { code: result.code, expiresAt: result.expiresAt };
     } catch (err) {
       toHttpError(err);
     }
@@ -501,66 +584,27 @@ export class IdentityController {
     throw new UnauthorizedException('Missing Bearer token');
   }
 
-  @Post('link')
-  async link(@Req() req: Request, @Body() body: unknown) {
-    let parsed;
+  @Get('me')
+  async me(@Req() req: Request) {
+    const token = this.extractBearerToken(req);
     try {
-      parsed = LinkRequestSchema.parse(body);
-    } catch (err) {
-      if (err instanceof ZodError)
-        throw new BadRequestException({ message: 'Validation failed', errors: (err as ZodError).errors });
-      throw err;
-    }
+      const resolved = await this.hub.getHub().superadmin.resolveIdentityToken(token);
+      if (!resolved) throw new UnauthorizedException('Invalid token');
 
-    const claimToken = this.extractBearerToken(req);
-
-    try {
-      const result = await this.hub.getHub().identity.claimPairingCode(
-        parsed.code,
-        claimToken,
-      );
-
-      if (!result) {
-        throw new BadRequestException('Invalid or expired pairing code');
-      }
+      const identities = await this.hub.getHub().superadmin.listIdentities();
+      const identity = identities.find((i: any) => i.id === resolved.identityId);
 
       return {
-        status: 'linked',
-        topichubUserId: result.topichubUserId,
-        platform: result.platform,
-        platformUserId: result.platformUserId,
+        identityId: resolved.identityId,
+        uniqueId: identity?.uniqueId ?? 'unknown',
+        displayName: identity?.displayName ?? 'unknown',
+        isSuperAdmin: resolved.isSuperAdmin,
+        status: identity?.status ?? 'active',
+        executorCount: identity?.executorCount ?? 0,
+        createdAt: identity?.createdAt,
       };
     } catch (err) {
-      if (err instanceof BadRequestException) throw err;
-      toHttpError(err);
-    }
-  }
-
-  @Post('unlink')
-  async unlink(@Req() req: Request, @Body() body: unknown) {
-    let parsed;
-    try {
-      parsed = UnlinkRequestSchema.parse(body);
-    } catch (err) {
-      if (err instanceof ZodError)
-        throw new BadRequestException({ message: 'Validation failed', errors: (err as ZodError).errors });
-      throw err;
-    }
-
-    const claimToken = this.extractBearerToken(req);
-
-    try {
-      if (parsed.platform && parsed.platformUserId) {
-        await this.hub.getHub().identity.deactivateBinding(
-          parsed.platform,
-          parsed.platformUserId,
-        );
-      } else {
-        await this.hub.getHub().identity.deactivateAllBindings(claimToken);
-      }
-
-      return { status: 'unlinked', cancelledDispatches: 0 };
-    } catch (err) {
+      if (err instanceof UnauthorizedException) throw err;
       toHttpError(err);
     }
   }

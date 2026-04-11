@@ -1,17 +1,11 @@
 import { z } from 'zod';
-import type { TypeSkill, TypeSkillManifest, CardData, ValidationResult } from '../interfaces/type-skill';
+import type { TypeSkillManifest, CardData, ValidationResult } from '../interfaces/type-skill';
 import type { SkillMdFrontmatter } from '../interfaces/skill-md';
 
-/**
- * Creates a default TypeSkill for SKILL.md-only skills that have no code entry point.
- * All business logic is driven by SkillAiRuntime via the SKILL.md instructions;
- * this stub provides the minimal manifest/renderCard/validateMetadata required
- * by the TypeSkill interface.
- */
 export function createMdOnlyTypeSkill(
   name: string,
   frontmatter: SkillMdFrontmatter,
-): TypeSkill {
+) {
   const topicType = frontmatter.topicType ?? name;
 
   const manifest: TypeSkillManifest = {

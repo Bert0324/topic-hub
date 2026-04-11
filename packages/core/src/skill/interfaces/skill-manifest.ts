@@ -1,6 +1,11 @@
 import { z } from 'zod';
+import mongoose from 'mongoose';
 
 const SKILL_NAME_REGEX = /^[a-z][a-z0-9-]{1,62}[a-z0-9]$/;
+
+const RegistrationIdSchema = z
+  .string()
+  .refine((s) => mongoose.Types.ObjectId.isValid(s), { message: 'registrationId must be a valid Mongo ObjectId' });
 
 export const SkillManifestSchema = z.object({
   name: z
@@ -33,6 +38,8 @@ export const SkillManifestSchema = z.object({
 export type SkillManifest = z.infer<typeof SkillManifestSchema>;
 
 export const PublishSkillItemSchema = z.object({
+  /** When set, updates this `skill_registrations` document (must match `name` in body). Omit to upsert by `name`. */
+  registrationId: RegistrationIdSchema.optional(),
   name: z.string().regex(SKILL_NAME_REGEX),
   category: z.enum(['type', 'platform', 'adapter']),
   version: z.string().optional(),

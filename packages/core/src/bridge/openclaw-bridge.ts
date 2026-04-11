@@ -10,30 +10,80 @@ import {
   OpenClawWebhookPayloadSchema,
   OpenClawWebhookUnsignedPayloadSchema,
 } from './openclaw-types';
-const DEDUP_TTL_MS = 60_000;
 
 /**
- * Strip leading Discord mentions so `/topichub` / `/answer` still match when users write `@Bot /topichub …`.
- * Handles user mentions `<@id>`, `<@!id>` and role `<@&id>`.
+ * Strip leading IM-platform mentions so `/create`, `/answer`, etc. still match
+ * when users write `@Bot /create …`.
+ *
+ * Handles:
+ *  - Discord user `<@id>` / `<@!id>`, role `<@&id>`
+ *  - Slack user `<@UABC123>` (alphanumeric IDs)
+ *  - Feishu/Lark rich-text `<at user_id="…">Name</at>` tags
+ *  - Telegram trailing `@BotName` on commands (e.g. `/help@MyBot`)
+ *  - Plain `@DisplayName` text (OpenClaw resolves raw IDs before hooks see content)
+ *  - Short leading label + slash command (e.g. Feishu pick-bot line `Topic Hub /help`)
  */
 export function normalizeImCommandMessage(raw: string): string {
   let s = raw.trim();
-  // Strip raw Discord mentions: <@id>, <@!id>, <@&id>
+  // IME / copy-paste sometimes uses full-width slash (Feishu, mobile keyboards)
+  s = s.replace(/\uFF0F/g, '/');
+
+  // Discord / Slack raw mentions: <@id>, <@!id>, <@&id> (IDs may be alphanumeric)
   for (;;) {
-    const m = s.match(/^(<@!?\d+>|<@&\d+>)\s*/);
+    const m = s.match(/^(<@[!&]?[\w]+>)\s*/);
     if (!m) break;
     s = s.slice(m[0].length).trim();
   }
-  // OpenClaw resolves <@id> to @DisplayName before hooks see the content.
-  // Strip leading @mention text before the first /topichub or /answer command.
-  if (s.startsWith('@')) {
-    const cmdIdx = s.indexOf('/topichub');
-    const ansIdx = s.indexOf('/answer');
-    const idx = cmdIdx >= 0 && ansIdx >= 0 ? Math.min(cmdIdx, ansIdx) : cmdIdx >= 0 ? cmdIdx : ansIdx;
-    if (idx > 0) {
-      s = s.slice(idx);
+
+  // Feishu/Lark self-closing rich-text mentions: `<at user_id="…"/>` (must run before
+  // paired-tag strip and before "short prefix" logic — otherwise `indexOf('/')` hits `/>`).
+  for (;;) {
+    const m = s.match(/^<at\b[^>]*\/>\s*/);
+    if (!m) break;
+    s = s.slice(m[0].length).trim();
+  }
+
+  // Feishu/Lark rich-text <at>…</at> tags
+  for (;;) {
+    const m = s.match(/^<at\b[^>]*>.*?<\/at>\s*/);
+    if (!m) break;
+    s = s.slice(m[0].length).trim();
+  }
+
+  // Telegram: `/command@BotName` → `/command`
+  s = s.replace(/^(\/\w+)@\S+/, '$1');
+
+  // "Topic Hub /help" / "@Topic Hub /create …" — short prefix (≤3 words) before first `/command`
+  {
+    const slashIdx = s.indexOf('/');
+    if (slashIdx > 0) {
+      const prefix = s.slice(0, slashIdx).trim();
+      const tail = s.slice(slashIdx).trimStart();
+      if (
+        !prefix.includes('/') &&
+        /^\/[A-Za-z0-9_-]+/.test(tail) &&
+        prefix.length > 0 &&
+        prefix.length <= 48
+      ) {
+        const words = prefix.split(/\s+/).filter(Boolean);
+        if (words.length >= 1 && words.length <= 3) {
+          s = tail;
+        }
+      }
     }
   }
+
+  // Plain @mention text before a slash command
+  if (s.startsWith('@')) {
+    const slashIdx = s.indexOf('/');
+    if (slashIdx > 0) {
+      s = s.slice(slashIdx);
+    }
+  }
+
+  // "@BotName hello" / "@Topic Hub hi" → "hello" / "hi" (no slash; freeform after display mention)
+  s = s.replace(/^@\S+(?:\s+\S+)*\s+(?=\S)/, '').trim();
+
   return s;
 }
 
@@ -59,18 +109,10 @@ export function canonicalOpenClawWebhookSigningString(webhook: {
 }
 
 export class OpenClawBridge {
-  private readonly dedup = new Map<string, number>();
-  private dedupTimer: ReturnType<typeof setInterval> | undefined;
-
   constructor(
     private readonly config: OpenClawConfig,
     private readonly logger: TopicHubLogger,
-  ) {
-    this.dedupTimer = setInterval(() => this.cleanupDedup(), DEDUP_TTL_MS);
-    if (this.dedupTimer.unref) {
-      this.dedupTimer.unref();
-    }
-  }
+  ) {}
 
   /**
    * Create an OpenClawBridge configured for an auto-managed (embedded) gateway.
@@ -91,13 +133,6 @@ export class OpenClawBridge {
       },
       logger,
     );
-  }
-
-  destroy(): void {
-    if (this.dedupTimer) {
-      clearInterval(this.dedupTimer);
-      this.dedupTimer = undefined;
-    }
   }
 
   /**
@@ -244,14 +279,16 @@ export class OpenClawBridge {
 
     this.logger.debug(`Inbound webhook: channel=${channel} user=${user} message=${JSON.stringify(normalized)} sessionId=${sessionId}`);
 
-    if (this.isDuplicate(sessionId, normalized)) {
-      this.logger.debug('Duplicate webhook detected, skipping');
-      return null;
-    }
-
-    const platform = webhookPlatform ?? this.inferPlatform();
+    const platform =
+      webhookPlatform && String(webhookPlatform).trim()
+        ? String(webhookPlatform).trim()
+        : OpenClawBridge.inferPlatformFromSessionKey(sessionId)
+          ?? this.inferPlatform(channel);
     if (!platform) {
-      this.logger.warn(`Cannot determine platform for channel: ${channel} — set platform in webhook data or configure exactly one bridge platform`);
+      this.logger.warn(
+        `Cannot determine platform (sessionId=${sessionId}, channel=${channel}). ` +
+          'Ensure the embedded relay sets data.platform or that sessionKey contains a channel id (feishu, discord, …).',
+      );
       return null;
     }
 
@@ -260,12 +297,27 @@ export class OpenClawBridge {
       channel,
       userId: user,
       rawCommand: normalized,
+      originalMessage: message,
       sessionId,
+      isDm: !!webhook.data.isDm,
     };
   }
 
-  async sendMessage(channel: string, target: string, message: string): Promise<void> {
+  /**
+   * @param channel IM plugin id (e.g. `feishu`) — sent as `X-OpenClaw-Message-Channel`.
+   * @param target Delivery peer id (chat id, `user:…`, etc.).
+   * @param opts.sessionKey When set, must be the inbound OpenClaw session key so replies route to the same DM/group.
+   */
+  async sendMessage(
+    channel: string,
+    target: string,
+    message: string,
+    opts?: { sessionKey?: string },
+  ): Promise<void> {
     const url = `${this.config.gatewayUrl}/tools/invoke`;
+    const sessionKey =
+      opts?.sessionKey?.trim()
+      || `agent:main:${channel}:channel:${target}`;
 
     try {
       const res = await fetch(url, {
@@ -273,6 +325,7 @@ export class OpenClawBridge {
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${this.config.token}`,
+          'X-OpenClaw-Message-Channel': channel,
         },
         body: JSON.stringify({
           tool: 'message',
@@ -281,7 +334,7 @@ export class OpenClawBridge {
             to: target,
             message,
           },
-          sessionKey: `agent:main:${channel}:channel:${target}`,
+          sessionKey,
         }),
       });
 
@@ -300,37 +353,29 @@ export class OpenClawBridge {
     }
   }
 
-  private inferPlatform(): string | undefined {
+  private inferPlatform(channel?: string): string | undefined {
     const platforms = this.config.platforms;
     if (!platforms || platforms.length === 0) return undefined;
     if (platforms.length === 1) return platforms[0];
+    if (channel) {
+      const match = platforms.find((p) => channel.toLowerCase().startsWith(p.toLowerCase()));
+      if (match) return match;
+    }
     this.logger.warn(`Multiple platforms configured (${platforms.join(', ')}) but webhook did not include platform field`);
     return undefined;
   }
 
-  private isDuplicate(sessionId: string, message: string): boolean {
-    const hash = crypto
-      .createHash('sha256')
-      .update(message)
-      .digest('hex')
-      .substring(0, 16);
-    const key = `${sessionId}:${hash}`;
-    const now = Date.now();
-
-    if (this.dedup.has(key)) {
-      return true;
-    }
-
-    this.dedup.set(key, now);
-    return false;
-  }
-
-  private cleanupDedup(): void {
-    const cutoff = Date.now() - DEDUP_TTL_MS;
-    for (const [key, ts] of this.dedup) {
-      if (ts < cutoff) {
-        this.dedup.delete(key);
-      }
-    }
+  /** Parse OpenClaw `agent:…` session keys for embedded bridge + multi-channel setups. */
+  static inferPlatformFromSessionKey(sessionId: string): string | undefined {
+    const parts = String(sessionId || '')
+      .toLowerCase()
+      .split(':')
+      .filter(Boolean);
+    if (parts.includes('feishu') || parts.includes('lark')) return 'feishu';
+    if (parts.includes('discord')) return 'discord';
+    if (parts.includes('telegram')) return 'telegram';
+    if (parts.includes('slack')) return 'slack';
+    if (parts.some((p) => p.includes('weixin'))) return 'openclaw-weixin';
+    return undefined;
   }
 }

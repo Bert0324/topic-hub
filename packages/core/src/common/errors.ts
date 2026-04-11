@@ -32,3 +32,10 @@ export class UnauthorizedError extends TopicHubError {
     this.name = 'UnauthorizedError';
   }
 }
+
+export class ForbiddenError extends TopicHubError {
+  constructor(message: string) {
+    super(message, 'FORBIDDEN');
+    this.name = 'ForbiddenError';
+  }
+}

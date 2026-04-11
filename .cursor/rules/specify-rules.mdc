@@ -33,6 +33,8 @@ Auto-generated from all feature plans. Last updated: 2026-04-11
 - MongoDB 7 (existing collections: `task_dispatches`, `topics`, `timeline_entries`, `skill_registrations`, `tenant_skill_configs`, `ai_usage_records`) (010-decouple-skill-ai)
 - TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Typegoose + Mongoose 8 (ODM), zod (validation), gray-matter (SKILL.md parsing), @modelcontextprotocol/sdk (MCP), eventsource (SSE client), @inquirer/prompts (CLI) (012-unified-skill-center)
 - MongoDB 7 (existing collections undergo schema migration) (012-unified-skill-center)
+- TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Typegoose + Mongoose 8 (ODM), zod (validation), @modelcontextprotocol/sdk (MCP), eventsource (SSE client), gray-matter (SKILL.md parsing) (spec/013-streamline-commands-skills)
+- MongoDB 7 (existing collections: `pairing_codes`, `user_identity_bindings`, `executor_heartbeats`, `skill_registrations`, `tenant_skill_configs`) (spec/013-streamline-commands-skills)
 
 - TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Prisma (ORM), zod (validation) (001-topic-hub-app)
 
@@ -52,9 +54,9 @@ npm test && npm run lint
 TypeScript 5.x, Node.js 20 LTS: Follow standard conventions
 
 ## Recent Changes
+- spec/013-streamline-commands-skills: Added TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Typegoose + Mongoose 8 (ODM), zod (validation), @modelcontextprotocol/sdk (MCP), eventsource (SSE client), gray-matter (SKILL.md parsing)
 - 012-unified-skill-center: Added TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Typegoose + Mongoose 8 (ODM), zod (validation), gray-matter (SKILL.md parsing), @modelcontextprotocol/sdk (MCP), eventsource (SSE client), @inquirer/prompts (CLI)
 - 010-decouple-skill-ai: Added TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Typegoose + Mongoose 8 (ODM), zod (validation), gray-matter (SKILL.md parsing), @inquirer/prompts (CLI)
-- 008-secure-im-dispatch: Added TypeScript 5.5, Node.js 20 LTS + Mongoose 8 + Typegoose 12 (ODM), zod (validation), NestJS 10 (server), eventsource (SSE client in CLI), @inquirer/prompts (CLI interaction), @modelcontextprotocol/sdk (MCP)
 
 
 <!-- MANUAL ADDITIONS START -->

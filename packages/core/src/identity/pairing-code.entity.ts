@@ -17,13 +17,19 @@ export class PairingCode {
   code!: string;
 
   @prop({ required: true })
-  platform!: string;
+  topichubUserId!: string;
 
   @prop({ required: true })
-  platformUserId!: string;
+  executorClaimToken!: string;
 
-  @prop({ required: true })
-  channel!: string;
+  @prop()
+  platform?: string;
+
+  @prop()
+  platformUserId?: string;
+
+  @prop()
+  channel?: string;
 
   @prop({ required: true, default: false })
   claimed!: boolean;

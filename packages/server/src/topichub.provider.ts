@@ -145,7 +145,12 @@ export class TopicHubService implements OnModuleInit, OnModuleDestroy {
       channels.slack = { botToken: slackBotToken, appToken: slackAppToken };
     }
 
-    if (!channels.feishu && !channels.discord && !channels.telegram && !channels.slack) {
+    const weixinEnabled = this.config.get<string>('TOPICHUB_BRIDGE_WEIXIN_ENABLED');
+    if (weixinEnabled === 'true') {
+      channels.weixin = { enabled: true };
+    }
+
+    if (!channels.feishu && !channels.discord && !channels.telegram && !channels.slack && !channels.weixin) {
       return undefined;
     }
 

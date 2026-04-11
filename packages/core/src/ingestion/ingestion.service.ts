@@ -1,9 +1,7 @@
 import { TopicService } from '../services/topic.service';
 import { TimelineService } from '../services/timeline.service';
-import { SkillRegistry } from '../skill/registry/skill-registry';
 import { SkillPipeline } from '../skill/pipeline/skill-pipeline';
 import { TopicStatus, TimelineActionType } from '../common/enums';
-import { ValidationError } from '../common/errors';
 import { EventPayload } from './event-payload';
 import type { TopicHubLogger } from '../common/logger';
 
@@ -13,7 +11,6 @@ export class IngestionService {
   constructor(
     private readonly topicService: TopicService,
     private readonly timelineService: TimelineService,
-    private readonly skillRegistry: SkillRegistry,
     private readonly skillPipeline: SkillPipeline,
     private readonly logger: TopicHubLogger,
   ) {}
@@ -21,29 +18,6 @@ export class IngestionService {
   async ingest(
     payload: EventPayload,
   ): Promise<{ topic: any; created: boolean }> {
-    const isAvailable = await this.skillRegistry.isTypeAvailable(
-      payload.type,
-    );
-    if (!isAvailable) {
-      throw new ValidationError(
-        `Topic type "${payload.type}" is not registered or enabled for this tenant`,
-      );
-    }
-
-    const typeSkill = this.skillRegistry.getTypeSkillForType(payload.type);
-    if (!typeSkill) {
-      throw new ValidationError(
-        `No skill registered for topic type "${payload.type}"`,
-      );
-    }
-
-    const validation = typeSkill.validateMetadata(payload.metadata);
-    if (!validation.valid) {
-      throw new ValidationError(
-        `Metadata validation failed: ${validation.errors?.map((e) => `${e.field}: ${e.message}`).join('; ') ?? 'unknown error'}`,
-      );
-    }
-
     if (payload.sourceUrl) {
       const existing = await this.topicService.findBySourceUrl(
         payload.sourceUrl,

@@ -3,13 +3,11 @@ import { getModelForClass } from '@typegoose/typegoose';
 import { TopicHubConfigSchema, TopicHubConfig } from './config';
 import { defaultLoggerFactory, LoggerFactory, TopicHubLogger } from './common/logger';
 import { NotFoundError, TopicHubError } from './common/errors';
-import { SkillCategory } from './common/enums';
 import { getBuiltinSkills } from './builtin-skills';
 
 import { Topic } from './entities/topic.entity';
 import { TimelineEntry } from './entities/timeline-entry.entity';
 import { SkillRegistration } from './entities/skill-registration.entity';
-import { TenantSkillConfig } from './entities/tenant-skill-config.entity';
 import { TaskDispatch } from './entities/task-dispatch.entity';
 
 import { UserIdentityBinding } from './entities/user-identity-binding.entity';
@@ -23,13 +21,19 @@ import { TimelineService } from './services/timeline.service';
 import { SearchService } from './services/search.service';
 import { DispatchService } from './services/dispatch.service';
 import { IdentityService } from './identity/identity.service';
-import type { ClaimResult, ResolvedPlatformUser, ResolvedClaimTokenUser } from './identity/identity.service';
+import type {
+  ClaimResult,
+  ResolvedPlatformUser,
+  ResolvedClaimTokenUser,
+  PairingRotatedPayload,
+} from './identity/identity.service';
 import { DISPATCH_UNCLAIMED_REMINDER_MS } from './identity/identity-types';
 import type { CreateIdentityInput } from './identity/identity-types';
 import { HeartbeatService } from './services/heartbeat.service';
 import type { ExecutorHeartbeatMeta, RegisterExecutorResult } from './services/heartbeat.service';
 import { QaService } from './services/qa.service';
 import { SuperadminService } from './services/superadmin.service';
+import { SkillCenterService } from './services/skill-center.service';
 import type { InitResult, CreateIdentityResult } from './services/superadmin.service';
 import { AuthService } from './services/auth.service';
 import type { ResolvedAuth } from './services/auth.service';
@@ -42,8 +46,8 @@ import { SkillUsage } from './entities/skill-usage.entity';
 import { SkillLoader } from './skill/registry/skill-loader';
 import { SkillMdParser } from './skill/registry/skill-md-parser';
 import { SkillRegistry } from './skill/registry/skill-registry';
-import { SkillConfigService } from './skill/config/skill-config.service';
 import { SkillPipeline } from './skill/pipeline/skill-pipeline';
+import { pickImNotifyBody } from './im/im-notify-body';
 import { CommandParser } from './command/command-parser';
 import { CommandRouter, CommandContext } from './command/command-router';
 import { CreateHandler } from './command/handlers/create.handler';
@@ -54,6 +58,8 @@ import { TimelineHandler } from './command/handlers/timeline.handler';
 import { ReopenHandler } from './command/handlers/reopen.handler';
 import { HistoryHandler } from './command/handlers/history.handler';
 import { HelpHandler } from './command/handlers/help.handler';
+import { RelayHandler } from './command/handlers/relay.handler';
+import { SkillInvokeHandler } from './command/handlers/skill-invoke.handler';
 
 import { IngestionService } from './ingestion/ingestion.service';
 import {
@@ -123,7 +129,6 @@ export interface IngestionOperations {
 }
 
 export interface WebhookOperations {
-  handle(platform: string, payload: unknown, headers: Record<string, string>): Promise<WebhookResult>;
   handleOpenClaw(
     payload: unknown,
     rawBody?: Buffer | string,
@@ -152,29 +157,74 @@ export interface SearchOperations {
 export interface SkillOperations {
   listRegistered(): Array<{
     name: string;
-    category: string;
     version: string;
   }>;
-  isTypeAvailable(type: string): Promise<boolean>;
+}
+
+export interface SkillCenterOperations {
+  publishSkills(
+    body: unknown,
+    authorIdentityId: string,
+  ): Promise<{
+    published: Array<{ name: string; status: string; id: string }>;
+    errors: Array<{ name: string; error: string }>;
+  }>;
+  listCatalog(query: Record<string, unknown>): Promise<{
+    skills: Array<{
+      id: string;
+      name: string;
+      description: string;
+      version: string;
+      authorIdentityId: string;
+      authorDisplayName: string;
+      likeCount: number;
+      usageCount: number;
+      publishedAt: string | null;
+    }>;
+    total: number;
+    page: number;
+    limit: number;
+  }>;
+  getSkillContent(name: string): Promise<{
+    id: string;
+    name: string;
+    version: string;
+    skillMdRaw: string;
+    manifest: Record<string, unknown>;
+  }>;
+  getSkillContentByRegistrationId(registrationId: string): Promise<{
+    id: string;
+    name: string;
+    version: string;
+    skillMdRaw: string;
+    manifest: Record<string, unknown>;
+  }>;
+  toggleLike(name: string, identityId: string): Promise<{ liked: boolean; likeCount: number }>;
+  deleteSkill(registrationId: string, identityId: string): Promise<{ deleted: true; id: string }>;
 }
 
 export interface DispatchOperations {
-  list(filters?: { status?: string; limit?: number; targetUserId?: string }): Promise<any[]>;
+  list(filters: { executorToken: string; status?: string; limit?: number }): Promise<any[]>;
   findById(dispatchId: string): Promise<any | null>;
   onTask(listener: (task: any) => void): () => void;
-  claim(taskId: string, claimedBy: string, targetUserId?: string): Promise<boolean>;
-  complete(taskId: string, result?: unknown): Promise<void>;
-  fail(taskId: string, error: string): Promise<void>;
+  /** Returns the claimed dispatch document (incl. `enrichedPayload`), or `null` if not claimable. */
+  claim(taskId: string, claimedBy: string, executorToken: string): Promise<any | null>;
+  complete(taskId: string, result: unknown, executorToken: string): Promise<void>;
+  fail(taskId: string, error: string, executorToken: string, retryable?: boolean): Promise<void>;
 }
 
 export interface IdentityOperations {
-  generatePairingCode(platform: string, platformUserId: string, channel: string): Promise<string>;
-  claimPairingCode(code: string, claimToken: string): Promise<ClaimResult | null>;
+  generateExecutorPairingCode(topichubUserId: string, executorClaimToken: string): Promise<{ code: string; expiresAt: Date }>;
+  claimPairingCode(platform: string, platformUserId: string, code: string): Promise<ClaimResult>;
   resolveUserByPlatform(platform: string, platformUserId: string): Promise<ResolvedPlatformUser | undefined>;
   resolveUserByClaimToken(claimToken: string): Promise<ResolvedClaimTokenUser | undefined>;
   deactivateBinding(platform: string, platformUserId: string): Promise<boolean>;
   deactivateAllBindings(claimToken: string): Promise<number>;
   getBindingsForUser(topichubUserId: string): Promise<any[]>;
+  subscribePairingRotations(
+    executorToken: string,
+    handler: (payload: PairingRotatedPayload) => void,
+  ): () => void;
 }
 
 export interface HeartbeatOperations {
@@ -182,6 +232,10 @@ export interface HeartbeatOperations {
   heartbeat(topichubUserId: string): Promise<{ pendingDispatches: number }>;
   deregister(topichubUserId: string): Promise<void>;
   isAvailable(topichubUserId: string): Promise<boolean>;
+  isBoundExecutorSessionLive(
+    topichubUserId: string,
+    boundExecutorToken: string,
+  ): Promise<boolean>;
   getHeartbeat(topichubUserId: string): Promise<any | null>;
 }
 
@@ -243,6 +297,7 @@ export class TopicHub {
     private readonly qaService: QaService,
     private readonly superadminService: SuperadminService,
     private readonly authServiceNew: AuthService,
+    private readonly skillCenterService: SkillCenterService,
   ) {}
 
   static async create(config: TopicHubConfig): Promise<TopicHub> {
@@ -277,7 +332,6 @@ export class TopicHub {
     const TopicModel = model(Topic, 'topics');
     const TimelineEntryModel = model(TimelineEntry, 'timeline_entries');
     const SkillRegistrationModel = model(SkillRegistration, 'skill_registrations');
-    const TenantSkillConfigModel = model(TenantSkillConfig, 'tenant_skill_configs');
     const TaskDispatchModel = model(TaskDispatch, 'task_dispatches');
     const UserIdentityBindingModel = model(UserIdentityBinding, 'user_identity_bindings');
     const PairingCodeModel = model(PairingCode, 'pairing_codes');
@@ -335,19 +389,11 @@ export class TopicHub {
       skillLoader,
       skillMdParser,
       SkillRegistrationModel,
-      TenantSkillConfigModel,
       loggerFactory('SkillRegistry'),
-    );
-
-    const skillConfigService = new SkillConfigService(
-      TenantSkillConfigModel,
-      cryptoService,
-      loggerFactory('SkillConfigService'),
     );
 
     const skillPipeline = new SkillPipeline(
       skillRegistry,
-      skillConfigService,
       dispatchService,
       loggerFactory('SkillPipeline'),
       bridge,
@@ -355,16 +401,18 @@ export class TopicHub {
 
     // Command system
     const commandParser = new CommandParser();
-    const commandRouter = new CommandRouter(skillRegistry);
+    const commandRouter = new CommandRouter((token) => skillRegistry.matchSkillCommandToken(token));
 
-    const createHandler = new CreateHandler(topicService, skillRegistry, skillPipeline, loggerFactory('CreateHandler'));
+    const createHandler = new CreateHandler(topicService, skillPipeline, loggerFactory('CreateHandler'));
     const updateHandler = new UpdateHandler(topicService, skillPipeline, loggerFactory('UpdateHandler'));
     const assignHandler = new AssignHandler(topicService, skillPipeline, loggerFactory('AssignHandler'));
     const showHandler = new ShowHandler(topicService);
     const timelineHandler = new TimelineHandler(topicService, timelineService);
     const reopenHandler = new ReopenHandler(topicService, skillPipeline, loggerFactory('ReopenHandler'));
     const historyHandler = new HistoryHandler(topicService);
-    const helpHandler = new HelpHandler(skillRegistry);
+    const helpHandler = new HelpHandler();
+    const relayHandler = new RelayHandler(topicService, skillPipeline, loggerFactory('RelayHandler'));
+    const skillInvokeHandler = new SkillInvokeHandler(topicService, skillPipeline, loggerFactory('SkillInvokeHandler'));
 
     const handlers = new Map<string, any>([
       ['create', createHandler],
@@ -375,13 +423,14 @@ export class TopicHub {
       ['reopen', reopenHandler],
       ['history', historyHandler],
       ['help', helpHandler],
+      ['relay', relayHandler],
+      ['skill_invoke', skillInvokeHandler],
     ]);
 
     // Ingestion
     const ingestionService = new IngestionService(
       topicService,
       timelineService,
-      skillRegistry,
       skillPipeline,
       loggerFactory('IngestionService'),
     );
@@ -398,17 +447,21 @@ export class TopicHub {
     };
 
     const webhookIdentityOps: WebhookIdentityOps = {
-      generatePairingCode: (platform, platformUserId, channel) =>
-        identityService.generatePairingCode(platform, platformUserId, channel),
+      claimPairingCode: (platform, platformUserId, code) =>
+        identityService.claimPairingCode(platform, platformUserId, code),
       resolveUserByPlatform: (platform, platformUserId) =>
         identityService.resolveUserByPlatform(platform, platformUserId),
       deactivateBinding: (platform, platformUserId) =>
         identityService.deactivateBinding(platform, platformUserId),
+      invalidateLeakedPairingCode: (code, meta) =>
+        identityService.invalidateLeakedPairingCodeAndRotate(code, meta),
     };
 
     const webhookHeartbeatOps: WebhookHeartbeatOps = {
       isAvailable: (topichubUserId) =>
         heartbeatService.isAvailable(topichubUserId),
+      isBoundExecutorSessionLive: (topichubUserId, boundExecutorToken) =>
+        heartbeatService.isBoundExecutorSessionLive(topichubUserId, boundExecutorToken),
     };
 
     const webhookQaOps: WebhookQaOps = {
@@ -418,7 +471,6 @@ export class TopicHub {
     };
 
     const webhookHandler = new WebhookHandler(
-      skillRegistry,
       commandParser,
       commandRouter,
       topicService,
@@ -448,6 +500,14 @@ export class TopicHub {
     // Init dispatch
     dispatchService.init();
 
+    const skillCenterService = new SkillCenterService(
+      SkillRegistrationModel,
+      SkillLikeModel,
+      IdentityModel,
+      skillMdParser,
+      loggerFactory('SkillCenter'),
+    );
+
     const hub = new TopicHub(
       connection,
       ownsConnection,
@@ -470,6 +530,7 @@ export class TopicHub {
       qaService,
       superadminService,
       authServiceNew,
+      skillCenterService,
     );
 
     hub.startReminderTimer();
@@ -626,7 +687,12 @@ export class TopicHub {
           return { success: false, error: `Unknown command handler: ${route.handler}` };
         }
 
-        const result = await handler.execute(parsed, routeContext);
+        const execContext: CommandContext =
+          route.skillInvocationName != null
+            ? { ...routeContext, skillInvocationName: route.skillInvocationName }
+            : routeContext;
+
+        const result = await handler.execute(parsed, execContext);
         return {
           success: result.success,
           result: result.data ?? result.message,
@@ -653,8 +719,6 @@ export class TopicHub {
 
   get webhook(): WebhookOperations {
     return {
-      handle: (platform, payload, headers) =>
-        this.webhookHandler.handle(platform, payload, headers),
       handleOpenClaw: (
         payload: unknown,
         rawBody?: Buffer | string,
@@ -694,18 +758,25 @@ export class TopicHub {
   get skills(): SkillOperations {
     return {
       listRegistered: () => {
-        const all = [
-          ...this.skillRegistry.getByCategory(SkillCategory.TYPE),
-          ...this.skillRegistry.getByCategory(SkillCategory.ADAPTER),
-        ];
-        return all.map((s) => ({
+        return this.skillRegistry.listAll().map((s) => ({
           name: s.registration.name,
-          category: s.registration.category,
           version: s.registration.version,
         }));
       },
-      isTypeAvailable: (type) =>
-        this.skillRegistry.isTypeAvailable(type),
+    };
+  }
+
+  get skillCenter(): SkillCenterOperations {
+    return {
+      publishSkills: (body, authorIdentityId) =>
+        this.skillCenterService.publishSkills(body, authorIdentityId),
+      listCatalog: (query) => this.skillCenterService.listCatalog(query),
+      getSkillContent: (name) => this.skillCenterService.getSkillContent(name),
+      getSkillContentByRegistrationId: (registrationId) =>
+        this.skillCenterService.getSkillContentByRegistrationId(registrationId),
+      toggleLike: (name, identityId) => this.skillCenterService.toggleLike(name, identityId),
+      deleteSkill: (registrationId, identityId) =>
+        this.skillCenterService.deleteSkill(registrationId, identityId),
     };
   }
 
@@ -714,7 +785,7 @@ export class TopicHub {
       list: (filters) =>
         this.dispatchService.findUnclaimed({
           limit: filters?.limit,
-          targetUserId: filters?.targetUserId,
+          executorToken: filters.executorToken,
         }),
       findById: (dispatchId) =>
         this.dispatchService.findById(dispatchId),
@@ -722,28 +793,33 @@ export class TopicHub {
         this.dispatchService.onNewDispatch(listener);
         return () => this.dispatchService.offNewDispatch(listener);
       },
-      claim: async (taskId, claimedBy, targetUserId?) => {
-        const result = await this.dispatchService.claim(taskId, claimedBy, targetUserId);
+      claim: async (taskId, claimedBy, executorToken) => {
+        const result = await this.dispatchService.claim(taskId, claimedBy, executorToken);
         if (result && result.sourceChannel && result.sourcePlatform && this.bridge) {
           this.bridge
             .sendMessage(result.sourcePlatform, result.sourceChannel, 'Task picked up by your local agent. Processing...')
             .catch((err) => this.logger.error('IM claim notification failed', String(err)));
         }
-        return result !== null;
+        return result;
       },
-      complete: async (taskId, result) => {
-        const dispatch = await this.dispatchService.complete(taskId, result as any);
+      complete: async (taskId, result, executorToken) => {
+        const dispatch = await this.dispatchService.complete(taskId, result as any, executorToken);
         if (dispatch?.sourceChannel && dispatch?.sourcePlatform && this.bridge) {
-          const summary = dispatch.result?.text
-            ? `Task completed: ${dispatch.result.text.slice(0, 200)}`
+          const IM_COMPLETE_PREVIEW = 2000;
+          const r = dispatch.result as { text?: string; imSummary?: string } | undefined;
+          const raw = pickImNotifyBody(r?.text, r?.imSummary);
+          const summary = raw
+            ? (raw.length > IM_COMPLETE_PREVIEW
+              ? `Task completed: ${raw.slice(0, IM_COMPLETE_PREVIEW)}…`
+              : `Task completed: ${raw}`)
             : 'Task completed successfully.';
           this.bridge
             .sendMessage(dispatch.sourcePlatform, dispatch.sourceChannel, summary)
             .catch((err) => this.logger.error('IM complete notification failed', String(err)));
         }
       },
-      fail: async (taskId, error) => {
-        const dispatch = await this.dispatchService.fail(taskId, error);
+      fail: async (taskId, error, executorToken, retryable = false) => {
+        const dispatch = await this.dispatchService.fail(taskId, error, retryable, executorToken);
         if (dispatch?.sourceChannel && dispatch?.sourcePlatform && this.bridge) {
           this.bridge
             .sendMessage(dispatch.sourcePlatform, dispatch.sourceChannel, `Task failed: ${error}`)
@@ -755,10 +831,10 @@ export class TopicHub {
 
   get identity(): IdentityOperations {
     return {
-      generatePairingCode: (platform, platformUserId, channel) =>
-        this.identityService.generatePairingCode(platform, platformUserId, channel),
-      claimPairingCode: (code, claimToken) =>
-        this.identityService.claimPairingCode(code, claimToken),
+      generateExecutorPairingCode: (topichubUserId, executorClaimToken) =>
+        this.identityService.generateExecutorPairingCode(topichubUserId, executorClaimToken),
+      claimPairingCode: (platform, platformUserId, code) =>
+        this.identityService.claimPairingCode(platform, platformUserId, code),
       resolveUserByPlatform: (platform, platformUserId) =>
         this.identityService.resolveUserByPlatform(platform, platformUserId),
       resolveUserByClaimToken: (claimToken) =>
@@ -769,6 +845,8 @@ export class TopicHub {
         this.identityService.deactivateAllBindings(claimToken),
       getBindingsForUser: (topichubUserId) =>
         this.identityService.getBindingsForUser(topichubUserId),
+      subscribePairingRotations: (executorToken, handler) =>
+        this.identityService.subscribePairingRotations(executorToken, handler),
     };
   }
 
@@ -782,6 +860,8 @@ export class TopicHub {
         this.heartbeatService.deregister(topichubUserId),
       isAvailable: (topichubUserId) =>
         this.heartbeatService.isAvailable(topichubUserId),
+      isBoundExecutorSessionLive: (topichubUserId, boundExecutorToken) =>
+        this.heartbeatService.isBoundExecutorSessionLive(topichubUserId, boundExecutorToken),
       getHeartbeat: (topichubUserId) =>
         this.heartbeatService.getHeartbeat(topichubUserId),
     };
@@ -834,7 +914,6 @@ export class TopicHub {
       clearInterval(this.reminderTimer);
       this.reminderTimer = undefined;
     }
-    this.bridge?.destroy();
     if (this.bridgeManager) {
       await this.bridgeManager.stop();
     }

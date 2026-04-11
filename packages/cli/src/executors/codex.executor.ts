@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import type { AgentExecutor, ExecutionResult, ExecutorOptions } from './executor.interface.js';
 
-const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 
 export class CodexExecutor implements AgentExecutor {
   readonly type = 'codex';
@@ -11,7 +11,8 @@ export class CodexExecutor implements AgentExecutor {
     systemPromptPath: string | null,
     options: ExecutorOptions = {},
   ): Promise<ExecutionResult> {
-    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const timeoutMs =
+      options.timeoutMs !== undefined ? options.timeoutMs : DEFAULT_TIMEOUT_MS;
     const startTime = Date.now();
 
     let fullPrompt = prompt;
@@ -21,21 +22,21 @@ export class CodexExecutor implements AgentExecutor {
       fullPrompt = `${systemPrompt}\n\n---\n\n${prompt}`;
     }
 
-    const args = ['exec', fullPrompt, '--json', '--ephemeral'];
-
-    if (options.extraArgs?.length) {
-      args.push(...options.extraArgs);
-    }
+    // Put user flags after `exec` and before `--json` so Codex parses options (e.g. --full-auto) correctly.
+    const args = ['exec', ...(options.extraArgs ?? []), '--json', '--ephemeral', fullPrompt];
 
     if (options.mcpConfigPath) {
       args.push('--mcp-config', options.mcpConfigPath);
     }
 
     return new Promise<ExecutionResult>((resolve, reject) => {
-      const child = spawn('codex', args, {
+      const spawnOpts: import('child_process').SpawnOptions = {
         stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: timeoutMs,
-      });
+      };
+      if (timeoutMs > 0) {
+        spawnOpts.timeout = timeoutMs;
+      }
+      const child = spawn('codex', args, spawnOpts);
 
       let stdout = '';
       let stderr = '';

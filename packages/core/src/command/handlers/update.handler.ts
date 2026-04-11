@@ -1,13 +1,10 @@
 import { TopicStatus } from '../../common/enums';
 import type { TopicService } from '../../services/topic.service';
 import type { TopicHubLogger } from '../../common/logger';
-import type { DispatchMeta } from '../../services/dispatch.service';
 import type { ParsedCommand } from '../command-parser';
 import type { CommandContext } from '../command-router';
-
-export interface SkillPipelinePort {
-  execute(operation: string, topic: any, actor: string, extra?: Record<string, unknown>, dispatchMeta?: DispatchMeta): Promise<void>;
-}
+import type { SkillPipelinePort } from './create.handler';
+import { denyReasonIfCannotMutateTopic } from '../topic-mutation-access';
 
 const STATUS_VALUES = Object.values(TopicStatus) as string[];
 
@@ -21,7 +18,7 @@ export class UpdateHandler {
   async execute(parsed: ParsedCommand, context: CommandContext) {
     const newStatus = parsed.args.status as string | undefined;
     if (!newStatus) {
-      return { success: false, error: 'Missing --status flag. Usage: /topichub update --status <status>' };
+      return { success: false, error: 'Missing --status flag. Usage: /update --status <status>' };
     }
 
     if (!STATUS_VALUES.includes(newStatus)) {
@@ -39,6 +36,11 @@ export class UpdateHandler {
       return { success: false, error: 'No active topic found in this group.' };
     }
 
+    const deny = denyReasonIfCannotMutateTopic(topic, context.userId);
+    if (deny) {
+      return { success: false, error: deny };
+    }
+
     try {
       const oldStatus = topic.status;
       const updated = await this.topicService.updateStatus(
@@ -47,13 +49,7 @@ export class UpdateHandler {
         context.userId,
       );
 
-      await this.skillPipeline.execute(
-        'status_changed',
-        updated,
-        context.userId,
-        { from: oldStatus, to: newStatus },
-        context.dispatchMeta,
-      );
+      await this.skillPipeline.notifyChannelsOnly('status_changed', updated);
 
       return {
         success: true,

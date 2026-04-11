@@ -1,22 +1,16 @@
 import { Model } from 'mongoose';
-import { SkillCategory } from '../../common/enums';
-import { TypeSkill } from '../interfaces/type-skill';
-import { AdapterSkill } from '../interfaces/adapter-skill';
 import { ParsedSkillMd } from '../interfaces/skill-md';
 import { SkillLoader } from './skill-loader';
 import { SkillMdParser } from './skill-md-parser';
 import { createMdOnlyTypeSkill } from './md-only-skill';
 import type { TopicHubLogger } from '../../common/logger';
-import type { SkillRegistryPort } from '../../command/command-router';
-
-type AnySkill = TypeSkill | AdapterSkill;
 
 export interface RegisteredSkill {
-  skill: AnySkill;
+  skill: any;
   registration: any;
 }
 
-export class SkillRegistry implements SkillRegistryPort {
+export class SkillRegistry {
   private readonly skills = new Map<string, RegisteredSkill>();
   private readonly skillMdCache = new Map<string, ParsedSkillMd>();
 
@@ -24,15 +18,12 @@ export class SkillRegistry implements SkillRegistryPort {
     private readonly loader: SkillLoader,
     private readonly skillMdParser: SkillMdParser,
     private readonly registrationModel: Model<any>,
-    private readonly tenantConfigModel: Model<any>,
     private readonly logger: TopicHubLogger,
   ) {}
 
-  register(skill: AnySkill, registration: any): void {
+  register(skill: any, registration: any): void {
     this.skills.set(registration.name, { skill, registration });
-    this.logger.log(
-      `Registered skill: ${registration.name} [${registration.category}]`,
-    );
+    this.logger.log(`Registered skill: ${registration.name}`);
   }
 
   unregister(name: string): void {
@@ -44,31 +35,22 @@ export class SkillRegistry implements SkillRegistryPort {
     return this.skills.get(name);
   }
 
-  getByCategory(category: SkillCategory): RegisteredSkill[] {
-    return [...this.skills.values()].filter(
-      (s) => s.registration.category === category,
-    );
+  /**
+   * Map first slash token to a registered skill name (case-insensitive).
+   * Used for IM commands like `/my-skill --flag value` when `my-skill` is a loaded skill.
+   */
+  matchSkillCommandToken(token: string): string | undefined {
+    const key = token.toLowerCase();
+    for (const name of this.skills.keys()) {
+      if (name.toLowerCase() === key) {
+        return name;
+      }
+    }
+    return undefined;
   }
 
-  getTypeSkillForType(topicType: string): TypeSkill | undefined {
-    const match = [...this.skills.values()].find(
-      (s) =>
-        s.registration.category === SkillCategory.TYPE &&
-        (s.registration.metadata as any)?.topicType === topicType,
-    );
-    return match?.skill as TypeSkill | undefined;
-  }
-
-  async isTypeAvailable(topicType: string): Promise<boolean> {
-    const typeSkill = this.getTypeSkillForType(topicType);
-    if (!typeSkill) return false;
-
-    const config = await this.tenantConfigModel
-      .findOne({ skillName: typeSkill.manifest.name })
-      .lean()
-      .exec();
-
-    return (config as any)?.enabled === true;
+  listAll(): RegisteredSkill[] {
+    return [...this.skills.values()];
   }
 
   getSkillMd(skillName: string): ParsedSkillMd | null {
@@ -100,7 +82,6 @@ export class SkillRegistry implements SkillRegistryPort {
     }
 
     const frontmatter = parsedMd.frontmatter;
-    const category = this.resolveCategoryFromFrontmatter(frontmatter);
     const skill = createMdOnlyTypeSkill(manifest.name, frontmatter);
 
     this.skillMdCache.set(manifest.name, parsedMd);
@@ -112,16 +93,14 @@ export class SkillRegistry implements SkillRegistryPort {
       hasAiInstructions: parsedMd.hasAiInstructions,
     };
 
-    const metadata = this.extractMetadata(skill, category);
     const registration = await this.registrationModel
       .findOneAndUpdate(
         { name: manifest.name },
         {
           name: manifest.name,
-          category,
           version: manifest.version,
           modulePath: `md-only://${manifest.name}`,
-          metadata,
+          metadata: {},
           skillMd: skillMdData,
         },
         { upsert: true, new: true },
@@ -131,7 +110,7 @@ export class SkillRegistry implements SkillRegistryPort {
 
     this.register(skill, registration);
     this.logger.log(
-      `Md-only skill ${manifest.name} loaded [${category}] (AI instructions: ${parsedMd.hasAiInstructions})`,
+      `Md-only skill ${manifest.name} loaded (AI instructions: ${parsedMd.hasAiInstructions})`,
     );
   }
 
@@ -139,13 +118,9 @@ export class SkillRegistry implements SkillRegistryPort {
     const skill = this.loader.loadSkill(manifest.mainPath!);
     const skillManifest = skill.manifest;
     if (!skillManifest) {
-      this.logger.warn(
-        `Skill at ${manifest.mainPath} has no manifest, skipping`,
-      );
+      this.logger.warn(`Skill at ${manifest.mainPath} has no manifest, skipping`);
       return;
     }
-
-    const category = this.resolveCategory(skill);
 
     const parsedMd = this.skillMdParser.parse(manifest.dir);
     let skillMdData = null;
@@ -158,9 +133,6 @@ export class SkillRegistry implements SkillRegistryPort {
         eventPrompts: Object.fromEntries(parsedMd.eventPrompts),
         hasAiInstructions: parsedMd.hasAiInstructions,
       };
-      this.logger.log(
-        `Skill ${skillManifest.name} loaded with SKILL.md (AI instructions: ${parsedMd.hasAiInstructions})`,
-      );
     }
 
     const registration = await this.registrationModel
@@ -168,10 +140,9 @@ export class SkillRegistry implements SkillRegistryPort {
         { name: skillManifest.name },
         {
           name: skillManifest.name,
-          category,
           version: manifest.version,
           modulePath: manifest.mainPath,
-          metadata: this.extractMetadata(skill, category),
+          metadata: {},
           skillMd: skillMdData,
         },
         { upsert: true, new: true },
@@ -180,7 +151,6 @@ export class SkillRegistry implements SkillRegistryPort {
       .exec();
 
     this.register(skill, registration);
-    this.initSkill(skill);
   }
 
   async registerBuiltinMd(name: string, mdContent: string, version: string): Promise<void> {
@@ -191,7 +161,6 @@ export class SkillRegistry implements SkillRegistryPort {
     }
 
     const frontmatter = parsedMd.frontmatter;
-    const category = this.resolveCategoryFromFrontmatter(frontmatter);
     const skill = createMdOnlyTypeSkill(name, frontmatter);
 
     this.skillMdCache.set(name, parsedMd);
@@ -203,16 +172,14 @@ export class SkillRegistry implements SkillRegistryPort {
       hasAiInstructions: parsedMd.hasAiInstructions,
     };
 
-    const metadata = this.extractMetadata(skill, category);
     const registration = await this.registrationModel
       .findOneAndUpdate(
         { name },
         {
           name,
-          category,
           version,
           modulePath: `builtin://${name}`,
-          metadata,
+          metadata: {},
           skillMd: skillMdData,
         },
         { upsert: true, new: true },
@@ -221,53 +188,12 @@ export class SkillRegistry implements SkillRegistryPort {
       .exec();
 
     this.register(skill, registration);
-    this.logger.log(
-      `Built-in skill ${name} registered [${category}] (AI instructions: ${parsedMd.hasAiInstructions})`,
-    );
+    this.logger.log(`Built-in skill ${name} registered (AI instructions: ${parsedMd.hasAiInstructions})`);
   }
 
   async reload(): Promise<void> {
     this.skills.clear();
     this.skillMdCache.clear();
     await this.loadAll();
-  }
-
-  private resolveCategory(skill: AnySkill): SkillCategory {
-    const manifest = skill.manifest as any;
-    if ('topicType' in manifest) return SkillCategory.TYPE;
-    if ('sourceSystem' in manifest) return SkillCategory.ADAPTER;
-    return SkillCategory.TYPE;
-  }
-
-  private resolveCategoryFromFrontmatter(frontmatter: import('../interfaces/skill-md').SkillMdFrontmatter): SkillCategory {
-    if (frontmatter.category === 'adapter') return SkillCategory.ADAPTER;
-    return SkillCategory.TYPE;
-  }
-
-  extractMetadata(
-    skill: AnySkill,
-    category: SkillCategory,
-  ): Record<string, unknown> {
-    const manifest = skill.manifest as any;
-    switch (category) {
-      case SkillCategory.TYPE:
-        return { topicType: manifest.topicType };
-      case SkillCategory.ADAPTER:
-        return { sourceSystem: manifest.sourceSystem };
-      default:
-        return {};
-    }
-  }
-
-  private initSkill(skill: AnySkill): void {
-    if (typeof (skill as any).init !== 'function') return;
-
-    const manifest = skill.manifest as any;
-
-    try {
-      (skill as any).init({});
-    } catch (err) {
-      this.logger.error(`Failed to init skill ${manifest.name}`, String(err));
-    }
   }
 }
