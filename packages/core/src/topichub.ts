@@ -38,6 +38,8 @@ import type { ResolvedAuth } from './services/auth.service';
 import { Identity } from './entities/identity.entity';
 import { ExecutorRegistration } from './entities/executor-registration.entity';
 import { ImBinding } from './entities/im-binding.entity';
+import { SkillLike } from './entities/skill-like.entity';
+import { SkillUsage } from './entities/skill-usage.entity';
 
 import { AiUsageService } from './ai/ai-usage.service';
 import { AiService } from './ai/ai.service';
@@ -323,6 +325,8 @@ export class TopicHub {
     const IdentityModel = model(Identity, 'identities');
     const ExecutorRegistrationModel = model(ExecutorRegistration, 'executor_registrations');
     const ImBindingModel = model(ImBinding, 'im_bindings');
+    const SkillLikeModel = model(SkillLike, 'skill_likes');
+    const SkillUsageModel = model(SkillUsage, 'skill_usages');
 
     // Crypto
     const secretManager = new SecretManager(
