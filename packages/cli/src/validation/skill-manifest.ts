@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 /** Matches server `packages/server/src/skill/interfaces/skill-manifest.ts`. */
 const SKILL_NAME_REGEX = /^[a-z][a-z0-9-]{1,62}[a-z0-9]$/;
+const REGISTRATION_ID_REGEX = /^[a-fA-F0-9]{24}$/;
 
 export const SkillManifestSchema = z.object({
   name: z
@@ -32,6 +33,7 @@ export const SkillManifestSchema = z.object({
 });
 
 export const PublishSkillItemSchema = z.object({
+  registrationId: z.string().regex(REGISTRATION_ID_REGEX).optional(),
   name: z.string().regex(SKILL_NAME_REGEX),
   category: z.enum(['type', 'platform', 'adapter']),
   version: z.string().optional(),

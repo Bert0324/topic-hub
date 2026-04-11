@@ -1,31 +1,3 @@
-import { SetupContext } from './setup-context';
-import { SkillContext } from './skill-context';
-
-export interface AdapterSkillManifest {
-  name: string;
-  sourceSystem: string;
-  version: string;
-  webhookPath: string;
-  supportedEvents: string[];
-  ai?: boolean;
-}
-
-export interface TopicEventPayload {
-  type: string;
-  title: string;
-  sourceUrl?: string;
-  status?: string;
-  metadata?: Record<string, unknown>;
-  tags?: string[];
-  assignees?: string[];
-}
-
-export interface AdapterSkill {
-  manifest: AdapterSkillManifest;
-  init?(ctx: SkillContext): void;
-  transformWebhook(
-    payload: unknown,
-    headers: Record<string, string>,
-  ): TopicEventPayload | null;
-  runSetup?(ctx: SetupContext): Promise<void>;
-}
+// AdapterSkill interface removed — adapter skills are no longer a separate category.
+// All skills are unified SKILL.md files.
+export {};

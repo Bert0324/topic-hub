@@ -21,10 +21,6 @@ export enum TimelineActionType {
   AI_RESPONSE = 'ai_response',
 }
 
-export enum SkillCategory {
-  TYPE = 'type',
-  ADAPTER = 'adapter',
-}
 
 export enum DispatchStatus {
   UNCLAIMED = 'unclaimed',
@@ -42,6 +38,10 @@ export enum DispatchEventType {
   SIGNAL_ATTACHED = 'signal_attached',
   TAG_CHANGED = 'tag_changed',
   REOPENED = 'reopened',
+  /** Freeform group message (no slash-command) forwarded to the bound local executor. */
+  USER_MESSAGE = 'user_message',
+  /** `/registered-skill-name …` in IM — run that skill on the active topic via local executor. */
+  SKILL_INVOCATION = 'skill_invocation',
 }
 
 export enum QaExchangeStatus {

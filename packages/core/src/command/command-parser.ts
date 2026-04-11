@@ -5,19 +5,15 @@ export interface ParsedCommand {
 }
 
 export class CommandParser {
-  private static readonly PREFIX = '/topichub';
-
   parse(input: string): ParsedCommand {
     const trimmed = input.trim();
-    const normalized = trimmed.startsWith(CommandParser.PREFIX)
-      ? trimmed.slice(CommandParser.PREFIX.length).trim()
-      : trimmed;
+    const withoutSlash = trimmed.startsWith('/') ? trimmed.slice(1) : trimmed;
 
-    if (!normalized) {
+    if (!withoutSlash) {
       return { action: 'help', args: {} };
     }
 
-    const tokens = this.tokenize(normalized);
+    const tokens = this.tokenize(withoutSlash);
     const action = tokens.shift()!.toLowerCase();
 
     let type: string | undefined;

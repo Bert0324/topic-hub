@@ -59,24 +59,6 @@ export class EventContext {
 }
 
 @modelOptions({ schemaOptions: { _id: false } })
-export class AiClassification {
-  @prop()
-  topicType?: string;
-
-  @prop()
-  severity?: string;
-
-  @prop()
-  matchedSkill?: string;
-
-  @prop()
-  reasoning?: string;
-
-  @prop()
-  confidence?: number;
-}
-
-@modelOptions({ schemaOptions: { _id: false } })
 export class SkillFrontmatterSnapshot {
   @prop({ required: true })
   name!: string;
@@ -120,9 +102,6 @@ export class EnrichedPayload {
   @prop({ required: true, type: () => EventContext })
   event!: EventContext;
 
-  @prop({ type: () => AiClassification })
-  aiClassification?: AiClassification;
-
   @prop({ type: () => SkillInstructions })
   skillInstructions?: SkillInstructions;
 }
@@ -131,6 +110,10 @@ export class EnrichedPayload {
 export class DispatchResult {
   @prop()
   text?: string;
+
+  /** Short plain-text summary for IM (from local executor); full output remains in `text`. */
+  @prop()
+  imSummary?: string;
 
   @prop()
   executorType?: string;
@@ -149,16 +132,14 @@ const DISPATCH_TTL_DAYS = 30;
   schemaOptions: { collection: 'task_dispatches', timestamps: true },
   options: { allowMixed: Severity.ALLOW },
 })
-@index({ tenantId: 1, status: 1, createdAt: 1 })
-@index({ tenantId: 1, targetUserId: 1, status: 1, createdAt: 1 })
-@index({ tenantId: 1, topicId: 1 })
+@index({ status: 1, createdAt: 1 })
+@index({ targetUserId: 1, status: 1, createdAt: 1 })
+@index({ targetExecutorToken: 1, status: 1, createdAt: 1 })
+@index({ topicId: 1 })
 @index({ status: 1, claimExpiry: 1 })
 @index({ createdAt: 1 }, { expireAfterSeconds: DISPATCH_TTL_DAYS * 86400 })
 export class TaskDispatch {
   _id!: mongoose.Types.ObjectId;
-
-  @prop({ required: true, index: true })
-  tenantId!: string;
 
   @prop({ required: true, type: () => mongoose.Schema.Types.ObjectId })
   topicId!: mongoose.Types.ObjectId;
@@ -192,6 +173,10 @@ export class TaskDispatch {
 
   @prop({ default: null })
   targetUserId?: string | null;
+
+  /** Routes dispatch to the serve session that generated the pairing code (same as binding.claimToken). */
+  @prop({ default: null })
+  targetExecutorToken?: string | null;
 
   @prop({ default: null })
   sourceChannel?: string | null;

@@ -1,13 +1,10 @@
 import { TopicStatus } from '../../common/enums';
 import type { TopicService } from '../../services/topic.service';
 import type { TopicHubLogger } from '../../common/logger';
-import type { DispatchMeta } from '../../services/dispatch.service';
 import type { ParsedCommand } from '../command-parser';
 import type { CommandContext } from '../command-router';
-
-export interface SkillPipelinePort {
-  execute(tenantId: string, operation: string, topic: any, actor: string, extra?: Record<string, unknown>, dispatchMeta?: DispatchMeta): Promise<void>;
-}
+import type { SkillPipelinePort } from './create.handler';
+import { denyReasonIfCannotMutateTopic } from '../topic-mutation-access';
 
 export class ReopenHandler {
   constructor(
@@ -16,9 +13,8 @@ export class ReopenHandler {
     private readonly logger: TopicHubLogger,
   ) {}
 
-  async execute(tenantId: string, _parsed: ParsedCommand, context: CommandContext) {
+  async execute(_parsed: ParsedCommand, context: CommandContext) {
     const topics = await this.topicService.findGroupHistory(
-      tenantId,
       context.platform,
       context.groupId,
     );
@@ -38,22 +34,19 @@ export class ReopenHandler {
       };
     }
 
+    const deny = denyReasonIfCannotMutateTopic(closedTopic, context.userId);
+    if (deny) {
+      return { success: false, error: deny };
+    }
+
     try {
       const updated = await this.topicService.updateStatus(
-        tenantId,
         closedTopic._id.toString(),
         TopicStatus.OPEN,
         context.userId,
       );
 
-      await this.skillPipeline.execute(
-        tenantId,
-        'reopened',
-        updated,
-        context.userId,
-        undefined,
-        context.dispatchMeta,
-      );
+      await this.skillPipeline.notifyChannelsOnly('reopened', updated);
 
       return {
         success: true,

@@ -6,13 +6,10 @@ export type {
   IngestionOperations,
   WebhookOperations,
   MessagingOperations,
-  AuthOperations,
   SearchOperations,
   SkillOperations,
+  SkillCenterOperations,
   DispatchOperations,
-  AdminOperations,
-  AiOperations,
-  AiOperationResult,
   IdentityOperations,
   HeartbeatOperations,
   QaOperations,
@@ -22,10 +19,10 @@ export type {
 
 // Config
 export { TopicHubConfigSchema } from './config';
-export type { TopicHubConfig, AiProviderConfig, EncryptionConfig } from './config';
+export type { TopicHubConfig, EncryptionConfig } from './config';
 
 // Built-in skills
-export { getBuiltinSkills, GENERIC_TYPE_SKILL_MD, GENERIC_TYPE_VERSION } from './builtin-skills';
+export { getBuiltinSkills } from './builtin-skills';
 export type { BuiltinSkillEntry } from './builtin-skills';
 
 // Logger
@@ -39,36 +36,20 @@ export {
   NotFoundError,
   ConflictError,
   UnauthorizedError,
+  ForbiddenError,
 } from './common/errors';
 
 // Enums
 export {
   TopicStatus,
   TimelineActionType,
-  SkillCategory,
   DispatchStatus,
   DispatchEventType,
   QaExchangeStatus,
 } from './common/enums';
 
 // Skill interfaces
-export type { AiCompletionPort, SkillContext } from './skill/interfaces/skill-context';
-export type {
-  AdapterSkill,
-  AdapterSkillManifest,
-  TopicEventPayload,
-} from './skill/interfaces/adapter-skill';
-export type {
-  TypeSkill,
-  TypeSkillManifest,
-  TopicContext,
-  ValidationResult,
-  CardData,
-  CardField,
-  CardAction,
-  CardTemplate,
-  CustomArgDefinition,
-} from './skill/interfaces/type-skill';
+export type { SkillContext } from './skill/interfaces/skill-context';
 export type { SetupContext } from './skill/interfaces/setup-context';
 export type { ParsedSkillMd } from './skill/interfaces/skill-md';
 
@@ -85,28 +66,33 @@ export {
   normalizeImCommandMessage,
   canonicalOpenClawWebhookSigningString,
 } from './bridge/openclaw-bridge';
-export { MessageRenderer } from './bridge/message-renderer';
 export { BridgeManager, TOPICHUB_WEBHOOK_HMAC_ENV } from './bridge/bridge-manager';
 export type { BridgeManagerState } from './bridge/bridge-manager';
 export {
   OpenClawConfigSchema,
   OpenClawWebhookPayloadSchema,
   OpenClawWebhookUnsignedPayloadSchema,
-  TenantChannelEntrySchema,
   BridgeConfigSchema,
 } from './bridge/openclaw-types';
 export type {
   OpenClawConfig,
   OpenClawWebhookPayload,
-  TenantChannelEntry,
   OpenClawInboundResult,
   OpenClawSendParams,
   BridgeConfig,
 } from './bridge/openclaw-types';
 
+export { purifyImRelayText } from './im/im-relay-text';
+export { IM_SUMMARY_MIN_LENGTH, pickImNotifyBody } from './im/im-notify-body';
+
 // Services
 export { IdentityService } from './identity/identity.service';
-export type { ClaimResult, ResolvedPlatformUser, ResolvedClaimTokenUser } from './identity/identity.service';
+export type {
+  ClaimResult,
+  ResolvedPlatformUser,
+  ResolvedClaimTokenUser,
+  PairingRotatedPayload,
+} from './identity/identity.service';
 export { HeartbeatService } from './services/heartbeat.service';
 export type { ExecutorHeartbeatMeta, RegisterExecutorResult } from './services/heartbeat.service';
 export { QaService } from './services/qa.service';

@@ -40,28 +40,13 @@ export class TopicHubService implements OnModuleInit, OnModuleDestroy {
       };
     };
 
-    const parseTenantMapping = (
-      raw?: string,
-    ): Record<string, { tenantId: string; platform: string }> => {
-      if (!raw) return {};
-      try {
-        return JSON.parse(raw);
-      } catch {
-        this.logger.warn(`Invalid TOPICHUB_OPENCLAW_TENANT_MAPPING JSON — ignoring`);
-        return {};
-      }
-    };
-
     const openclawConfig = this.config.get<string>('TOPICHUB_OPENCLAW_GATEWAY_URL') ? {
       gatewayUrl: this.config.get<string>('TOPICHUB_OPENCLAW_GATEWAY_URL')!,
       token: this.config.get<string>('TOPICHUB_OPENCLAW_TOKEN') ?? '',
       webhookSecret: this.config.get<string>('TOPICHUB_OPENCLAW_WEBHOOK_SECRET') ?? '',
-      tenantMapping: parseTenantMapping(this.config.get<string>('TOPICHUB_OPENCLAW_TENANT_MAPPING')),
     } : undefined;
 
-    const bridgeConfig = this.buildBridgeConfig(
-      parseTenantMapping(this.config.get<string>('TOPICHUB_OPENCLAW_TENANT_MAPPING')),
-    );
+    const bridgeConfig = this.buildBridgeConfig();
 
     this.hub = await TopicHub.create({
       mongoConnection: this.connection,
@@ -125,9 +110,7 @@ export class TopicHubService implements OnModuleInit, OnModuleDestroy {
     return `mongodb://${auth}${hosts}/${db}`;
   }
 
-  private buildBridgeConfig(
-    tenantMapping: Record<string, { tenantId: string; platform: string }>,
-  ): BridgeConfig | undefined {
+  private buildBridgeConfig(): BridgeConfig | undefined {
     const webhookUrl = this.config.get<string>('TOPICHUB_BRIDGE_WEBHOOK_URL');
     if (!webhookUrl) return undefined;
 
@@ -162,14 +145,12 @@ export class TopicHubService implements OnModuleInit, OnModuleDestroy {
       channels.slack = { botToken: slackBotToken, appToken: slackAppToken };
     }
 
-    if (!channels.feishu && !channels.discord && !channels.telegram && !channels.slack) {
-      return undefined;
+    const weixinEnabled = this.config.get<string>('TOPICHUB_BRIDGE_WEIXIN_ENABLED');
+    if (weixinEnabled === 'true') {
+      channels.weixin = { enabled: true };
     }
 
-    if (Object.keys(tenantMapping).length === 0) {
-      this.logger.warn(
-        'Bridge channels configured but TOPICHUB_OPENCLAW_TENANT_MAPPING is empty — bridge disabled',
-      );
+    if (!channels.feishu && !channels.discord && !channels.telegram && !channels.slack && !channels.weixin) {
       return undefined;
     }
 
@@ -177,7 +158,6 @@ export class TopicHubService implements OnModuleInit, OnModuleDestroy {
 
     return {
       channels: channels as BridgeConfig['channels'],
-      tenantMapping,
       webhookUrl,
       ...(port ? { port: parseInt(port, 10) } : {}),
     };

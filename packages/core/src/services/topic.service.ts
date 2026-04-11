@@ -30,10 +30,9 @@ export class TopicService {
     private readonly logger: TopicHubLogger,
   ) {}
 
-  async create(tenantId: string, data: CreateTopicData) {
+  async create(data: CreateTopicData) {
     if (data.groupInfo) {
       const existing = await this.findActiveTopicByGroup(
-        tenantId,
         data.groupInfo.platform,
         data.groupInfo.groupId,
       );
@@ -45,7 +44,6 @@ export class TopicService {
     }
 
     const topic = await this.topicModel.create({
-      tenantId,
       type: data.type,
       title: data.title,
       sourceUrl: data.sourceUrl,
@@ -63,7 +61,6 @@ export class TopicService {
     });
 
     await this.timelineModel.create({
-      tenantId,
       topicId: topic._id,
       actor: data.createdBy,
       actionType: TimelineActionType.CREATED,
@@ -73,18 +70,17 @@ export class TopicService {
     return topic;
   }
 
-  async findById(tenantId: string, id: string) {
-    return this.topicModel.findOne({ _id: id, tenantId }).exec();
+  async findById(id: string) {
+    return this.topicModel.findOne({ _id: id }).exec();
   }
 
   async updateStatus(
-    tenantId: string,
     id: string,
     newStatus: TopicStatus,
     actor: string,
   ) {
     const topic = await this.topicModel
-      .findOne({ _id: id, tenantId })
+      .findOne({ _id: id })
       .exec();
     if (!topic) return null;
 
@@ -112,7 +108,6 @@ export class TopicService {
     await topic.save();
 
     await this.timelineModel.create({
-      tenantId,
       topicId: topic._id,
       actor,
       actionType:
@@ -125,10 +120,10 @@ export class TopicService {
     return topic;
   }
 
-  async assignUser(tenantId: string, id: string, userId: string, actor: string) {
+  async assignUser(id: string, userId: string, actor: string) {
     const topic = await this.topicModel
       .findOneAndUpdate(
-        { _id: id, tenantId },
+        { _id: id },
         {
           $addToSet: {
             assignees: { userId, assignedAt: new Date() },
@@ -140,7 +135,6 @@ export class TopicService {
 
     if (topic) {
       await this.timelineModel.create({
-        tenantId,
         topicId: topic._id,
         actor,
         actionType: TimelineActionType.ASSIGNED,
@@ -151,10 +145,10 @@ export class TopicService {
     return topic;
   }
 
-  async addTag(tenantId: string, id: string, tag: string, actor: string) {
+  async addTag(id: string, tag: string, actor: string) {
     const topic = await this.topicModel
       .findOneAndUpdate(
-        { _id: id, tenantId },
+        { _id: id },
         { $addToSet: { tags: tag } },
         { new: true },
       )
@@ -162,7 +156,6 @@ export class TopicService {
 
     if (topic) {
       await this.timelineModel.create({
-        tenantId,
         topicId: topic._id,
         actor,
         actionType: TimelineActionType.TAG_ADDED,
@@ -173,10 +166,10 @@ export class TopicService {
     return topic;
   }
 
-  async removeTag(tenantId: string, id: string, tag: string, actor: string) {
+  async removeTag(id: string, tag: string, actor: string) {
     const topic = await this.topicModel
       .findOneAndUpdate(
-        { _id: id, tenantId },
+        { _id: id },
         { $pull: { tags: tag } },
         { new: true },
       )
@@ -184,7 +177,6 @@ export class TopicService {
 
     if (topic) {
       await this.timelineModel.create({
-        tenantId,
         topicId: topic._id,
         actor,
         actionType: TimelineActionType.TAG_REMOVED,
@@ -196,14 +188,13 @@ export class TopicService {
   }
 
   async attachSignal(
-    tenantId: string,
     id: string,
     signal: { label: string; url?: string; description?: string },
     actor: string,
   ) {
     const topic = await this.topicModel
       .findOneAndUpdate(
-        { _id: id, tenantId },
+        { _id: id },
         { $push: { signals: { ...signal, createdAt: new Date() } } },
         { new: true },
       )
@@ -211,7 +202,6 @@ export class TopicService {
 
     if (topic) {
       await this.timelineModel.create({
-        tenantId,
         topicId: topic._id,
         actor,
         actionType: TimelineActionType.SIGNAL_ATTACHED,
@@ -222,33 +212,29 @@ export class TopicService {
     return topic;
   }
 
-  async findBySourceUrl(tenantId: string, sourceUrl: string) {
-    return this.topicModel.findOne({ tenantId, sourceUrl }).exec();
+  async findBySourceUrl(sourceUrl: string) {
+    return this.topicModel.findOne({ sourceUrl }).exec();
   }
 
   async findActiveTopicByGroup(
-    tenantId: string,
     platform: string,
     groupId: string,
   ) {
     return this.topicModel
       .findOne({
-        tenantId,
         'groups.platform': platform,
         'groups.groupId': groupId,
-        status: { $in: [TopicStatus.OPEN, TopicStatus.IN_PROGRESS] },
+        status: { $ne: TopicStatus.CLOSED },
       })
       .exec();
   }
 
   async findGroupHistory(
-    tenantId: string,
     platform: string,
     groupId: string,
   ) {
     return this.topicModel
       .find({
-        tenantId,
         'groups.platform': platform,
         'groups.groupId': groupId,
       })
@@ -256,10 +242,10 @@ export class TopicService {
       .exec();
   }
 
-  async upsertBySourceUrl(tenantId: string, data: CreateTopicData) {
+  async upsertBySourceUrl(data: CreateTopicData) {
     const result = await this.topicModel
       .findOneAndUpdate(
-        { tenantId, sourceUrl: data.sourceUrl },
+        { sourceUrl: data.sourceUrl },
         {
           $set: {
             type: data.type,
@@ -268,7 +254,6 @@ export class TopicService {
             createdBy: data.createdBy,
           },
           $setOnInsert: {
-            tenantId,
             sourceUrl: data.sourceUrl,
             status: TopicStatus.OPEN,
             groups: data.groupInfo

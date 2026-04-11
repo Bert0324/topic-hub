@@ -11,7 +11,6 @@ export class QaService {
   ) {}
 
   async createQuestion(
-    tenantId: string,
     dispatchId: string,
     topichubUserId: string,
     questionText: string,
@@ -21,7 +20,6 @@ export class QaService {
   ): Promise<any> {
     const now = new Date();
     const doc = await this.qaModel.create({
-      tenantId,
       dispatchId: new mongoose.Types.ObjectId(dispatchId),
       topichubUserId,
       questionText,

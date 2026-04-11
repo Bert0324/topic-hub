@@ -3,5 +3,4 @@ export interface SetupContext {
   openBrowser(url: string): Promise<void>;
   storeSecret(key: string, value: string): Promise<void>;
   log(message: string): void;
-  tenantId: string;
 }

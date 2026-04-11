@@ -6,26 +6,6 @@ const restArgs = args.slice(2);
 
 async function main() {
   switch (command) {
-    case 'skill': {
-      const { handleSkillCommand } = await import('./commands/skill/index.js');
-      await handleSkillCommand(subcommand, restArgs);
-      break;
-    }
-    case 'stats': {
-      const { handleStatsCommand } = await import('./commands/stats.js');
-      await handleStatsCommand(restArgs);
-      break;
-    }
-    case 'health': {
-      const { handleHealthCommand } = await import('./commands/health.js');
-      await handleHealthCommand();
-      break;
-    }
-    case 'ai': {
-      const { handleAiCommand } = await import('./commands/ai/index.js');
-      await handleAiCommand(subcommand, restArgs);
-      break;
-    }
     case 'init': {
       const { handleInitCommand } = await import('./commands/init/index.js');
       await handleInitCommand();
@@ -36,9 +16,9 @@ async function main() {
       await handleServeCommand(restArgs);
       break;
     }
-    case 'skill-repo': {
-      const { handleSkillRepoCommand } = await import('./commands/skill-repo/index.js');
-      await handleSkillRepoCommand(subcommand, restArgs);
+    case 'identity': {
+      const { handleIdentityCommand } = await import('./commands/identity/index.js');
+      await handleIdentityCommand(subcommand, restArgs);
       break;
     }
     case 'publish': {
@@ -46,47 +26,27 @@ async function main() {
       await handlePublishCommand(args.slice(1));
       break;
     }
-    case 'group': {
-      const { handleGroupCommand } = await import('./commands/group/index.js');
-      await handleGroupCommand(subcommand, restArgs);
-      break;
-    }
-    case 'identity': {
-      const { handleIdentityCommand } = await import('./commands/identity/index.js');
-      await handleIdentityCommand(subcommand, restArgs);
-      break;
-    }
-    case 'link': {
-      const { handleLinkCommand } = await import('./commands/link/index.js');
-      await handleLinkCommand(args.slice(1));
-      break;
-    }
-    case 'unlink': {
-      const { handleUnlinkCommand } = await import('./commands/unlink/index.js');
-      await handleUnlinkCommand(args.slice(1));
-      break;
-    }
-    case 'auth': {
-      const { saveAdminToken } = await import('./auth/auth.js');
-      if (args[1]) {
-        await saveAdminToken(args[1]);
-        console.log('Authenticated.');
-      } else {
-        console.log('Usage: topichub-admin auth <token>');
-      }
+    case 'skills': {
+      const { handleSkillsCommand } = await import('./commands/skills/index.js');
+      await handleSkillsCommand(subcommand, restArgs);
       break;
     }
     case 'login': {
-      const { login } = await import('./auth/auth.js');
-      const pkceConfig = {
-        authorizeUrl: process.env.TOPICHUB_AUTHORIZE_URL ?? 'https://auth.topichub.dev/authorize',
-        tokenUrl: process.env.TOPICHUB_TOKEN_URL ?? 'https://auth.topichub.dev/oauth/token',
-        clientId: process.env.TOPICHUB_CLIENT_ID ?? 'topichub-cli',
-        redirectUri: '',
-        scopes: ['openid', 'profile', 'email'],
-      };
-      const result = await login(pkceConfig);
-      console.log(`Logged in as ${result.displayName}`);
+      const { saveAdminToken } = await import('./auth/auth.js');
+      const tokenArg = args[1];
+      if (tokenArg) {
+        await saveAdminToken(tokenArg);
+        console.log('  ✓ Token saved.');
+      } else {
+        const { password } = await import('@inquirer/prompts');
+        const token = await password({
+          message: 'Paste your admin token',
+          mask: '*',
+          validate: (val) => val.length >= 10 || 'Token seems too short',
+        });
+        await saveAdminToken(token);
+        console.log('  ✓ Token saved.');
+      }
       break;
     }
     case 'logout': {
@@ -95,10 +55,53 @@ async function main() {
       console.log('Logged out. All tokens cleared.');
       break;
     }
+    case 'help':
     default:
-      console.log('Usage: topichub-admin <command> [subcommand] [args]');
-      console.log('Commands: init, serve, skill, skill-repo, publish, group, identity, stats, health, ai, auth, login, logout, link, unlink');
+      printHelp();
   }
+}
+
+function printHelp() {
+  const help = `
+  Usage: topichub-admin <command> [subcommand] [options]
+
+  Setup & Auth
+    init                              Interactive local environment setup
+    login [token]                     Save admin token (from identity create)
+    logout                            Clear all stored tokens
+
+  Runtime
+    serve [options]                   Start executor daemon (SSE + heartbeat)
+      --executor <name>               Override configured executor
+      --max-agents <n>                Max concurrent agents (1–10)
+      --force                         Force start even if executor not on PATH
+      --yes                           Skip executor launch prompts (use defaults for headless flags)
+
+  Identity Management
+    identity me                       View your identity details
+    identity create [options]         Create a new identity (superadmin)
+      --unique-id <id>                Required. Unique identifier
+      --name <display-name>           Required. Display name
+    identity list                     List all identities (superadmin)
+    identity revoke --id <id>         Revoke an identity (superadmin)
+    identity regenerate-token --id <id>
+                                      Regenerate identity token (superadmin)
+
+  Skills
+    publish [--id <id>] <path>         Publish a skill (identity/executor/admin token; author-only updates)
+                                      Use --id from "skills list" to update that registration
+                                      <path>: skill directory, or SKILL.md / package.json inside it
+                                      (alias: skills publish …)
+    skills list [--page n] [--limit n] [--sort popular|recent|usage]
+                                      List published skills (author, version, uses, likes)
+    skills star <name>                Like / star a skill (identity or executor token)
+    skills view <name>                Download skill by name into skillsDir
+    skills view --id <id>            Download skill by registration id
+    skills delete <id>               Unpublish by registration id (author only; id from list)
+
+  help                                Show this message
+`;
+  console.log(help);
 }
 
 main().catch(console.error);

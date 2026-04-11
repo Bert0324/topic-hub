@@ -10,17 +10,19 @@ const MAX_RETRY_COUNT = 3;
 
 export interface DispatchMeta {
   targetUserId?: string;
+  /** Same value as IM binding claimToken / pairing executorClaimToken — routes to one serve session. */
+  targetExecutorToken?: string;
   sourceChannel?: string;
   sourcePlatform?: string;
 }
 
 export interface CreateDispatchDto {
-  tenantId: string;
   topicId: string;
   eventType: string;
   skillName: string;
   enrichedPayload: any;
   targetUserId?: string;
+  targetExecutorToken?: string;
   sourceChannel?: string;
   sourcePlatform?: string;
 }
@@ -55,7 +57,6 @@ export class DispatchService {
 
   async create(dto: CreateDispatchDto): Promise<any> {
     const dispatch = await this.dispatchModel.create({
-      tenantId: dto.tenantId,
       topicId: new mongoose.Types.ObjectId(dto.topicId),
       eventType: dto.eventType,
       skillName: dto.skillName,
@@ -63,6 +64,7 @@ export class DispatchService {
       retryCount: 0,
       enrichedPayload: dto.enrichedPayload,
       targetUserId: dto.targetUserId ?? null,
+      targetExecutorToken: dto.targetExecutorToken ?? null,
       sourceChannel: dto.sourceChannel ?? null,
       sourcePlatform: dto.sourcePlatform ?? null,
     });
@@ -80,21 +82,19 @@ export class DispatchService {
   }
 
   async findUnclaimed(
-    tenantId: string,
-    options?: { limit?: number; since?: Date; targetUserId?: string },
+    options?: { limit?: number; since?: Date; executorToken?: string },
   ): Promise<any[]> {
     const filter: Record<string, unknown> = {
-      tenantId,
       status: DispatchStatus.UNCLAIMED,
     };
     if (options?.since) {
       filter.createdAt = { $gt: options.since };
     }
-    if (options?.targetUserId) {
-      filter.$or = [
-        { targetUserId: options.targetUserId },
-        { targetUserId: null },
-      ];
+    if (options?.executorToken) {
+      filter.targetExecutorToken = options.executorToken;
+    } else {
+      // No unscoped listing: executor clients must always pass executorToken.
+      return [];
     }
 
     return this.dispatchModel
@@ -104,34 +104,18 @@ export class DispatchService {
       .exec();
   }
 
-  async findUnclaimedForUser(
-    tenantId: string,
-    topichubUserId: string,
-    options?: { limit?: number; since?: Date },
-  ): Promise<any[]> {
-    return this.findUnclaimed(tenantId, {
-      ...options,
-      targetUserId: topichubUserId,
-    });
-  }
-
   async claim(
     dispatchId: string,
     claimedBy: string,
-    targetUserId?: string,
+    executorToken: string,
   ): Promise<any | null> {
     const claimExpiry = new Date(Date.now() + CLAIM_TTL_MS);
 
     const filter: Record<string, unknown> = {
       _id: dispatchId,
       status: DispatchStatus.UNCLAIMED,
+      targetExecutorToken: executorToken,
     };
-    if (targetUserId) {
-      filter.$or = [
-        { targetUserId },
-        { targetUserId: null },
-      ];
-    }
 
     return this.dispatchModel
       .findOneAndUpdate(
@@ -151,10 +135,15 @@ export class DispatchService {
   async complete(
     dispatchId: string,
     result: { text: string; executorType: string; tokenUsage?: { input: number; output: number }; durationMs: number },
+    executorToken: string,
   ): Promise<any | null> {
     return this.dispatchModel
       .findOneAndUpdate(
-        { _id: dispatchId, status: DispatchStatus.CLAIMED },
+        {
+          _id: dispatchId,
+          status: DispatchStatus.CLAIMED,
+          targetExecutorToken: executorToken,
+        },
         {
           $set: {
             status: DispatchStatus.COMPLETED,
@@ -171,17 +160,28 @@ export class DispatchService {
   async fail(
     dispatchId: string,
     error: string,
-    retryable = false,
+    retryable: boolean,
+    executorToken: string,
   ): Promise<any | null> {
-    const dispatch = await this.dispatchModel.findById(dispatchId).exec();
-    if (!dispatch || dispatch.status !== DispatchStatus.CLAIMED) return null;
+    const dispatch = await this.dispatchModel
+      .findOne({
+        _id: dispatchId,
+        status: DispatchStatus.CLAIMED,
+        targetExecutorToken: executorToken,
+      })
+      .exec();
+    if (!dispatch) return null;
 
     const shouldRetry =
       retryable && dispatch.retryCount < MAX_RETRY_COUNT;
 
     return this.dispatchModel
       .findOneAndUpdate(
-        { _id: dispatchId },
+        {
+          _id: dispatchId,
+          status: DispatchStatus.CLAIMED,
+          targetExecutorToken: executorToken,
+        },
         {
           $set: {
             status: shouldRetry
@@ -266,6 +266,7 @@ export class DispatchService {
       .find({
         status: DispatchStatus.UNCLAIMED,
         targetUserId: { $ne: null },
+        targetExecutorToken: { $ne: null },
         sourceChannel: { $ne: null },
         sourcePlatform: { $ne: null },
         createdAt: { $lt: cutoff },
@@ -281,12 +282,9 @@ export class DispatchService {
       .exec();
   }
 
-  async countByStatus(
-    tenantId: string,
-  ): Promise<Record<DispatchStatus, number>> {
+  async countByStatus(): Promise<Record<DispatchStatus, number>> {
     const results = await this.dispatchModel
       .aggregate([
-        { $match: { tenantId } },
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ])
       .exec();

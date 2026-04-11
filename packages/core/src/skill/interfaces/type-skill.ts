@@ -1,12 +1,6 @@
 import { z } from 'zod';
-import { SkillContext } from './skill-context';
 
-export interface CustomArgDefinition {
-  name: string;
-  type: 'string' | 'number' | 'boolean' | 'user';
-  required: boolean;
-  description: string;
-}
+// Card rendering types — still used by message-renderer and md-only-skill.
 
 export interface CardField {
   label: string;
@@ -32,57 +26,16 @@ export interface CardData {
   status: string;
 }
 
-export interface InvitationRule {
-  field: string;
-  autoInvite: boolean;
+export interface ValidationResult {
+  valid: boolean;
+  errors?: { field: string; message: string }[];
 }
-
-export type StatusTransitionMap = Record<string, string[]>;
 
 export interface TypeSkillManifest {
   name: string;
   topicType: string;
   version: string;
   fieldSchema: z.ZodSchema;
-  statusTransitions?: StatusTransitionMap;
   groupNamingTemplate: string;
-  invitationRules?: InvitationRule[];
-  customArgs?: CustomArgDefinition[];
   cardTemplate: CardTemplate;
-  ai?: boolean;
-}
-
-export interface ValidationResult {
-  valid: boolean;
-  errors?: { field: string; message: string }[];
-}
-
-export interface TopicContext {
-  topic: any;
-  actor: string;
-  tenantId: string;
-  timestamp: Date;
-}
-
-export interface TypeSkill {
-  manifest: TypeSkillManifest;
-  init?(ctx: SkillContext): void;
-  onTopicCreated?(ctx: TopicContext): Promise<void> | void;
-  onTopicUpdated?(ctx: TopicContext): Promise<void> | void;
-  onTopicStatusChanged?(
-    ctx: TopicContext & { from: string; to: string },
-  ): Promise<void> | void;
-  onTopicAssigned?(
-    ctx: TopicContext & { userId: string },
-  ): Promise<void> | void;
-  onTopicClosed?(ctx: TopicContext): Promise<void> | void;
-  onTopicReopened?(ctx: TopicContext): Promise<void> | void;
-  onSignalAttached?(
-    ctx: TopicContext & { signal: any },
-  ): Promise<void> | void;
-  onTagChanged?(
-    ctx: TopicContext & { added?: string[]; removed?: string[] },
-  ): Promise<void> | void;
-  renderCard(topic: any): CardData;
-  validateMetadata(metadata: unknown): ValidationResult;
 }

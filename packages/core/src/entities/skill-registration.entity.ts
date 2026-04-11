@@ -1,6 +1,5 @@
 import { prop, modelOptions, Severity, index } from '@typegoose/typegoose';
 import mongoose from 'mongoose';
-import { SkillCategory } from '../common/enums';
 
 export interface SkillMdData {
   name: string;
@@ -24,8 +23,8 @@ export class PublishedSkillContent {
   files!: Record<string, string>;
 }
 
-@index({ name: 1, tenantId: 1 }, { unique: true })
-@index({ tenantId: 1, isPrivate: 1 })
+@index({ name: 1 }, { unique: true })
+@index({ isPrivate: 1 })
 @modelOptions({
   schemaOptions: { collection: 'skill_registrations', timestamps: true },
   options: { allowMixed: Severity.ALLOW },
@@ -34,8 +33,8 @@ export class SkillRegistration {
   @prop({ required: true })
   name!: string;
 
-  @prop({ required: true, enum: SkillCategory })
-  category!: SkillCategory;
+  @prop()
+  category?: string;
 
   @prop({ required: true })
   version!: string;
@@ -49,12 +48,22 @@ export class SkillRegistration {
   @prop({ type: () => mongoose.Schema.Types.Mixed, default: null })
   skillMd!: SkillMdData | null;
 
-  @prop({ type: String, default: null })
-  tenantId!: string | null;
-
   @prop({ default: false })
   isPrivate!: boolean;
 
   @prop({ type: () => PublishedSkillContent, default: null, _id: false })
   publishedContent!: PublishedSkillContent | null;
+
+  /** Identity that published this skill to the catalog (superadmin or future author flows). */
+  @prop()
+  authorIdentityId?: string;
+
+  @prop({ default: 0 })
+  likeCount!: number;
+
+  @prop({ default: 0 })
+  usageCount!: number;
+
+  @prop()
+  publishedAt?: Date;
 }

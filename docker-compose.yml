@@ -20,13 +20,6 @@ services:
       SKILLS_DIR: /app/skills
       LOG_FORMAT: json
       LOG_LEVEL: info
-      AI_ENABLED: ${AI_ENABLED:-false}
-      AI_PROVIDER: ${AI_PROVIDER:-ark}
-      AI_API_URL: ${AI_API_URL:-}
-      AI_API_KEY: ${AI_API_KEY:-}
-      AI_MODEL: ${AI_MODEL:-doubao-seed-2-0-pro-260215}
-      AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-10000}
-      AI_RATE_LIMIT_GLOBAL: ${AI_RATE_LIMIT_GLOBAL:-1000}
     volumes:
       - ./skills:/app/skills
     depends_on:

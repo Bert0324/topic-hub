@@ -1,23 +1,32 @@
 import { EventSource } from 'eventsource';
 import { ApiClient } from '../../api-client/api-client.js';
 
+/** Server sends Mongo `_id`; normalize with `getDispatchId` before claim/complete APIs. */
 export interface DispatchEvent {
-  id: string;
+  id?: string;
+  _id?: string;
   topicId: string;
   eventType: string;
   skillName: string;
   createdAt: string;
+  enrichedPayload?: unknown;
+}
+
+export interface PairingRotatedPayload {
+  code: string;
+  expiresAt: string;
 }
 
 export interface EventConsumerOptions {
   serverUrl: string;
+  /** Bearer token: must be the active `executorToken` from `POST /api/v1/executors/register`. */
   token: string;
-  executorToken?: string;
-  topichubUserId?: string;
   onDispatch: (event: DispatchEvent) => void;
   onConnected: () => void;
   onDisconnected: (err?: Error) => void;
   onHeartbeat: (pendingCount: number) => void;
+  /** Fired when the server rotated the pairing code (e.g. after exposure in a group chat). */
+  onPairingRotated?: (payload: PairingRotatedPayload) => void;
 }
 
 export class EventConsumer {
@@ -45,10 +54,7 @@ export class EventConsumer {
 
   private async catchUp(): Promise<void> {
     try {
-      let url = `/api/v1/dispatches?status=unclaimed&limit=50`;
-      if (this.options.topichubUserId) {
-        url += `&targetUserId=${encodeURIComponent(this.options.topichubUserId)}`;
-      }
+      const url = `/api/v1/dispatches?status=unclaimed&limit=50`;
       const data = await this.api.get<{ dispatches: DispatchEvent[] }>(url);
       for (const dispatch of data.dispatches) {
         this.options.onDispatch(dispatch);
@@ -61,12 +67,7 @@ export class EventConsumer {
   private connectSse(): void {
     if (this.closed) return;
 
-    let url = `${this.options.serverUrl}/api/v1/dispatches/stream`;
-    if (this.options.executorToken) {
-      url += `?executorToken=${encodeURIComponent(this.options.executorToken)}`;
-    } else if (this.options.topichubUserId) {
-      url += `?targetUserId=${encodeURIComponent(this.options.topichubUserId)}`;
-    }
+    const url = `${this.options.serverUrl}/api/v1/dispatches/stream`;
     const es = new EventSource(url, {
       fetch: (input: any, init?: any) =>
         fetch(input, {
@@ -100,6 +101,20 @@ export class EventConsumer {
         // Ignore
       }
     }) as any);
+
+    if (this.options.onPairingRotated) {
+      const cb = this.options.onPairingRotated;
+      es.addEventListener('pairing_rotated', ((evt: MessageEvent) => {
+        try {
+          const data = JSON.parse(String(evt.data)) as PairingRotatedPayload;
+          if (data?.code && data?.expiresAt) {
+            cb(data);
+          }
+        } catch {
+          // Malformed event — skip
+        }
+      }) as any);
+    }
 
     es.addEventListener('error', () => {
       this.options.onDisconnected(

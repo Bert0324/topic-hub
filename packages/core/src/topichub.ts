@@ -2,17 +2,14 @@ import mongoose from 'mongoose';
 import { getModelForClass } from '@typegoose/typegoose';
 import { TopicHubConfigSchema, TopicHubConfig } from './config';
 import { defaultLoggerFactory, LoggerFactory, TopicHubLogger } from './common/logger';
-import { NotFoundError, UnauthorizedError, TopicHubError } from './common/errors';
-import { SkillCategory, TimelineActionType } from './common/enums';
+import { NotFoundError, TopicHubError } from './common/errors';
 import { getBuiltinSkills } from './builtin-skills';
 
 import { Topic } from './entities/topic.entity';
 import { TimelineEntry } from './entities/timeline-entry.entity';
 import { SkillRegistration } from './entities/skill-registration.entity';
-import { TenantSkillConfig } from './entities/tenant-skill-config.entity';
-import { Tenant } from './entities/tenant.entity';
 import { TaskDispatch } from './entities/task-dispatch.entity';
-import { AiUsageRecord } from './entities/ai-usage.entity';
+
 import { UserIdentityBinding } from './entities/user-identity-binding.entity';
 import { ExecutorHeartbeat } from './entities/executor-heartbeat.entity';
 import { QaExchange } from './entities/qa-exchange.entity';
@@ -21,17 +18,22 @@ import { PairingCode } from './identity/pairing-code.entity';
 import { SecretManager, CryptoService } from './services/crypto.service';
 import { TopicService } from './services/topic.service';
 import { TimelineService } from './services/timeline.service';
-import { TenantService } from './services/tenant.service';
 import { SearchService } from './services/search.service';
 import { DispatchService } from './services/dispatch.service';
 import { IdentityService } from './identity/identity.service';
-import type { ClaimResult, ResolvedPlatformUser, ResolvedClaimTokenUser } from './identity/identity.service';
+import type {
+  ClaimResult,
+  ResolvedPlatformUser,
+  ResolvedClaimTokenUser,
+  PairingRotatedPayload,
+} from './identity/identity.service';
 import { DISPATCH_UNCLAIMED_REMINDER_MS } from './identity/identity-types';
 import type { CreateIdentityInput } from './identity/identity-types';
 import { HeartbeatService } from './services/heartbeat.service';
 import type { ExecutorHeartbeatMeta, RegisterExecutorResult } from './services/heartbeat.service';
 import { QaService } from './services/qa.service';
 import { SuperadminService } from './services/superadmin.service';
+import { SkillCenterService } from './services/skill-center.service';
 import type { InitResult, CreateIdentityResult } from './services/superadmin.service';
 import { AuthService } from './services/auth.service';
 import type { ResolvedAuth } from './services/auth.service';
@@ -41,17 +43,11 @@ import { ImBinding } from './entities/im-binding.entity';
 import { SkillLike } from './entities/skill-like.entity';
 import { SkillUsage } from './entities/skill-usage.entity';
 
-import { AiUsageService } from './ai/ai-usage.service';
-import { AiService } from './ai/ai.service';
-import { ArkProvider } from './ai/ark-provider';
-import { AI_CONFIG_DEFAULTS, loadAiConfig } from './ai/ai-config';
-import type { AiProvider } from './ai/ai-provider.interface';
-
 import { SkillLoader } from './skill/registry/skill-loader';
 import { SkillMdParser } from './skill/registry/skill-md-parser';
 import { SkillRegistry } from './skill/registry/skill-registry';
-import { SkillConfigService } from './skill/config/skill-config.service';
 import { SkillPipeline } from './skill/pipeline/skill-pipeline';
+import { pickImNotifyBody } from './im/im-notify-body';
 import { CommandParser } from './command/command-parser';
 import { CommandRouter, CommandContext } from './command/command-router';
 import { CreateHandler } from './command/handlers/create.handler';
@@ -62,6 +58,8 @@ import { TimelineHandler } from './command/handlers/timeline.handler';
 import { ReopenHandler } from './command/handlers/reopen.handler';
 import { HistoryHandler } from './command/handlers/history.handler';
 import { HelpHandler } from './command/handlers/help.handler';
+import { RelayHandler } from './command/handlers/relay.handler';
+import { SkillInvokeHandler } from './command/handlers/skill-invoke.handler';
 
 import { IngestionService } from './ingestion/ingestion.service';
 import {
@@ -78,40 +76,40 @@ import type { OpenClawConfig, BridgeConfig } from './bridge/openclaw-types';
 // --- Operation namespace types ---
 
 export interface TopicOperations {
-  list(tenantId: string, query?: {
+  list(query?: {
     status?: string;
     type?: string;
     limit?: number;
     offset?: number;
   }): Promise<{ topics: any[]; total: number }>;
-  get(tenantId: string, topicId: string): Promise<any>;
-  create(tenantId: string, data: {
+  get(topicId: string): Promise<any>;
+  create(data: {
     type: string;
     title: string;
     sourceUrl?: string;
     metadata?: Record<string, unknown>;
     createdBy: string;
   }): Promise<any>;
-  update(tenantId: string, topicId: string, updates: {
+  update(topicId: string, updates: {
     status?: string;
     tags?: string[];
     assignees?: string[];
     metadata?: Record<string, unknown>;
   }, actor: string): Promise<any>;
-  addTimeline(tenantId: string, topicId: string, entry: {
+  addTimeline(topicId: string, entry: {
     actor: string;
     actionType: string;
     payload?: Record<string, unknown>;
   }): Promise<any>;
-  updateStatus(tenantId: string, topicId: string, status: string, actor: string): Promise<any>;
-  addTag(tenantId: string, topicId: string, tag: string, actor: string): Promise<void>;
-  removeTag(tenantId: string, topicId: string, tag: string, actor: string): Promise<void>;
-  assignUser(tenantId: string, topicId: string, userId: string, actor: string): Promise<void>;
-  unassignUser(tenantId: string, topicId: string, userId: string, actor: string): Promise<void>;
+  updateStatus(topicId: string, status: string, actor: string): Promise<any>;
+  addTag(topicId: string, tag: string, actor: string): Promise<void>;
+  removeTag(topicId: string, tag: string, actor: string): Promise<void>;
+  assignUser(topicId: string, userId: string, actor: string): Promise<void>;
+  unassignUser(topicId: string, userId: string, actor: string): Promise<void>;
 }
 
 export interface CommandOperations {
-  execute(tenantId: string, rawCommand: string, context: {
+  execute(rawCommand: string, context: {
     platform: string;
     groupId: string;
     userId: string;
@@ -119,7 +117,7 @@ export interface CommandOperations {
 }
 
 export interface IngestionOperations {
-  ingest(tenantId: string, payload: {
+  ingest(payload: {
     type: string;
     title: string;
     sourceUrl?: string;
@@ -131,7 +129,6 @@ export interface IngestionOperations {
 }
 
 export interface WebhookOperations {
-  handle(platform: string, payload: unknown, headers: Record<string, string>): Promise<WebhookResult>;
   handleOpenClaw(
     payload: unknown,
     rawBody?: Buffer | string,
@@ -141,19 +138,13 @@ export interface WebhookOperations {
 
 export interface MessagingOperations {
   send(platform: string, params: {
-    tenantId: string;
     groupId: string;
     message: string;
   }): Promise<void>;
 }
 
-export interface AuthOperations {
-  resolveTenant(apiKey: string): Promise<{ tenantId: string; slug: string } | null>;
-  resolveFromHeaders(headers: Record<string, string | string[] | undefined>): Promise<{ tenantId: string; slug: string }>;
-}
-
 export interface SearchOperations {
-  search(tenantId: string, query: {
+  search(query: {
     q?: string;
     status?: string;
     type?: string;
@@ -166,62 +157,90 @@ export interface SearchOperations {
 export interface SkillOperations {
   listRegistered(): Array<{
     name: string;
-    category: string;
     version: string;
   }>;
-  isTypeAvailable(type: string, tenantId: string): Promise<boolean>;
+}
+
+export interface SkillCenterOperations {
+  publishSkills(
+    body: unknown,
+    authorIdentityId: string,
+  ): Promise<{
+    published: Array<{ name: string; status: string; id: string }>;
+    errors: Array<{ name: string; error: string }>;
+  }>;
+  listCatalog(query: Record<string, unknown>): Promise<{
+    skills: Array<{
+      id: string;
+      name: string;
+      description: string;
+      version: string;
+      authorIdentityId: string;
+      authorDisplayName: string;
+      likeCount: number;
+      usageCount: number;
+      publishedAt: string | null;
+    }>;
+    total: number;
+    page: number;
+    limit: number;
+  }>;
+  getSkillContent(name: string): Promise<{
+    id: string;
+    name: string;
+    version: string;
+    skillMdRaw: string;
+    manifest: Record<string, unknown>;
+  }>;
+  getSkillContentByRegistrationId(registrationId: string): Promise<{
+    id: string;
+    name: string;
+    version: string;
+    skillMdRaw: string;
+    manifest: Record<string, unknown>;
+  }>;
+  toggleLike(name: string, identityId: string): Promise<{ liked: boolean; likeCount: number }>;
+  deleteSkill(registrationId: string, identityId: string): Promise<{ deleted: true; id: string }>;
 }
 
 export interface DispatchOperations {
-  list(tenantId: string, filters?: { status?: string; limit?: number; targetUserId?: string }): Promise<any[]>;
+  list(filters: { executorToken: string; status?: string; limit?: number }): Promise<any[]>;
   findById(dispatchId: string): Promise<any | null>;
   onTask(listener: (task: any) => void): () => void;
-  claim(taskId: string, claimedBy: string, targetUserId?: string): Promise<boolean>;
-  complete(taskId: string, result?: unknown): Promise<void>;
-  fail(taskId: string, error: string): Promise<void>;
-}
-
-export interface AiOperationResult {
-  content: string;
-  model: string;
-  usage: { inputTokens: number; outputTokens: number; totalTokens: number };
-  timelineEntryId: string;
-}
-
-export interface AiOperations {
-  summarize(tenantId: string, topicId: string): Promise<AiOperationResult>;
-  ask(tenantId: string, topicId: string, question: string): Promise<AiOperationResult>;
-  isAvailable(): boolean;
-}
-
-export interface AdminOperations {
-  listTenants(): Promise<any[]>;
-  createTenant(name: string): Promise<{ id: string; apiKey: string; adminToken: string; isSuperAdmin: boolean }>;
-  regenerateToken(tenantId: string): Promise<{ adminToken: string }>;
-  getStats(tenantId: string): Promise<Record<string, number>>;
-  getAiStatus(): { enabled: boolean; provider: string | null; model: string };
+  /** Returns the claimed dispatch document (incl. `enrichedPayload`), or `null` if not claimable. */
+  claim(taskId: string, claimedBy: string, executorToken: string): Promise<any | null>;
+  complete(taskId: string, result: unknown, executorToken: string): Promise<void>;
+  fail(taskId: string, error: string, executorToken: string, retryable?: boolean): Promise<void>;
 }
 
 export interface IdentityOperations {
-  generatePairingCode(tenantId: string, platform: string, platformUserId: string, channel: string): Promise<string>;
-  claimPairingCode(tenantId: string, code: string, claimToken: string): Promise<ClaimResult | null>;
-  resolveUserByPlatform(tenantId: string, platform: string, platformUserId: string): Promise<ResolvedPlatformUser | undefined>;
+  generateExecutorPairingCode(topichubUserId: string, executorClaimToken: string): Promise<{ code: string; expiresAt: Date }>;
+  claimPairingCode(platform: string, platformUserId: string, code: string): Promise<ClaimResult>;
+  resolveUserByPlatform(platform: string, platformUserId: string): Promise<ResolvedPlatformUser | undefined>;
   resolveUserByClaimToken(claimToken: string): Promise<ResolvedClaimTokenUser | undefined>;
-  deactivateBinding(tenantId: string, platform: string, platformUserId: string): Promise<boolean>;
+  deactivateBinding(platform: string, platformUserId: string): Promise<boolean>;
   deactivateAllBindings(claimToken: string): Promise<number>;
-  getBindingsForUser(tenantId: string, topichubUserId: string): Promise<any[]>;
+  getBindingsForUser(topichubUserId: string): Promise<any[]>;
+  subscribePairingRotations(
+    executorToken: string,
+    handler: (payload: PairingRotatedPayload) => void,
+  ): () => void;
 }
 
 export interface HeartbeatOperations {
-  registerExecutor(tenantId: string, topichubUserId: string, claimToken: string, force: boolean, executorMeta?: ExecutorHeartbeatMeta): Promise<RegisterExecutorResult>;
-  heartbeat(tenantId: string, topichubUserId: string): Promise<{ pendingDispatches: number }>;
-  deregister(tenantId: string, topichubUserId: string): Promise<void>;
-  isAvailable(tenantId: string, topichubUserId: string): Promise<boolean>;
-  getHeartbeat(tenantId: string, topichubUserId: string): Promise<any | null>;
+  registerExecutor(topichubUserId: string, claimToken: string, force: boolean, executorMeta?: ExecutorHeartbeatMeta): Promise<RegisterExecutorResult>;
+  heartbeat(topichubUserId: string): Promise<{ pendingDispatches: number }>;
+  deregister(topichubUserId: string): Promise<void>;
+  isAvailable(topichubUserId: string): Promise<boolean>;
+  isBoundExecutorSessionLive(
+    topichubUserId: string,
+    boundExecutorToken: string,
+  ): Promise<boolean>;
+  getHeartbeat(topichubUserId: string): Promise<any | null>;
 }
 
 export interface QaOperations {
-  createQuestion(tenantId: string, dispatchId: string, topichubUserId: string, questionText: string, questionContext: { skillName: string; topicTitle: string } | undefined, sourceChannel: string, sourcePlatform: string): Promise<any>;
+  createQuestion(dispatchId: string, topichubUserId: string, questionText: string, questionContext: { skillName: string; topicTitle: string } | undefined, sourceChannel: string, sourcePlatform: string): Promise<any>;
   findPendingByDispatch(dispatchId: string): Promise<any[]>;
   findPendingByUser(topichubUserId: string): Promise<any | null>;
   findAllPendingByUser(topichubUserId: string): Promise<any[]>;
@@ -261,7 +280,6 @@ export class TopicHub {
     private readonly ownsConnection: boolean,
     private readonly topicService: TopicService,
     private readonly timelineService: TimelineService,
-    private readonly tenantService: TenantService,
     private readonly searchService: SearchService,
     private readonly dispatchService: DispatchService,
     private readonly skillRegistry: SkillRegistry,
@@ -270,7 +288,6 @@ export class TopicHub {
     private readonly commandParser: CommandParser,
     private readonly commandRouter: CommandRouter,
     private readonly webhookHandler: WebhookHandler,
-    private readonly aiService: AiService,
     private readonly handlers: Map<string, any>,
     private readonly logger: TopicHubLogger,
     private readonly bridge: OpenClawBridge | null,
@@ -280,6 +297,7 @@ export class TopicHub {
     private readonly qaService: QaService,
     private readonly superadminService: SuperadminService,
     private readonly authServiceNew: AuthService,
+    private readonly skillCenterService: SkillCenterService,
   ) {}
 
   static async create(config: TopicHubConfig): Promise<TopicHub> {
@@ -314,10 +332,7 @@ export class TopicHub {
     const TopicModel = model(Topic, 'topics');
     const TimelineEntryModel = model(TimelineEntry, 'timeline_entries');
     const SkillRegistrationModel = model(SkillRegistration, 'skill_registrations');
-    const TenantSkillConfigModel = model(TenantSkillConfig, 'tenant_skill_configs');
-    const TenantModel = model(Tenant, 'tenants');
     const TaskDispatchModel = model(TaskDispatch, 'task_dispatches');
-    const AiUsageRecordModel = model(AiUsageRecord, 'ai_usage_records');
     const UserIdentityBindingModel = model(UserIdentityBinding, 'user_identity_bindings');
     const PairingCodeModel = model(PairingCode, 'pairing_codes');
     const ExecutorHeartbeatModel = model(ExecutorHeartbeat, 'executor_heartbeats');
@@ -338,7 +353,6 @@ export class TopicHub {
     // Core services
     const topicService = new TopicService(TopicModel, TimelineEntryModel, loggerFactory('TopicService'));
     const timelineService = new TimelineService(TimelineEntryModel, loggerFactory('TimelineService'));
-    const tenantService = new TenantService(TenantModel, cryptoService, loggerFactory('TenantService'));
     const searchService = new SearchService(TopicModel, loggerFactory('SearchService'));
     const dispatchService = new DispatchService(TaskDispatchModel, loggerFactory('DispatchService'));
     const identityService = new IdentityService(UserIdentityBindingModel, PairingCodeModel, loggerFactory('IdentityService'));
@@ -346,36 +360,6 @@ export class TopicHub {
     const qaService = new QaService(QaExchangeModel, loggerFactory('QaService'));
     const superadminService = new SuperadminService(IdentityModel, ExecutorRegistrationModel, loggerFactory('SuperadminService'));
     const authServiceNew = new AuthService(IdentityModel, ExecutorRegistrationModel);
-
-    // AI
-    const aiUsageService = new AiUsageService(AiUsageRecordModel, loggerFactory('AiUsageService'));
-
-    let aiProvider: AiProvider | null = null;
-    let aiConfig = loadAiConfig({});
-
-    if (validated.ai) {
-      aiProvider = new ArkProvider({
-        apiUrl: validated.ai.baseUrl ?? `https://ark.cn-beijing.volces.com/api/v3`,
-        apiKey: validated.ai.apiKey,
-        model: validated.ai.model ?? AI_CONFIG_DEFAULTS.model,
-        timeoutMs: AI_CONFIG_DEFAULTS.timeoutMs,
-      });
-      aiConfig = loadAiConfig({
-        AI_ENABLED: 'true',
-        AI_PROVIDER: validated.ai.provider,
-        AI_API_KEY: validated.ai.apiKey,
-        AI_MODEL: validated.ai.model ?? AI_CONFIG_DEFAULTS.model,
-        AI_API_URL: validated.ai.baseUrl,
-      });
-    }
-
-    const aiService = new AiService(
-      aiConfig,
-      aiProvider,
-      aiUsageService,
-      TenantSkillConfigModel,
-      loggerFactory('AiService'),
-    );
 
     let bridge: OpenClawBridge | null = null;
     let bridgeManager: BridgeManager | null = null;
@@ -387,7 +371,7 @@ export class TopicHub {
       bridge = OpenClawBridge.fromBridgeManager(
         bridgeManager.port!,
         bridgeManager.webhookSecret!,
-        bridgeConfig.tenantMapping as Record<string, { tenantId: string; platform: string }>,
+        Object.keys(bridgeConfig.channels),
         loggerFactory('OpenClawBridge'),
       );
       mainLogger.log('OpenClaw bridge auto-started — IM messaging enabled');
@@ -405,19 +389,11 @@ export class TopicHub {
       skillLoader,
       skillMdParser,
       SkillRegistrationModel,
-      TenantSkillConfigModel,
       loggerFactory('SkillRegistry'),
-    );
-
-    const skillConfigService = new SkillConfigService(
-      TenantSkillConfigModel,
-      cryptoService,
-      loggerFactory('SkillConfigService'),
     );
 
     const skillPipeline = new SkillPipeline(
       skillRegistry,
-      skillConfigService,
       dispatchService,
       loggerFactory('SkillPipeline'),
       bridge,
@@ -425,16 +401,18 @@ export class TopicHub {
 
     // Command system
     const commandParser = new CommandParser();
-    const commandRouter = new CommandRouter(skillRegistry);
+    const commandRouter = new CommandRouter((token) => skillRegistry.matchSkillCommandToken(token));
 
-    const createHandler = new CreateHandler(topicService, skillRegistry, skillPipeline, loggerFactory('CreateHandler'));
+    const createHandler = new CreateHandler(topicService, skillPipeline, loggerFactory('CreateHandler'));
     const updateHandler = new UpdateHandler(topicService, skillPipeline, loggerFactory('UpdateHandler'));
     const assignHandler = new AssignHandler(topicService, skillPipeline, loggerFactory('AssignHandler'));
     const showHandler = new ShowHandler(topicService);
     const timelineHandler = new TimelineHandler(topicService, timelineService);
     const reopenHandler = new ReopenHandler(topicService, skillPipeline, loggerFactory('ReopenHandler'));
     const historyHandler = new HistoryHandler(topicService);
-    const helpHandler = new HelpHandler(skillRegistry);
+    const helpHandler = new HelpHandler();
+    const relayHandler = new RelayHandler(topicService, skillPipeline, loggerFactory('RelayHandler'));
+    const skillInvokeHandler = new SkillInvokeHandler(topicService, skillPipeline, loggerFactory('SkillInvokeHandler'));
 
     const handlers = new Map<string, any>([
       ['create', createHandler],
@@ -445,13 +423,14 @@ export class TopicHub {
       ['reopen', reopenHandler],
       ['history', historyHandler],
       ['help', helpHandler],
+      ['relay', relayHandler],
+      ['skill_invoke', skillInvokeHandler],
     ]);
 
     // Ingestion
     const ingestionService = new IngestionService(
       topicService,
       timelineService,
-      skillRegistry,
       skillPipeline,
       loggerFactory('IngestionService'),
     );
@@ -459,27 +438,30 @@ export class TopicHub {
     // Webhook
     const commandDispatcher = async (
       handler: string,
-      tenantId: string,
       parsed: any,
       context: CommandContext,
     ) => {
       const h = handlers.get(handler);
       if (!h) return { success: false, error: `Unknown handler: ${handler}` };
-      return h.execute(tenantId, parsed, context);
+      return h.execute(parsed, context);
     };
 
     const webhookIdentityOps: WebhookIdentityOps = {
-      generatePairingCode: (tenantId, platform, platformUserId, channel) =>
-        identityService.generatePairingCode(tenantId, platform, platformUserId, channel),
-      resolveUserByPlatform: (tenantId, platform, platformUserId) =>
-        identityService.resolveUserByPlatform(tenantId, platform, platformUserId),
-      deactivateBinding: (tenantId, platform, platformUserId) =>
-        identityService.deactivateBinding(tenantId, platform, platformUserId),
+      claimPairingCode: (platform, platformUserId, code) =>
+        identityService.claimPairingCode(platform, platformUserId, code),
+      resolveUserByPlatform: (platform, platformUserId) =>
+        identityService.resolveUserByPlatform(platform, platformUserId),
+      deactivateBinding: (platform, platformUserId) =>
+        identityService.deactivateBinding(platform, platformUserId),
+      invalidateLeakedPairingCode: (code, meta) =>
+        identityService.invalidateLeakedPairingCodeAndRotate(code, meta),
     };
 
     const webhookHeartbeatOps: WebhookHeartbeatOps = {
-      isAvailable: (tenantId, topichubUserId) =>
-        heartbeatService.isAvailable(tenantId, topichubUserId),
+      isAvailable: (topichubUserId) =>
+        heartbeatService.isAvailable(topichubUserId),
+      isBoundExecutorSessionLive: (topichubUserId, boundExecutorToken) =>
+        heartbeatService.isBoundExecutorSessionLive(topichubUserId, boundExecutorToken),
     };
 
     const webhookQaOps: WebhookQaOps = {
@@ -489,7 +471,6 @@ export class TopicHub {
     };
 
     const webhookHandler = new WebhookHandler(
-      skillRegistry,
       commandParser,
       commandRouter,
       topicService,
@@ -519,12 +500,19 @@ export class TopicHub {
     // Init dispatch
     dispatchService.init();
 
+    const skillCenterService = new SkillCenterService(
+      SkillRegistrationModel,
+      SkillLikeModel,
+      IdentityModel,
+      skillMdParser,
+      loggerFactory('SkillCenter'),
+    );
+
     const hub = new TopicHub(
       connection,
       ownsConnection,
       topicService,
       timelineService,
-      tenantService,
       searchService,
       dispatchService,
       skillRegistry,
@@ -533,7 +521,6 @@ export class TopicHub {
       commandParser,
       commandRouter,
       webhookHandler,
-      aiService,
       handlers,
       mainLogger,
       bridge,
@@ -543,6 +530,7 @@ export class TopicHub {
       qaService,
       superadminService,
       authServiceNew,
+      skillCenterService,
     );
 
     hub.startReminderTimer();
@@ -625,53 +613,53 @@ export class TopicHub {
 
   get topics(): TopicOperations {
     return {
-      list: async (tenantId, query) => {
+      list: async (query) => {
         const filters = {
           type: query?.type,
           status: query?.status,
           page: query?.offset ? Math.floor(query.offset / (query.limit ?? 20)) + 1 : 1,
           pageSize: query?.limit ?? 20,
         };
-        const result = await this.searchService.search(tenantId, filters);
+        const result = await this.searchService.search(filters);
         return { topics: result.results, total: result.total };
       },
-      get: (tenantId, topicId) => this.topicService.findById(tenantId, topicId),
-      create: (tenantId, data) => this.topicService.create(tenantId, data),
-      update: async (tenantId, topicId, updates, actor) => {
+      get: (topicId) => this.topicService.findById(topicId),
+      create: (data) => this.topicService.create(data),
+      update: async (topicId, updates, actor) => {
         if (updates.status) {
-          await this.topicService.updateStatus(tenantId, topicId, updates.status as any, actor);
+          await this.topicService.updateStatus(topicId, updates.status as any, actor);
         }
         if (updates.tags) {
-          const topic = await this.topicService.findById(tenantId, topicId);
+          const topic = await this.topicService.findById(topicId);
           const existing = topic?.tags ?? [];
           for (const tag of updates.tags.filter((t: string) => !existing.includes(t))) {
-            await this.topicService.addTag(tenantId, topicId, tag, actor);
+            await this.topicService.addTag(topicId, tag, actor);
           }
         }
         if (updates.assignees) {
           for (const userId of updates.assignees) {
-            await this.topicService.assignUser(tenantId, topicId, userId, actor);
+            await this.topicService.assignUser(topicId, userId, actor);
           }
         }
-        return this.topicService.findById(tenantId, topicId);
+        return this.topicService.findById(topicId);
       },
-      addTimeline: async (tenantId, topicId, entry) => {
+      addTimeline: async (topicId, entry) => {
         return this.timelineService.append(
-          tenantId, topicId, entry.actor, entry.actionType as any, entry.payload,
+          topicId, entry.actor, entry.actionType as any, entry.payload,
         );
       },
-      updateStatus: (tenantId, topicId, status, actor) =>
-        this.topicService.updateStatus(tenantId, topicId, status as any, actor),
-      addTag: async (tenantId, topicId, tag, actor) => {
-        await this.topicService.addTag(tenantId, topicId, tag, actor);
+      updateStatus: (topicId, status, actor) =>
+        this.topicService.updateStatus(topicId, status as any, actor),
+      addTag: async (topicId, tag, actor) => {
+        await this.topicService.addTag(topicId, tag, actor);
       },
-      removeTag: async (tenantId, topicId, tag, actor) => {
-        await this.topicService.removeTag(tenantId, topicId, tag, actor);
+      removeTag: async (topicId, tag, actor) => {
+        await this.topicService.removeTag(topicId, tag, actor);
       },
-      assignUser: async (tenantId, topicId, userId, actor) => {
-        await this.topicService.assignUser(tenantId, topicId, userId, actor);
+      assignUser: async (topicId, userId, actor) => {
+        await this.topicService.assignUser(topicId, userId, actor);
       },
-      unassignUser: async (_tenantId, _topicId, _userId, _actor) => {
+      unassignUser: async (_topicId, _userId, _actor) => {
         throw new TopicHubError('unassignUser not yet implemented');
       },
     };
@@ -679,16 +667,14 @@ export class TopicHub {
 
   get commands(): CommandOperations {
     return {
-      execute: async (tenantId, rawCommand, context) => {
+      execute: async (rawCommand, context) => {
         const parsed = this.commandParser.parse(rawCommand);
         const activeTopic = await this.topicService.findActiveTopicByGroup(
-          tenantId,
           context.platform,
           context.groupId,
         );
         const routeContext: CommandContext = {
           ...context,
-          tenantId,
           hasActiveTopic: !!activeTopic,
         };
         const route = this.commandRouter.route(parsed, routeContext);
@@ -701,7 +687,12 @@ export class TopicHub {
           return { success: false, error: `Unknown command handler: ${route.handler}` };
         }
 
-        const result = await handler.execute(tenantId, parsed, routeContext);
+        const execContext: CommandContext =
+          route.skillInvocationName != null
+            ? { ...routeContext, skillInvocationName: route.skillInvocationName }
+            : routeContext;
+
+        const result = await handler.execute(parsed, execContext);
         return {
           success: result.success,
           result: result.data ?? result.message,
@@ -713,8 +704,8 @@ export class TopicHub {
 
   get ingestion(): IngestionOperations {
     return {
-      ingest: (tenantId, payload) =>
-        this.ingestionService.ingest(tenantId, {
+      ingest: (payload) =>
+        this.ingestionService.ingest({
           type: payload.type,
           title: payload.title,
           sourceUrl: payload.sourceUrl,
@@ -728,8 +719,6 @@ export class TopicHub {
 
   get webhook(): WebhookOperations {
     return {
-      handle: (platform, payload, headers) =>
-        this.webhookHandler.handle(platform, payload, headers),
       handleOpenClaw: (
         payload: unknown,
         rawBody?: Buffer | string,
@@ -750,34 +739,10 @@ export class TopicHub {
     };
   }
 
-  get auth(): AuthOperations {
-    return {
-      resolveTenant: async (apiKey) => {
-        const tenant = await this.tenantService.findByRawApiKey(apiKey);
-        if (!tenant) return null;
-        return { tenantId: tenant._id.toString(), slug: tenant.slug };
-      },
-      resolveFromHeaders: async (headers) => {
-        const apiKey = headers['x-api-key'];
-        if (apiKey && typeof apiKey === 'string') {
-          const result = await this.tenantService.findByRawApiKey(apiKey);
-          if (result) return { tenantId: result._id.toString(), slug: result.slug };
-        }
-        const auth = headers['authorization'] ?? headers['Authorization'];
-        if (typeof auth === 'string' && auth.startsWith('Bearer ')) {
-          const token = auth.slice(7);
-          const result = await this.tenantService.findByRawApiKey(token);
-          if (result) return { tenantId: result._id.toString(), slug: result.slug };
-        }
-        throw new UnauthorizedError('Missing or invalid authentication');
-      },
-    };
-  }
-
   get search(): SearchOperations {
     return {
-      search: async (tenantId, query) => {
-        const result = await this.searchService.search(tenantId, {
+      search: async (query) => {
+        const result = await this.searchService.search({
           q: query.q,
           status: query.status,
           type: query.type,
@@ -793,27 +758,34 @@ export class TopicHub {
   get skills(): SkillOperations {
     return {
       listRegistered: () => {
-        const all = [
-          ...this.skillRegistry.getByCategory(SkillCategory.TYPE),
-          ...this.skillRegistry.getByCategory(SkillCategory.ADAPTER),
-        ];
-        return all.map((s) => ({
+        return this.skillRegistry.listAll().map((s) => ({
           name: s.registration.name,
-          category: s.registration.category,
           version: s.registration.version,
         }));
       },
-      isTypeAvailable: (type, tenantId) =>
-        this.skillRegistry.isTypeAvailable(type, tenantId),
+    };
+  }
+
+  get skillCenter(): SkillCenterOperations {
+    return {
+      publishSkills: (body, authorIdentityId) =>
+        this.skillCenterService.publishSkills(body, authorIdentityId),
+      listCatalog: (query) => this.skillCenterService.listCatalog(query),
+      getSkillContent: (name) => this.skillCenterService.getSkillContent(name),
+      getSkillContentByRegistrationId: (registrationId) =>
+        this.skillCenterService.getSkillContentByRegistrationId(registrationId),
+      toggleLike: (name, identityId) => this.skillCenterService.toggleLike(name, identityId),
+      deleteSkill: (registrationId, identityId) =>
+        this.skillCenterService.deleteSkill(registrationId, identityId),
     };
   }
 
   get dispatch(): DispatchOperations {
     return {
-      list: (tenantId, filters) =>
-        this.dispatchService.findUnclaimed(tenantId, {
+      list: (filters) =>
+        this.dispatchService.findUnclaimed({
           limit: filters?.limit,
-          targetUserId: filters?.targetUserId,
+          executorToken: filters.executorToken,
         }),
       findById: (dispatchId) =>
         this.dispatchService.findById(dispatchId),
@@ -821,28 +793,33 @@ export class TopicHub {
         this.dispatchService.onNewDispatch(listener);
         return () => this.dispatchService.offNewDispatch(listener);
       },
-      claim: async (taskId, claimedBy, targetUserId?) => {
-        const result = await this.dispatchService.claim(taskId, claimedBy, targetUserId);
+      claim: async (taskId, claimedBy, executorToken) => {
+        const result = await this.dispatchService.claim(taskId, claimedBy, executorToken);
         if (result && result.sourceChannel && result.sourcePlatform && this.bridge) {
           this.bridge
             .sendMessage(result.sourcePlatform, result.sourceChannel, 'Task picked up by your local agent. Processing...')
             .catch((err) => this.logger.error('IM claim notification failed', String(err)));
         }
-        return result !== null;
+        return result;
       },
-      complete: async (taskId, result) => {
-        const dispatch = await this.dispatchService.complete(taskId, result as any);
+      complete: async (taskId, result, executorToken) => {
+        const dispatch = await this.dispatchService.complete(taskId, result as any, executorToken);
         if (dispatch?.sourceChannel && dispatch?.sourcePlatform && this.bridge) {
-          const summary = dispatch.result?.text
-            ? `Task completed: ${dispatch.result.text.slice(0, 200)}`
+          const IM_COMPLETE_PREVIEW = 2000;
+          const r = dispatch.result as { text?: string; imSummary?: string } | undefined;
+          const raw = pickImNotifyBody(r?.text, r?.imSummary);
+          const summary = raw
+            ? (raw.length > IM_COMPLETE_PREVIEW
+              ? `Task completed: ${raw.slice(0, IM_COMPLETE_PREVIEW)}…`
+              : `Task completed: ${raw}`)
             : 'Task completed successfully.';
           this.bridge
             .sendMessage(dispatch.sourcePlatform, dispatch.sourceChannel, summary)
             .catch((err) => this.logger.error('IM complete notification failed', String(err)));
         }
       },
-      fail: async (taskId, error) => {
-        const dispatch = await this.dispatchService.fail(taskId, error);
+      fail: async (taskId, error, executorToken, retryable = false) => {
+        const dispatch = await this.dispatchService.fail(taskId, error, retryable, executorToken);
         if (dispatch?.sourceChannel && dispatch?.sourcePlatform && this.bridge) {
           this.bridge
             .sendMessage(dispatch.sourcePlatform, dispatch.sourceChannel, `Task failed: ${error}`)
@@ -852,158 +829,48 @@ export class TopicHub {
     };
   }
 
-  get admin(): AdminOperations {
-    return {
-      listTenants: async () => this.tenantService.findAll(),
-      createTenant: async (name) => {
-        const { tenant, rawApiKey, adminToken } = await this.tenantService.create(name);
-        return {
-          id: tenant._id.toString(),
-          apiKey: rawApiKey,
-          adminToken,
-          isSuperAdmin: tenant.isSuperAdmin,
-        };
-      },
-      regenerateToken: async (tenantId) => {
-        const { adminToken } = await this.tenantService.regenerateToken(tenantId);
-        return { adminToken };
-      },
-      getStats: async (tenantId) => {
-        const dispatches = await this.dispatchService.countByStatus(tenantId);
-        return dispatches as any;
-      },
-      getAiStatus: () => this.aiService.getConfig(),
-    };
-  }
-
-  get ai(): AiOperations {
-    return {
-      summarize: async (tenantId, topicId) => {
-        const topic = await this.topicService.findById(tenantId, topicId);
-        if (!topic) throw new NotFoundError(`Topic ${topicId} not found`);
-
-        const timeline = await this.timelineService.findByTopic(tenantId, topicId, 1, 20);
-        const entries = timeline?.entries ?? [];
-
-        const contextParts = [
-          `Title: ${topic.title}`,
-          `Type: ${topic.type}`,
-          `Status: ${topic.status}`,
-          topic.tags?.length ? `Tags: ${topic.tags.join(', ')}` : '',
-          topic.metadata ? `Metadata: ${JSON.stringify(topic.metadata)}` : '',
-          entries.length ? `\nTimeline (${entries.length} entries):\n${entries.map((e: any) => `- [${e.actionType}] ${e.actor}: ${JSON.stringify(e.payload ?? {})}`).join('\n')}` : '',
-        ].filter(Boolean).join('\n');
-
-        const response = await this.aiService.complete({
-          tenantId,
-          skillName: 'ai:summarize',
-          input: [
-            { role: 'system', content: [{ type: 'input_text', text: 'You are a topic summarizer. Provide a concise summary of the topic based on the provided context. Focus on key information, status, and any notable patterns or issues.' }] },
-            { role: 'user', content: [{ type: 'input_text', text: contextParts }] },
-          ],
-        });
-
-        if (!response) {
-          throw new TopicHubError('AI service unavailable');
-        }
-
-        const entry = await this.timelineService.append(
-          tenantId, topicId, 'ai:summarize', TimelineActionType.AI_RESPONSE,
-          { operation: 'summarize', content: response.content, model: response.model, usage: response.usage },
-        );
-
-        return {
-          content: response.content,
-          model: response.model,
-          usage: response.usage,
-          timelineEntryId: entry._id.toString(),
-        };
-      },
-
-      ask: async (tenantId, topicId, question) => {
-        const topic = await this.topicService.findById(tenantId, topicId);
-        if (!topic) throw new NotFoundError(`Topic ${topicId} not found`);
-
-        const timeline = await this.timelineService.findByTopic(tenantId, topicId, 1, 20);
-        const entries = timeline?.entries ?? [];
-
-        const contextParts = [
-          `Title: ${topic.title}`,
-          `Type: ${topic.type}`,
-          `Status: ${topic.status}`,
-          topic.tags?.length ? `Tags: ${topic.tags.join(', ')}` : '',
-          topic.metadata ? `Metadata: ${JSON.stringify(topic.metadata)}` : '',
-          entries.length ? `\nTimeline (${entries.length} entries):\n${entries.map((e: any) => `- [${e.actionType}] ${e.actor}: ${JSON.stringify(e.payload ?? {})}`).join('\n')}` : '',
-        ].filter(Boolean).join('\n');
-
-        const response = await this.aiService.complete({
-          tenantId,
-          skillName: 'ai:assistant',
-          input: [
-            { role: 'system', content: [{ type: 'input_text', text: `You are a topic assistant. Answer the user's question based on the topic context provided. Be concise and helpful.\n\nTopic context:\n${contextParts}` }] },
-            { role: 'user', content: [{ type: 'input_text', text: question }] },
-          ],
-        });
-
-        if (!response) {
-          throw new TopicHubError('AI service unavailable');
-        }
-
-        const entry = await this.timelineService.append(
-          tenantId, topicId, 'ai:assistant', TimelineActionType.AI_RESPONSE,
-          { operation: 'ask', question, content: response.content, model: response.model, usage: response.usage },
-        );
-
-        return {
-          content: response.content,
-          model: response.model,
-          usage: response.usage,
-          timelineEntryId: entry._id.toString(),
-        };
-      },
-
-      isAvailable: () => this.aiService.isAvailable(),
-    };
-  }
-
   get identity(): IdentityOperations {
     return {
-      generatePairingCode: (tenantId, platform, platformUserId, channel) =>
-        this.identityService.generatePairingCode(tenantId, platform, platformUserId, channel),
-      claimPairingCode: (tenantId, code, claimToken) =>
-        this.identityService.claimPairingCode(tenantId, code, claimToken),
-      resolveUserByPlatform: (tenantId, platform, platformUserId) =>
-        this.identityService.resolveUserByPlatform(tenantId, platform, platformUserId),
+      generateExecutorPairingCode: (topichubUserId, executorClaimToken) =>
+        this.identityService.generateExecutorPairingCode(topichubUserId, executorClaimToken),
+      claimPairingCode: (platform, platformUserId, code) =>
+        this.identityService.claimPairingCode(platform, platformUserId, code),
+      resolveUserByPlatform: (platform, platformUserId) =>
+        this.identityService.resolveUserByPlatform(platform, platformUserId),
       resolveUserByClaimToken: (claimToken) =>
         this.identityService.resolveUserByClaimToken(claimToken),
-      deactivateBinding: (tenantId, platform, platformUserId) =>
-        this.identityService.deactivateBinding(tenantId, platform, platformUserId),
+      deactivateBinding: (platform, platformUserId) =>
+        this.identityService.deactivateBinding(platform, platformUserId),
       deactivateAllBindings: (claimToken) =>
         this.identityService.deactivateAllBindings(claimToken),
-      getBindingsForUser: (tenantId, topichubUserId) =>
-        this.identityService.getBindingsForUser(tenantId, topichubUserId),
+      getBindingsForUser: (topichubUserId) =>
+        this.identityService.getBindingsForUser(topichubUserId),
+      subscribePairingRotations: (executorToken, handler) =>
+        this.identityService.subscribePairingRotations(executorToken, handler),
     };
   }
 
   get heartbeat(): HeartbeatOperations {
     return {
-      registerExecutor: (tenantId, topichubUserId, claimToken, force, executorMeta) =>
-        this.heartbeatService.registerExecutor(tenantId, topichubUserId, claimToken, force, executorMeta),
-      heartbeat: (tenantId, topichubUserId) =>
-        this.heartbeatService.heartbeat(tenantId, topichubUserId),
-      deregister: (tenantId, topichubUserId) =>
-        this.heartbeatService.deregister(tenantId, topichubUserId),
-      isAvailable: (tenantId, topichubUserId) =>
-        this.heartbeatService.isAvailable(tenantId, topichubUserId),
-      getHeartbeat: (tenantId, topichubUserId) =>
-        this.heartbeatService.getHeartbeat(tenantId, topichubUserId),
+      registerExecutor: (topichubUserId, claimToken, force, executorMeta) =>
+        this.heartbeatService.registerExecutor(topichubUserId, claimToken, force, executorMeta),
+      heartbeat: (topichubUserId) =>
+        this.heartbeatService.heartbeat(topichubUserId),
+      deregister: (topichubUserId) =>
+        this.heartbeatService.deregister(topichubUserId),
+      isAvailable: (topichubUserId) =>
+        this.heartbeatService.isAvailable(topichubUserId),
+      isBoundExecutorSessionLive: (topichubUserId, boundExecutorToken) =>
+        this.heartbeatService.isBoundExecutorSessionLive(topichubUserId, boundExecutorToken),
+      getHeartbeat: (topichubUserId) =>
+        this.heartbeatService.getHeartbeat(topichubUserId),
     };
   }
 
   get qa(): QaOperations {
     return {
-      createQuestion: (tenantId, dispatchId, topichubUserId, questionText, questionContext, sourceChannel, sourcePlatform) =>
-        this.qaService.createQuestion(tenantId, dispatchId, topichubUserId, questionText, questionContext, sourceChannel, sourcePlatform),
+      createQuestion: (dispatchId, topichubUserId, questionText, questionContext, sourceChannel, sourcePlatform) =>
+        this.qaService.createQuestion(dispatchId, topichubUserId, questionText, questionContext, sourceChannel, sourcePlatform),
       findPendingByDispatch: (dispatchId) =>
         this.qaService.findPendingByDispatch(dispatchId),
       findPendingByUser: (topichubUserId) =>
@@ -1047,7 +914,6 @@ export class TopicHub {
       clearInterval(this.reminderTimer);
       this.reminderTimer = undefined;
     }
-    this.bridge?.destroy();
     if (this.bridgeManager) {
       await this.bridgeManager.stop();
     }

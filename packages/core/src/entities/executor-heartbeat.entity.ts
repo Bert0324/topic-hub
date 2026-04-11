@@ -9,11 +9,8 @@ import {
   schemaOptions: { collection: 'executor_heartbeats', timestamps: true },
   options: { allowMixed: Severity.ALLOW },
 })
-@index({ tenantId: 1, topichubUserId: 1 }, { unique: true })
+@index({ topichubUserId: 1 }, { unique: true })
 export class ExecutorHeartbeat {
-  @prop({ required: true })
-  tenantId!: string;
-
   @prop({ required: true })
   topichubUserId!: string;
 

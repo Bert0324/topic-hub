@@ -1,8 +1,33 @@
 import { password } from '@inquirer/prompts';
 import { saveAdminToken, loadAdminToken } from '../../../auth/auth.js';
 
+async function tryBootstrap(serverUrl: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${serverUrl}/api/v1/init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { superadminToken?: string };
+    return data.superadminToken ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function promptAdminToken(serverUrl: string): Promise<string> {
   const existing = await loadAdminToken();
+
+  const bootstrapToken = await tryBootstrap(serverUrl);
+  if (bootstrapToken) {
+    console.log('  ✓ First-time setup — superadmin token generated.\n');
+    console.log(`    Token: ${bootstrapToken}\n`);
+    console.log('  ⚠ Store this token securely — it cannot be retrieved again.\n');
+    await saveAdminToken(bootstrapToken);
+    return bootstrapToken;
+  }
+
   const hasExisting = existing !== null;
 
   const token = await password({
@@ -20,10 +45,9 @@ export async function promptAdminToken(serverUrl: string): Promise<string> {
 
   const tokenToUse = token || existing!;
 
-  // Validate token against server
   process.stdout.write('  Validating token... ');
   try {
-    const res = await fetch(`${serverUrl}/admin/identities`, {
+    const res = await fetch(`${serverUrl}/api/v1/admin/identities`, {
       headers: { Authorization: `Bearer ${tokenToUse}` },
       signal: AbortSignal.timeout(5000),
     });

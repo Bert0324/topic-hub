@@ -46,10 +46,6 @@ Topic Hub 本身只是一个引擎。所有具体能力都通过 Skill 插件提
 
 Skill 按类别组织在目录中：`skills/topics/`、`skills/platforms/`、`skills/adapters/`。
 
-### AI 增强 Skill
-
-Skill 可选择性地使用 AI。当 `AI_ENABLED=true` 时，在 manifest 中声明 `ai: true` 的 Skill 会收到 `AiService`，可以在生命周期钩子中调用（例如自动分析告警、生成摘要等）。AI 提供商可插拔——默认为火山引擎 Ark（豆包大模型），通过环境变量配置。AI 不可用时 Skill 平滑降级，核心操作不受影响。
-
 ### Tenant（租户）
 
 一套部署服务多个团队。每个团队有独立的数据、独立的 Skill 配置、独立的 IM 应用凭证。团队之间互不可见。
@@ -368,13 +364,6 @@ docker compose up -d
 | `SKILLS_DIR` | `./skills` | Skill 目录 |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `TOKEN_EXPIRY_DAYS` | `30` | Admin Token 有效期（天） |
-| `AI_ENABLED` | `false` | 启用 AI（`true` / `false`） |
-| `AI_PROVIDER` | `ark` | AI 提供商（`ark` = 火山引擎） |
-| `AI_API_URL` | `https://ark.cn-beijing.volces.com/api/v3` | AI API 地址（内部部署改为内网地址） |
-| `AI_API_KEY` | — | AI API Bearer Token |
-| `AI_MODEL` | `doubao-seed-2-0-pro-260215` | 模型标识符 |
-| `AI_TIMEOUT_MS` | `10000` | AI 请求超时（毫秒） |
-| `AI_RATE_LIMIT_GLOBAL` | `1000` | 平台级 AI 每小时请求上限 |
 
 ### 生产清单
 

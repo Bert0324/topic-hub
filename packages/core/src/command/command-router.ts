@@ -1,4 +1,3 @@
-import { SkillCategory } from '../common/enums';
 import type { ParsedCommand } from './command-parser';
 import type { DispatchMeta } from '../services/dispatch.service';
 
@@ -6,22 +5,29 @@ export interface CommandContext {
   platform: string;
   groupId: string;
   userId: string;
-  tenantId: string;
   hasActiveTopic: boolean;
   dispatchMeta?: DispatchMeta;
+  /** Original user text (for freeform relay). */
+  relayText?: string;
+  /**
+   * Normalized IM line (mentions stripped) used for routing; prefer when forwarding to the executor
+   * so lines like `@Topic Hub /home/...` keep the `/home/...` segment.
+   */
+  imChatLine?: string;
+  /** True when the normalized inbound line starts with `/` (explicit slash-command). */
+  imCommandUsedSlash?: boolean;
+  /** Set by router when routing `/RegisteredSkillName` to {@link SkillInvokeHandler}. */
+  skillInvocationName?: string;
 }
 
 export interface RouteResult {
   handler: string;
   error?: string;
+  /** Canonical skill name for `skill_invoke` handler. */
+  skillInvocationName?: string;
 }
 
-export interface SkillRegistryPort {
-  getTypeSkillForType(topicType: string, opts?: { tenantId?: string }): any | undefined;
-  getByCategory(category: SkillCategory): Array<{ skill: any; registration: any }>;
-}
-
-const GLOBAL_COMMANDS = ['create', 'search', 'help'];
+const GLOBAL_COMMANDS = ['create', 'search', 'help', 'use'];
 const TOPIC_COMMANDS = [
   'update',
   'assign',
@@ -32,7 +38,9 @@ const TOPIC_COMMANDS = [
 ];
 
 export class CommandRouter {
-  constructor(private readonly skillRegistry: SkillRegistryPort) {}
+  constructor(
+    private readonly matchSkillCommandToken: (token: string) => string | undefined = () => undefined,
+  ) {}
 
   route(parsed: ParsedCommand, context: CommandContext): RouteResult {
     const { action } = parsed;
@@ -45,43 +53,65 @@ export class CommandRouter {
       return this.routeTopicCommand(parsed, context);
     }
 
-    return { handler: action, error: `Unknown command: ${action}. Use /topichub help to see available commands.` };
+    // `/SkillName …` where SkillName is a registered skill (not a built-in command)
+    if (context.imCommandUsedSlash && context.hasActiveTopic) {
+      const skillName = this.matchSkillCommandToken(action);
+      if (skillName) {
+        return { handler: 'skill_invoke', skillInvocationName: skillName };
+      }
+      // Any other `/…` line (e.g. `/home/...` natural language) → same as freeform relay to the bound executor.
+      return { handler: 'relay' };
+    }
+
+    // Freeform text in a topic group → local executor (not a slash-command)
+    if (!context.imCommandUsedSlash) {
+      if (context.hasActiveTopic) {
+        return { handler: 'relay' };
+      }
+      return {
+        handler: 'relay',
+        error: 'No active topic in this group. Create one first with /create <type>.',
+      };
+    }
+
+    // Slash command in a group without an active topic (and not handled above)
+    return { handler: action, error: `Unknown command: ${action}. Use /help to see available commands.` };
   }
 
   private routeGlobal(parsed: ParsedCommand, context: CommandContext): RouteResult {
-    const { action } = parsed;
-
-    if (action === 'create') {
-      if (context.hasActiveTopic) {
-        return {
-          handler: 'create',
-          error: 'An active topic already exists in this group. Close or resolve it before creating a new one.',
-        };
-      }
-
-      if (parsed.type) {
-        const typeSkill = this.skillRegistry.getTypeSkillForType(parsed.type);
-        if (!typeSkill) {
-          const available = this.skillRegistry
-            .getByCategory(SkillCategory.TYPE)
-            .map((s) => (s.registration.metadata as any)?.topicType)
-            .filter(Boolean);
-          return {
-            handler: 'create',
-            error: `Unknown topic type: ${parsed.type}. Available types: ${available.join(', ') || 'none'}`,
-          };
-        }
-      }
+    if (parsed.action === 'create' && context.hasActiveTopic) {
+      return {
+        handler: 'create',
+        error: 'An active topic already exists in this group. Close or resolve it before creating a new one.',
+      };
     }
 
-    return { handler: action };
+    if (parsed.action === 'use') {
+      const name = parsed.type;
+      if (!name) {
+        return { handler: 'use', error: 'Usage: /use <skill-name> [args]' };
+      }
+      if (!context.hasActiveTopic) {
+        return {
+          handler: 'use',
+          error: 'No active topic in this group. Create one first with /create <type>.',
+        };
+      }
+      const canonical = this.matchSkillCommandToken(name);
+      if (!canonical) {
+        return { handler: 'use', error: `Unknown skill "${name}".` };
+      }
+      return { handler: 'skill_invoke', skillInvocationName: canonical };
+    }
+
+    return { handler: parsed.action };
   }
 
   private routeTopicCommand(parsed: ParsedCommand, context: CommandContext): RouteResult {
     if (!context.hasActiveTopic) {
       return {
         handler: parsed.action,
-        error: 'No active topic in this group. Create one first with /topichub create <type>.',
+        error: 'No active topic in this group. Create one first with /create <type>.',
       };
     }
 

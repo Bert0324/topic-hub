@@ -10,12 +10,10 @@ export class TimelineHandler {
   ) {}
 
   async execute(
-    tenantId: string,
     parsed: ParsedCommand,
     context: CommandContext,
   ) {
     const topic = await this.topicService.findActiveTopicByGroup(
-      tenantId,
       context.platform,
       context.groupId,
     );
@@ -26,7 +24,6 @@ export class TimelineHandler {
 
     const page = parseInt((parsed.args.page as string) ?? '1', 10);
     const timeline = await this.timelineService.findByTopic(
-      tenantId,
       topic._id.toString(),
       page,
     );

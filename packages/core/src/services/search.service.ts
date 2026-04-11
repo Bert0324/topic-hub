@@ -19,10 +19,9 @@ export class SearchService {
   ) {}
 
   async search(
-    tenantId: string,
     filters: SearchFilters,
   ): Promise<{ results: any[]; total: number }> {
-    const query: Record<string, any> = { tenantId };
+    const query: Record<string, any> = {};
 
     if (filters.type) query.type = filters.type;
     if (filters.status) query.status = filters.status;
