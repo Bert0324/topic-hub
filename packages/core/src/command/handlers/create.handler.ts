@@ -6,7 +6,7 @@ import type { CommandContext } from '../command-router';
 import type { SkillRegistryPort } from '../command-router';
 
 export interface SkillPipelinePort {
-  execute(tenantId: string, operation: string, topic: any, actor: string, extra?: Record<string, unknown>, dispatchMeta?: DispatchMeta): Promise<void>;
+  execute(operation: string, topic: any, actor: string, extra?: Record<string, unknown>, dispatchMeta?: DispatchMeta): Promise<void>;
 }
 
 export class CreateHandler {
@@ -17,7 +17,7 @@ export class CreateHandler {
     private readonly logger: TopicHubLogger,
   ) {}
 
-  async execute(tenantId: string, parsed: ParsedCommand, context: CommandContext) {
+  async execute(parsed: ParsedCommand, context: CommandContext) {
     const topicType = parsed.type;
     if (!topicType) {
       return { success: false, error: 'Topic type is required. Usage: /topichub create <type> --title "Title"' };
@@ -38,7 +38,6 @@ export class CreateHandler {
     }
 
     const existing = await this.topicService.findActiveTopicByGroup(
-      tenantId,
       context.platform,
       context.groupId,
     );
@@ -52,7 +51,7 @@ export class CreateHandler {
     const title = (parsed.args.title as string) || `${topicType} topic`;
 
     try {
-      const topic = await this.topicService.create(tenantId, {
+      const topic = await this.topicService.create({
         type: topicType,
         title,
         metadata,
@@ -64,7 +63,6 @@ export class CreateHandler {
       });
 
       await this.skillPipeline.execute(
-        tenantId,
         'created',
         topic,
         context.userId,

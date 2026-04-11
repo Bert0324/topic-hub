@@ -53,19 +53,16 @@ export class Signal {
   schemaOptions: { collection: 'topics', timestamps: true },
   options: { allowMixed: Severity.ALLOW },
 })
-@index({ tenantId: 1, type: 1 })
-@index({ tenantId: 1, status: 1 })
-@index({ tenantId: 1, sourceUrl: 1 }, { unique: true, sparse: true })
-@index({ tenantId: 1, createdAt: -1 })
-@index({ tenantId: 1, tags: 1 })
-@index({ tenantId: 1, 'groups.platform': 1, 'groups.groupId': 1 })
-@index({ tenantId: 1, title: 'text' })
-@index({ tenantId: 1, type: 1, status: 1, createdAt: -1 })
+@index({ type: 1 })
+@index({ status: 1 })
+@index({ sourceUrl: 1 }, { unique: true, sparse: true })
+@index({ createdAt: -1 })
+@index({ tags: 1 })
+@index({ 'groups.platform': 1, 'groups.groupId': 1 })
+@index({ title: 'text' })
+@index({ type: 1, status: 1, createdAt: -1 })
 export class Topic {
   _id!: mongoose.Types.ObjectId;
-
-  @prop({ required: true, index: true })
-  tenantId!: string;
 
   @prop({ required: true })
   type!: string;

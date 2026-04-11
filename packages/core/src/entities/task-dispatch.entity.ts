@@ -128,16 +128,13 @@ const DISPATCH_TTL_DAYS = 30;
   schemaOptions: { collection: 'task_dispatches', timestamps: true },
   options: { allowMixed: Severity.ALLOW },
 })
-@index({ tenantId: 1, status: 1, createdAt: 1 })
-@index({ tenantId: 1, targetUserId: 1, status: 1, createdAt: 1 })
-@index({ tenantId: 1, topicId: 1 })
+@index({ status: 1, createdAt: 1 })
+@index({ targetUserId: 1, status: 1, createdAt: 1 })
+@index({ topicId: 1 })
 @index({ status: 1, claimExpiry: 1 })
 @index({ createdAt: 1 }, { expireAfterSeconds: DISPATCH_TTL_DAYS * 86400 })
 export class TaskDispatch {
   _id!: mongoose.Types.ObjectId;
-
-  @prop({ required: true, index: true })
-  tenantId!: string;
 
   @prop({ required: true, type: () => mongoose.Schema.Types.ObjectId })
   topicId!: mongoose.Types.ObjectId;

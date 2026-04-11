@@ -27,14 +27,13 @@ export class HeartbeatService {
   }
 
   async registerExecutor(
-    tenantId: string,
     topichubUserId: string,
     claimToken: string,
     force: boolean,
     executorMeta?: ExecutorHeartbeatMeta,
   ): Promise<RegisterExecutorResult> {
     const existing = await this.heartbeatModel
-      .findOne({ tenantId, topichubUserId })
+      .findOne({ topichubUserId })
       .exec();
 
     if (existing && this.isFresh(existing.lastSeenAt)) {
@@ -51,7 +50,6 @@ export class HeartbeatService {
 
     const now = new Date();
     const $set: Record<string, unknown> = {
-      tenantId,
       topichubUserId,
       claimToken,
       lastSeenAt: now,
@@ -62,26 +60,25 @@ export class HeartbeatService {
 
     await this.heartbeatModel
       .findOneAndUpdate(
-        { tenantId, topichubUserId },
+        { topichubUserId },
         { $set },
         { upsert: true, new: true },
       )
       .exec();
 
     this.logger.log(
-      `Executor heartbeat registered tenant=${tenantId} user=${topichubUserId} force=${force}`,
+      `Executor heartbeat registered user=${topichubUserId} force=${force}`,
     );
 
     return { conflict: false };
   }
 
   async heartbeat(
-    tenantId: string,
     topichubUserId: string,
   ): Promise<{ pendingDispatches: number }> {
     await this.heartbeatModel
       .findOneAndUpdate(
-        { tenantId, topichubUserId },
+        { topichubUserId },
         { $set: { lastSeenAt: new Date() } },
       )
       .exec();
@@ -89,22 +86,21 @@ export class HeartbeatService {
     return { pendingDispatches: 0 };
   }
 
-  async deregister(tenantId: string, topichubUserId: string): Promise<void> {
-    await this.heartbeatModel.deleteOne({ tenantId, topichubUserId }).exec();
+  async deregister(topichubUserId: string): Promise<void> {
+    await this.heartbeatModel.deleteOne({ topichubUserId }).exec();
   }
 
-  async isAvailable(tenantId: string, topichubUserId: string): Promise<boolean> {
+  async isAvailable(topichubUserId: string): Promise<boolean> {
     const doc = await this.heartbeatModel
-      .findOne({ tenantId, topichubUserId })
+      .findOne({ topichubUserId })
       .exec();
     if (!doc) return false;
     return this.isFresh(doc.lastSeenAt);
   }
 
   async getHeartbeat(
-    tenantId: string,
     topichubUserId: string,
   ): Promise<any | null> {
-    return this.heartbeatModel.findOne({ tenantId, topichubUserId }).exec();
+    return this.heartbeatModel.findOne({ topichubUserId }).exec();
   }
 }

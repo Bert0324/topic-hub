@@ -16,10 +16,6 @@ export interface RegisteredSkill {
   registration: any;
 }
 
-interface ResolveOptions {
-  tenantId?: string;
-}
-
 export class SkillRegistry implements SkillRegistryPort {
   private readonly skills = new Map<string, RegisteredSkill>();
   private readonly skillMdCache = new Map<string, ParsedSkillMd>();
@@ -44,21 +40,8 @@ export class SkillRegistry implements SkillRegistryPort {
     this.logger.log(`Unregistered skill: ${name}`);
   }
 
-  resolve(name: string, opts?: ResolveOptions): RegisteredSkill | undefined {
-    if (opts?.tenantId) {
-      const privateMatch = [...this.skills.values()].find(
-        (s) =>
-          s.registration.name === name &&
-          s.registration.isPrivate &&
-          s.registration.tenantId === opts.tenantId,
-      );
-      if (privateMatch) return privateMatch;
-    }
-
-    const publicMatch = [...this.skills.values()].find(
-      (s) => s.registration.name === name && !s.registration.isPrivate,
-    );
-    return publicMatch ?? this.skills.get(name);
+  resolve(name: string): RegisteredSkill | undefined {
+    return this.skills.get(name);
   }
 
   getByCategory(category: SkillCategory): RegisteredSkill[] {
@@ -67,38 +50,21 @@ export class SkillRegistry implements SkillRegistryPort {
     );
   }
 
-  getTypeSkillForType(
-    topicType: string,
-    opts?: ResolveOptions,
-  ): TypeSkill | undefined {
-    const candidates = [...this.skills.values()].filter(
+  getTypeSkillForType(topicType: string): TypeSkill | undefined {
+    const match = [...this.skills.values()].find(
       (s) =>
         s.registration.category === SkillCategory.TYPE &&
         (s.registration.metadata as any)?.topicType === topicType,
     );
-
-    if (opts?.tenantId) {
-      const privateMatch = candidates.find(
-        (s) =>
-          s.registration.isPrivate &&
-          s.registration.tenantId === opts.tenantId,
-      );
-      if (privateMatch) return privateMatch.skill as TypeSkill;
-    }
-
-    const publicMatch = candidates.find((s) => !s.registration.isPrivate);
-    return (publicMatch ?? candidates[0])?.skill as TypeSkill | undefined;
+    return match?.skill as TypeSkill | undefined;
   }
 
-  async isTypeAvailable(
-    topicType: string,
-    tenantId: string,
-  ): Promise<boolean> {
+  async isTypeAvailable(topicType: string): Promise<boolean> {
     const typeSkill = this.getTypeSkillForType(topicType);
     if (!typeSkill) return false;
 
     const config = await this.tenantConfigModel
-      .findOne({ tenantId, skillName: typeSkill.manifest.name })
+      .findOne({ skillName: typeSkill.manifest.name })
       .lean()
       .exec();
 

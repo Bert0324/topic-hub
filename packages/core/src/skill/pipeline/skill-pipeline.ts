@@ -18,7 +18,6 @@ export class SkillPipeline implements SkillPipelinePort {
   ) {}
 
   async execute(
-    tenantId: string,
     operation: string,
     topicData: any,
     actor: string,
@@ -28,17 +27,15 @@ export class SkillPipeline implements SkillPipelinePort {
     const ctx: TopicContext = {
       topic: topicData,
       actor,
-      tenantId,
       timestamp: new Date(),
     };
 
-    await this.runTypeSkillHook(tenantId, operation, topicData, ctx, extra);
-    await this.createTaskDispatch(tenantId, operation, topicData, actor, extra, dispatchMeta);
-    await this.runBridgeNotifications(tenantId, operation, topicData);
+    await this.runTypeSkillHook(operation, topicData, ctx, extra);
+    await this.createTaskDispatch(operation, topicData, actor, extra, dispatchMeta);
+    await this.runBridgeNotifications(operation, topicData);
   }
 
   private async runTypeSkillHook(
-    tenantId: string,
     operation: string,
     topicData: any,
     ctx: TopicContext,
@@ -51,7 +48,6 @@ export class SkillPipeline implements SkillPipelinePort {
     if (!typeSkill) return;
 
     const enabled = await this.configService.isEnabledForTenant(
-      tenantId,
       typeSkill.manifest.name,
     );
     if (!enabled) return;
@@ -84,7 +80,6 @@ export class SkillPipeline implements SkillPipelinePort {
   }
 
   private async createTaskDispatch(
-    tenantId: string,
     operation: string,
     topicData: any,
     actor: string,
@@ -100,7 +95,6 @@ export class SkillPipeline implements SkillPipelinePort {
     if (!typeSkill) return;
 
     const enabled = await this.configService.isEnabledForTenant(
-      tenantId,
       typeSkill.manifest.name,
     );
     if (!enabled) return;
@@ -162,7 +156,6 @@ export class SkillPipeline implements SkillPipelinePort {
       }
 
       await this.dispatchService.create({
-        tenantId,
         topicId,
         eventType: operation,
         skillName: typeSkill.manifest.name,
@@ -178,7 +171,6 @@ export class SkillPipeline implements SkillPipelinePort {
   }
 
   private async runBridgeNotifications(
-    tenantId: string,
     operation: string,
     topicData: any,
   ): Promise<void> {
@@ -194,8 +186,7 @@ export class SkillPipeline implements SkillPipelinePort {
       const typeSkill = this.registry.getTypeSkillForType(topicType);
       if (!typeSkill) return;
 
-      const card = typeSkill.renderCard(topicData);
-      await this.bridge.notifyTenantChannels(tenantId, card, topicData.type);
+      await this.bridge.sendMessage(topicType, topicType, `Topic ${topicData.title} — ${operation}`);
     } catch (err) {
       this.logger.error(
         `Bridge notification failed for operation ${operation}`,

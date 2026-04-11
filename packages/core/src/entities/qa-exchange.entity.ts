@@ -16,9 +16,6 @@ import { QaExchangeStatus } from '../common/enums';
 export class QaExchange {
   _id!: mongoose.Types.ObjectId;
 
-  @prop({ required: true })
-  tenantId!: string;
-
   @prop({ required: true, type: () => mongoose.Schema.Types.ObjectId })
   dispatchId!: mongoose.Types.ObjectId;
 

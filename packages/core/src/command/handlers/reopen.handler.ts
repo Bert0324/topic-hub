@@ -6,7 +6,7 @@ import type { ParsedCommand } from '../command-parser';
 import type { CommandContext } from '../command-router';
 
 export interface SkillPipelinePort {
-  execute(tenantId: string, operation: string, topic: any, actor: string, extra?: Record<string, unknown>, dispatchMeta?: DispatchMeta): Promise<void>;
+  execute(operation: string, topic: any, actor: string, extra?: Record<string, unknown>, dispatchMeta?: DispatchMeta): Promise<void>;
 }
 
 export class ReopenHandler {
@@ -16,9 +16,8 @@ export class ReopenHandler {
     private readonly logger: TopicHubLogger,
   ) {}
 
-  async execute(tenantId: string, _parsed: ParsedCommand, context: CommandContext) {
+  async execute(_parsed: ParsedCommand, context: CommandContext) {
     const topics = await this.topicService.findGroupHistory(
-      tenantId,
       context.platform,
       context.groupId,
     );
@@ -40,14 +39,12 @@ export class ReopenHandler {
 
     try {
       const updated = await this.topicService.updateStatus(
-        tenantId,
         closedTopic._id.toString(),
         TopicStatus.OPEN,
         context.userId,
       );
 
       await this.skillPipeline.execute(
-        tenantId,
         'reopened',
         updated,
         context.userId,

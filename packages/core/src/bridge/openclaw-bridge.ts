@@ -5,17 +5,11 @@ import type {
   OpenClawWebhookPayload,
   OpenClawWebhookUnsignedPayload,
   OpenClawInboundResult,
-  TenantChannelEntry,
 } from './openclaw-types';
 import {
   OpenClawWebhookPayloadSchema,
   OpenClawWebhookUnsignedPayloadSchema,
 } from './openclaw-types';
-import { MessageRenderer } from './message-renderer';
-import type { CardData } from '../skill/interfaces/type-skill';
-
-const COMMAND_PREFIX = '/topichub';
-const ANSWER_PREFIX = '/answer';
 const DEDUP_TTL_MS = 60_000;
 
 /**
@@ -66,7 +60,6 @@ export function canonicalOpenClawWebhookSigningString(webhook: {
 
 export class OpenClawBridge {
   private readonly dedup = new Map<string, number>();
-  private readonly renderer = new MessageRenderer();
   private dedupTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(
@@ -86,7 +79,7 @@ export class OpenClawBridge {
   static fromBridgeManager(
     port: number,
     webhookSecret: string,
-    tenantMapping: Record<string, TenantChannelEntry>,
+    platforms: string[],
     logger: TopicHubLogger,
   ): OpenClawBridge {
     return new OpenClawBridge(
@@ -94,7 +87,7 @@ export class OpenClawBridge {
         gatewayUrl: `http://127.0.0.1:${port}`,
         token: webhookSecret,
         webhookSecret,
-        tenantMapping,
+        platforms,
       },
       logger,
     );
@@ -246,30 +239,24 @@ export class OpenClawBridge {
       return null;
     }
 
-    const { channel, user, message, sessionId } = webhook.data;
+    const { channel, user, message, sessionId, platform: webhookPlatform } = webhook.data;
     const normalized = normalizeImCommandMessage(message);
 
     this.logger.debug(`Inbound webhook: channel=${channel} user=${user} message=${JSON.stringify(normalized)} sessionId=${sessionId}`);
-
-    if (!normalized.startsWith(COMMAND_PREFIX) && !normalized.startsWith(ANSWER_PREFIX)) {
-      this.logger.debug(`Message does not start with ${COMMAND_PREFIX} or ${ANSWER_PREFIX}, ignoring`);
-      return null;
-    }
 
     if (this.isDuplicate(sessionId, normalized)) {
       this.logger.debug('Duplicate webhook detected, skipping');
       return null;
     }
 
-    const mapping = this.config.tenantMapping[channel];
-    if (!mapping) {
-      this.logger.warn(`No tenant mapping found for channel: ${channel} (available: ${Object.keys(this.config.tenantMapping).join(', ')})`);
+    const platform = webhookPlatform ?? this.inferPlatform();
+    if (!platform) {
+      this.logger.warn(`Cannot determine platform for channel: ${channel} — set platform in webhook data or configure exactly one bridge platform`);
       return null;
     }
 
     return {
-      tenantId: mapping.tenantId,
-      platform: mapping.platform,
+      platform,
       channel,
       userId: user,
       rawCommand: normalized,
@@ -313,28 +300,12 @@ export class OpenClawBridge {
     }
   }
 
-  async notifyTenantChannels(
-    tenantId: string,
-    card: CardData,
-    topicType?: string,
-  ): Promise<void> {
-    const markdown = this.renderer.renderCard(card, topicType);
-
-    const channels = Object.entries(this.config.tenantMapping).filter(
-      ([, entry]) => entry.tenantId === tenantId,
-    );
-
-    for (const [channelId, entry] of channels) {
-      await this.sendMessage(entry.platform, channelId, markdown);
-    }
-  }
-
-  getRenderer(): MessageRenderer {
-    return this.renderer;
-  }
-
-  resolveTenant(channel: string): { tenantId: string; platform: string } | undefined {
-    return this.config.tenantMapping[channel];
+  private inferPlatform(): string | undefined {
+    const platforms = this.config.platforms;
+    if (!platforms || platforms.length === 0) return undefined;
+    if (platforms.length === 1) return platforms[0];
+    this.logger.warn(`Multiple platforms configured (${platforms.join(', ')}) but webhook did not include platform field`);
+    return undefined;
   }
 
   private isDuplicate(sessionId: string, message: string): boolean {

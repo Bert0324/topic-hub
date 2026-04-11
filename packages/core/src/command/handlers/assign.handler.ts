@@ -5,7 +5,7 @@ import type { ParsedCommand } from '../command-parser';
 import type { CommandContext } from '../command-router';
 
 export interface SkillPipelinePort {
-  execute(tenantId: string, operation: string, topic: any, actor: string, extra?: Record<string, unknown>, dispatchMeta?: DispatchMeta): Promise<void>;
+  execute(operation: string, topic: any, actor: string, extra?: Record<string, unknown>, dispatchMeta?: DispatchMeta): Promise<void>;
 }
 
 export class AssignHandler {
@@ -15,14 +15,13 @@ export class AssignHandler {
     private readonly logger: TopicHubLogger,
   ) {}
 
-  async execute(tenantId: string, parsed: ParsedCommand, context: CommandContext) {
+  async execute(parsed: ParsedCommand, context: CommandContext) {
     const userId = (parsed.args.user as string) || (parsed.args.userId as string);
     if (!userId) {
       return { success: false, error: 'Missing --user flag. Usage: /topichub assign --user <userId>' };
     }
 
     const topic = await this.topicService.findActiveTopicByGroup(
-      tenantId,
       context.platform,
       context.groupId,
     );
@@ -32,14 +31,12 @@ export class AssignHandler {
 
     try {
       const updated = await this.topicService.assignUser(
-        tenantId,
         topic._id.toString(),
         userId,
         context.userId,
       );
 
       await this.skillPipeline.execute(
-        tenantId,
         'assigned',
         updated,
         context.userId,

@@ -10,14 +10,12 @@ export class TimelineService {
   ) {}
 
   async append(
-    tenantId: string,
     topicId: string | mongoose.Types.ObjectId,
     actor: string,
     actionType: TimelineActionType,
     payload: Record<string, unknown> = {},
   ) {
     return this.timelineModel.create({
-      tenantId,
       topicId,
       actor,
       actionType,
@@ -26,7 +24,6 @@ export class TimelineService {
   }
 
   async findByTopic(
-    tenantId: string,
     topicId: string,
     page = 1,
     pageSize = 50,
@@ -35,12 +32,12 @@ export class TimelineService {
 
     const [entries, total] = await Promise.all([
       this.timelineModel
-        .find({ tenantId, topicId })
+        .find({ topicId })
         .sort({ timestamp: 1 })
         .skip(skip)
         .limit(pageSize)
         .exec(),
-      this.timelineModel.countDocuments({ tenantId, topicId }).exec(),
+      this.timelineModel.countDocuments({ topicId }).exec(),
     ]);
 
     return { entries, total, page, pageSize };

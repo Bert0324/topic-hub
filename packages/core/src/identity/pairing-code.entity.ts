@@ -14,9 +14,6 @@ import {
 @index({ expiresAt: 1 }, { expireAfterSeconds: 0 })
 export class PairingCode {
   @prop({ required: true })
-  tenantId!: string;
-
-  @prop({ required: true })
   code!: string;
 
   @prop({ required: true })

@@ -1,20 +1,11 @@
 import { z } from 'zod';
 
-export const TenantChannelEntrySchema = z.object({
-  tenantId: z.string().min(1),
-  platform: z.string().min(1),
-});
-
-export type TenantChannelEntry = z.infer<typeof TenantChannelEntrySchema>;
-
 export const OpenClawConfigSchema = z.object({
   gatewayUrl: z.string().url(),
   token: z.string().min(1),
   webhookSecret: z.string().min(1),
-  tenantMapping: z.record(z.string(), TenantChannelEntrySchema).refine(
-    (mapping) => Object.keys(mapping).length > 0,
-    { message: 'tenantMapping must have at least one entry' },
-  ),
+  /** Platforms enabled on this bridge (used to infer platform when webhook omits it). */
+  platforms: z.array(z.string().min(1)).optional(),
 });
 
 export type OpenClawConfig = z.infer<typeof OpenClawConfigSchema>;
@@ -56,10 +47,6 @@ const ChannelsSchema = z.object({
 
 export const BridgeConfigSchema = z.object({
   channels: ChannelsSchema,
-  tenantMapping: z.record(z.string(), TenantChannelEntrySchema).refine(
-    (mapping) => Object.keys(mapping).length > 0,
-    { message: 'tenantMapping must have at least one entry' },
-  ),
   webhookUrl: z.string().url(),
   port: z.number().int().min(1024).max(65535).optional(),
   maxRestartRetries: z.number().int().min(0).max(10).optional(),
@@ -77,6 +64,7 @@ const OpenClawWebhookDataSchema = z.object({
   user: jsonString(1),
   message: z.preprocess((v) => (v == null ? '' : String(v)), z.string()),
   sessionId: jsonString(1),
+  platform: z.string().min(1).optional(),
 });
 
 /** Body signed by HMAC (embedded relay sends this as raw bytes + `X-TopicHub-Signature` header). */
@@ -95,7 +83,6 @@ export type OpenClawWebhookUnsignedPayload = z.infer<typeof OpenClawWebhookUnsig
 export type OpenClawWebhookPayload = z.infer<typeof OpenClawWebhookPayloadSchema>;
 
 export interface OpenClawInboundResult {
-  tenantId: string;
   platform: string;
   channel: string;
   userId: string;

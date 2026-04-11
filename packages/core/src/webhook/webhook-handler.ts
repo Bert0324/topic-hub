@@ -11,13 +11,13 @@ import type { TopicHubLogger } from '../common/logger';
 import { AnswerTextSchema } from '../identity/identity-types';
 
 export interface WebhookIdentityOps {
-  generatePairingCode(tenantId: string, platform: string, platformUserId: string, channel: string): Promise<string>;
-  resolveUserByPlatform(tenantId: string, platform: string, platformUserId: string): Promise<{ topichubUserId: string; claimToken: string } | undefined>;
-  deactivateBinding(tenantId: string, platform: string, platformUserId: string): Promise<boolean>;
+  generatePairingCode(platform: string, platformUserId: string, channel: string): Promise<string>;
+  resolveUserByPlatform(platform: string, platformUserId: string): Promise<{ topichubUserId: string; claimToken: string } | undefined>;
+  deactivateBinding(platform: string, platformUserId: string): Promise<boolean>;
 }
 
 export interface WebhookHeartbeatOps {
-  isAvailable(tenantId: string, topichubUserId: string): Promise<boolean>;
+  isAvailable(topichubUserId: string): Promise<boolean>;
 }
 
 export interface WebhookQaOps {
@@ -34,7 +34,6 @@ export interface WebhookResult {
 
 export type CommandDispatcher = (
   handler: string,
-  tenantId: string,
   parsed: ParsedCommand,
   context: CommandContext,
 ) => Promise<any>;
@@ -94,7 +93,6 @@ export class WebhookHandler {
     }
 
     const identity = await this.identityOps?.resolveUserByPlatform(
-      result.tenantId,
       result.platform,
       result.userId,
     );
@@ -108,7 +106,7 @@ export class WebhookHandler {
 
     const topichubUserId = identity.topichubUserId;
 
-    const available = await this.heartbeatOps?.isAvailable(result.tenantId, topichubUserId);
+    const available = await this.heartbeatOps?.isAvailable(topichubUserId);
     if (available === false) {
       this.bridge
         .sendMessage(
@@ -120,7 +118,6 @@ export class WebhookHandler {
     }
 
     const activeTopic = await this.topicService.findActiveTopicByGroup(
-      result.tenantId,
       result.platform,
       result.channel,
     );
@@ -129,7 +126,6 @@ export class WebhookHandler {
       platform: result.platform,
       groupId: result.channel,
       userId: result.userId,
-      tenantId: result.tenantId,
       hasActiveTopic: !!activeTopic,
       dispatchMeta: {
         targetUserId: topichubUserId,
@@ -148,7 +144,7 @@ export class WebhookHandler {
       return { success: false, error: route.error };
     }
 
-    const execResult = await this.commandDispatcher(route.handler, result.tenantId, parsed, context);
+    const execResult = await this.commandDispatcher(route.handler, parsed, context);
 
     const replyMessage = this.formatOpenClawCommandReply(execResult);
 
@@ -196,7 +192,6 @@ export class WebhookHandler {
 
     try {
       const code = await this.identityOps.generatePairingCode(
-        result.tenantId,
         result.platform,
         result.userId,
         result.channel,
@@ -220,7 +215,6 @@ export class WebhookHandler {
 
     try {
       const resolved = await this.identityOps.resolveUserByPlatform(
-        result.tenantId,
         result.platform,
         result.userId,
       );
@@ -234,7 +228,7 @@ export class WebhookHandler {
         return { success: true, response: { status: 'not_found' } };
       }
 
-      await this.identityOps.deactivateBinding(result.tenantId, result.platform, result.userId);
+      await this.identityOps.deactivateBinding(result.platform, result.userId);
 
       await this.bridge.sendMessage(
         result.platform,
@@ -256,7 +250,6 @@ export class WebhookHandler {
 
     try {
       const identity = await this.identityOps.resolveUserByPlatform(
-        result.tenantId,
         result.platform,
         result.userId,
       );
@@ -316,24 +309,6 @@ export class WebhookHandler {
     headers: Record<string, string>,
   ): Promise<WebhookResult> {
     try {
-      let tenantId: string | undefined;
-      if (
-        'resolveTenantId' in adapterSkill &&
-        typeof (adapterSkill as any).resolveTenantId === 'function'
-      ) {
-        tenantId = await (adapterSkill as any).resolveTenantId(payload, headers);
-      }
-      if (!tenantId) {
-        tenantId = headers['x-tenant-id'];
-      }
-
-      if (!tenantId) {
-        this.logger.warn(
-          `No tenant ID resolved for webhook on adapter "${skillName}"`,
-        );
-        return { success: false, error: 'No tenant ID resolved' };
-      }
-
       const eventPayload = adapterSkill.transformWebhook(payload, headers);
       if (!eventPayload) {
         this.logger.debug(
@@ -342,7 +317,7 @@ export class WebhookHandler {
         return { success: true, response: { status: 'ignored', reason: 'filtered by adapter' } };
       }
 
-      const result = await this.ingestionService.ingest(tenantId, {
+      const result = await this.ingestionService.ingest({
         type: eventPayload.type,
         title: eventPayload.title,
         sourceUrl: eventPayload.sourceUrl,

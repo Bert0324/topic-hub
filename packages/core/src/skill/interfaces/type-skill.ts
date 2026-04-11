@@ -59,7 +59,6 @@ export interface ValidationResult {
 export interface TopicContext {
   topic: any;
   actor: string;
-  tenantId: string;
   timestamp: Date;
 }
 

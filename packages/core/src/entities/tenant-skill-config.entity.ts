@@ -4,11 +4,8 @@ import { prop, modelOptions, index, Severity } from '@typegoose/typegoose';
   schemaOptions: { collection: 'tenant_skill_configs', timestamps: true },
   options: { allowMixed: Severity.ALLOW },
 })
-@index({ tenantId: 1, skillName: 1 }, { unique: true })
+@index({ skillName: 1 }, { unique: true })
 export class TenantSkillConfig {
-  @prop({ required: true })
-  tenantId!: string;
-
   @prop({ required: true })
   skillName!: string;
 

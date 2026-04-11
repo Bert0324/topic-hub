@@ -89,13 +89,6 @@ export class ApiController {
     }
   }
 
-  private async tenant(req: Request) {
-    const { tenantId } = await this.hub.getHub().auth.resolveFromHeaders(
-      req.headers as Record<string, string>,
-    );
-    return tenantId;
-  }
-
   private async requireSuperadmin(req: Request) {
     return this.hub.getHub().identityAuth.requireSuperadmin(
       req.headers as Record<string, string>,
@@ -204,42 +197,6 @@ export class ApiController {
     }
   }
 
-  // ─── Auth ─────────────────────────────────────────────────────────
-
-  @Post('auth/validate')
-  async validate(@Body() body: { apiKey?: string }) {
-    if (body.apiKey) {
-      const result = await this.hub.getHub().auth.resolveTenant(body.apiKey);
-      if (result) return { valid: true, tenantId: result.tenantId };
-    }
-    return { valid: false };
-  }
-
-  // ─── Admin: Tenants ───────────────────────────────────────────────
-
-  @Get('admin/tenants')
-  listTenants() {
-    return this.hub.getHub().admin.listTenants();
-  }
-
-  @Post('admin/tenants')
-  async createTenant(@Body() body: { name: string }) {
-    try {
-      return await this.hub.getHub().admin.createTenant(body.name);
-    } catch (err) {
-      toHttpError(err);
-    }
-  }
-
-  @Post('admin/tenants/:id/token/regenerate')
-  async regenerateToken(@Param('id') id: string) {
-    try {
-      return await this.hub.getHub().admin.regenerateToken(id);
-    } catch (err) {
-      toHttpError(err);
-    }
-  }
-
   // ─── Admin: Skills ────────────────────────────────────────────────
 
   @Get('admin/skills')
@@ -247,21 +204,10 @@ export class ApiController {
     return { skills: this.hub.getHub().skills.listRegistered() };
   }
 
-  @Get('admin/stats')
-  async getStats(@Req() req: Request) {
-    try {
-      const tenantId = await this.tenant(req);
-      return await this.hub.getHub().admin.getStats(tenantId);
-    } catch {
-      return {};
-    }
-  }
-
-  // ─── Ingestion (tenant-scoped) ────────────────────────────────────
+  // ─── Ingestion ─────────────────────────────────────────────────────
 
   @Post('api/v1/events')
   async ingest(
-    @Req() req: Request,
     @Body() body: unknown,
     @Res({ passthrough: true }) res: Response,
   ) {
@@ -274,8 +220,7 @@ export class ApiController {
       throw err;
     }
     try {
-      const tenantId = await this.tenant(req);
-      const result = await this.hub.getHub().ingestion.ingest(tenantId, payload);
+      const result = await this.hub.getHub().ingestion.ingest(payload);
       res.status(result.created ? HttpStatus.CREATED : HttpStatus.OK);
       return result;
     } catch (err) {
@@ -283,26 +228,23 @@ export class ApiController {
     }
   }
 
-  // ─── Commands (tenant-scoped) ─────────────────────────────────────
+  // ─── Commands ──────────────────────────────────────────────────────
 
   @Post('api/v1/commands')
   async command(
-    @Req() req: Request,
     @Body() body: { rawCommand: string; context: { platform: string; groupId: string; userId: string } },
   ) {
     try {
-      const tenantId = await this.tenant(req);
-      return await this.hub.getHub().commands.execute(tenantId, body.rawCommand, body.context);
+      return await this.hub.getHub().commands.execute(body.rawCommand, body.context);
     } catch (err) {
       toHttpError(err);
     }
   }
 
-  // ─── Topics (tenant-scoped) ───────────────────────────────────────
+  // ─── Topics ────────────────────────────────────────────────────────
 
   @Get('api/v1/search/topics')
   async searchTopics(
-    @Req() req: Request,
     @Query('type') type?: string,
     @Query('status') status?: string,
     @Query('tag') tag?: string | string[],
@@ -314,8 +256,7 @@ export class ApiController {
     const limit = parseInt(pageSize ?? '20', 10);
     const pageNum = parseInt(page ?? '1', 10);
     try {
-      const tenantId = await this.tenant(req);
-      return await this.hub.getHub().search.search(tenantId, {
+      return await this.hub.getHub().search.search({
         q, status, type, tags, limit, offset: (pageNum - 1) * limit,
       });
     } catch (err) {
@@ -324,10 +265,9 @@ export class ApiController {
   }
 
   @Get('api/v1/topics/:id')
-  async getTopic(@Req() req: Request, @Param('id') id: string) {
+  async getTopic(@Param('id') id: string) {
     try {
-      const tenantId = await this.tenant(req);
-      const topic = await this.hub.getHub().topics.get(tenantId, id);
+      const topic = await this.hub.getHub().topics.get(id);
       if (!topic) throw new NotFoundException('Topic not found');
       return topic;
     } catch (err) {
@@ -338,13 +278,11 @@ export class ApiController {
 
   @Patch('api/v1/topics/:id')
   async updateTopic(
-    @Req() req: Request,
     @Param('id') id: string,
     @Body() body: Record<string, unknown>,
   ) {
     try {
-      const tenantId = await this.tenant(req);
-      return await this.hub.getHub().topics.update(tenantId, id, body, 'api');
+      return await this.hub.getHub().topics.update(id, body, 'api');
     } catch (err) {
       toHttpError(err);
     }
@@ -352,13 +290,11 @@ export class ApiController {
 
   @Post('api/v1/topics/:id/timeline')
   async addTimeline(
-    @Req() req: Request,
     @Param('id') id: string,
     @Body() body: { actionType: string; actor?: string; payload?: Record<string, unknown> },
   ) {
     try {
-      const tenantId = await this.tenant(req);
-      return await this.hub.getHub().topics.addTimeline(tenantId, id, {
+      return await this.hub.getHub().topics.addTimeline(id, {
         actor: body.actor ?? 'api',
         actionType: body.actionType,
         payload: body.payload,
@@ -368,18 +304,16 @@ export class ApiController {
     }
   }
 
-  // ─── Dispatch (tenant-scoped, for local agent) ────────────────────
+  // ─── Dispatch (for local agent) ─────────────────────────────────────
 
   @Get('api/v1/dispatches')
   async listDispatches(
-    @Req() req: Request,
     @Query('status') status?: string,
     @Query('limit') limit?: string,
     @Query('targetUserId') targetUserId?: string,
   ) {
     try {
-      const tenantId = await this.tenant(req);
-      const dispatches = await this.hub.getHub().dispatch.list(tenantId, {
+      const dispatches = await this.hub.getHub().dispatch.list({
         status,
         limit: limit ? parseInt(limit, 10) : undefined,
         targetUserId,
@@ -409,7 +343,7 @@ export class ApiController {
     return { id, status: 'failed' };
   }
 
-  // ─── Q&A Relay (tenant-scoped) ──────────────────────────────────────
+  // ─── Q&A Relay ─────────────────────────────────────────────────────
 
   @Post('api/v1/dispatches/:id/question')
   async postQuestion(
@@ -431,13 +365,11 @@ export class ApiController {
     const dispatch = await hub.dispatch.findById(id);
     if (!dispatch) throw new NotFoundException('Dispatch not found');
 
-    const tenantId = dispatch.tenantId;
     const sourceChannel = dispatch.sourceChannel;
     const sourcePlatform = dispatch.sourcePlatform;
-    const topichubUserId = dispatch.targetUserId ?? tenantId;
+    const topichubUserId = dispatch.targetUserId;
 
     const qa = await hub.qa.createQuestion(
-      tenantId,
       id,
       topichubUserId,
       parsed.questionText,
@@ -455,7 +387,6 @@ export class ApiController {
       const imMessage = `${header}\n\n${parsed.questionText}\n\nReply with: \`/answer <your response>\``;
 
       hub.messaging.send(sourcePlatform, {
-        tenantId,
         groupId: sourceChannel,
         message: imMessage,
       }).catch(() => { /* non-fatal */ });
@@ -477,14 +408,12 @@ export class ApiController {
 
   @Sse('api/v1/dispatches/stream')
   stream(@Req() req: Request): Observable<{ data: string; type?: string }> {
-    const tenantId = (req.query as any).tenantId as string;
     const targetUserId = (req.query as any).targetUserId as string | undefined;
     const executorToken = (req.query as any).executorToken as string | undefined;
     const hub = this.hub.getHub();
 
     const dispatches$ = new Observable<{ data: string; type?: string }>((sub) => {
       const unsub = hub.dispatch.onTask((task: any) => {
-        if (tenantId && task.tenantId !== tenantId) return;
         if (targetUserId && task.targetUserId && task.targetUserId !== targetUserId) return;
         if (executorToken && task.targetExecutorToken && task.targetExecutorToken !== executorToken) return;
         sub.next({ type: 'dispatch', data: JSON.stringify(task) });
@@ -564,13 +493,6 @@ export class ExecutorController {
 export class IdentityController {
   constructor(private readonly hub: TopicHubService) {}
 
-  private async tenant(req: Request) {
-    const { tenantId } = await this.hub.getHub().auth.resolveFromHeaders(
-      req.headers as Record<string, string>,
-    );
-    return tenantId;
-  }
-
   private extractBearerToken(req: Request): string {
     const auth = req.headers['authorization'] ?? '';
     if (typeof auth === 'string' && auth.startsWith('Bearer ')) {
@@ -590,12 +512,10 @@ export class IdentityController {
       throw err;
     }
 
-    const tenantId = await this.tenant(req);
     const claimToken = this.extractBearerToken(req);
 
     try {
       const result = await this.hub.getHub().identity.claimPairingCode(
-        tenantId,
         parsed.code,
         claimToken,
       );
@@ -627,13 +547,11 @@ export class IdentityController {
       throw err;
     }
 
-    const tenantId = await this.tenant(req);
     const claimToken = this.extractBearerToken(req);
 
     try {
       if (parsed.platform && parsed.platformUserId) {
         await this.hub.getHub().identity.deactivateBinding(
-          tenantId,
           parsed.platform,
           parsed.platformUserId,
         );

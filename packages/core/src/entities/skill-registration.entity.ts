@@ -24,8 +24,8 @@ export class PublishedSkillContent {
   files!: Record<string, string>;
 }
 
-@index({ name: 1, tenantId: 1 }, { unique: true })
-@index({ tenantId: 1, isPrivate: 1 })
+@index({ name: 1 }, { unique: true })
+@index({ isPrivate: 1 })
 @modelOptions({
   schemaOptions: { collection: 'skill_registrations', timestamps: true },
   options: { allowMixed: Severity.ALLOW },
@@ -48,9 +48,6 @@ export class SkillRegistration {
 
   @prop({ type: () => mongoose.Schema.Types.Mixed, default: null })
   skillMd!: SkillMdData | null;
-
-  @prop({ type: String, default: null })
-  tenantId!: string | null;
 
   @prop({ default: false })
   isPrivate!: boolean;

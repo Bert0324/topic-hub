@@ -19,12 +19,10 @@ export class IngestionService {
   ) {}
 
   async ingest(
-    tenantId: string,
     payload: EventPayload,
   ): Promise<{ topic: any; created: boolean }> {
     const isAvailable = await this.skillRegistry.isTypeAvailable(
       payload.type,
-      tenantId,
     );
     if (!isAvailable) {
       throw new ValidationError(
@@ -48,14 +46,12 @@ export class IngestionService {
 
     if (payload.sourceUrl) {
       const existing = await this.topicService.findBySourceUrl(
-        tenantId,
         payload.sourceUrl,
       );
 
       if (existing) {
         if (payload.status && payload.status !== existing.status) {
           await this.topicService.updateStatus(
-            tenantId,
             existing._id.toString(),
             payload.status as TopicStatus,
             ACTOR,
@@ -63,7 +59,6 @@ export class IngestionService {
         }
 
         await this.timelineService.append(
-          tenantId,
           existing._id,
           ACTOR,
           TimelineActionType.METADATA_UPDATED,
@@ -71,7 +66,6 @@ export class IngestionService {
         );
 
         await this.skillPipeline.execute(
-          tenantId,
           'updated',
           existing,
           ACTOR,
@@ -81,7 +75,7 @@ export class IngestionService {
       }
     }
 
-    const topic = await this.topicService.create(tenantId, {
+    const topic = await this.topicService.create({
       type: payload.type,
       title: payload.title,
       sourceUrl: payload.sourceUrl,
@@ -91,7 +85,6 @@ export class IngestionService {
 
     for (const tag of payload.tags) {
       await this.topicService.addTag(
-        tenantId,
         topic._id.toString(),
         tag,
         ACTOR,
@@ -100,14 +93,13 @@ export class IngestionService {
 
     for (const userId of payload.assignees) {
       await this.topicService.assignUser(
-        tenantId,
         topic._id.toString(),
         userId,
         ACTOR,
       );
     }
 
-    await this.skillPipeline.execute(tenantId, 'created', topic, ACTOR);
+    await this.skillPipeline.execute('created', topic, ACTOR);
 
     return { topic, created: true };
   }

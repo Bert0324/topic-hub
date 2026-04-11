@@ -13,12 +13,9 @@ import { Topic } from './topic.entity';
   schemaOptions: { collection: 'timeline_entries', timestamps: false },
   options: { allowMixed: Severity.ALLOW },
 })
-@index({ tenantId: 1, topicId: 1, timestamp: 1 })
+@index({ topicId: 1, timestamp: 1 })
 export class TimelineEntry {
   _id!: mongoose.Types.ObjectId;
-
-  @prop({ required: true })
-  tenantId!: string;
 
   @prop({ required: true, ref: () => Topic })
   topicId!: Ref<Topic>;

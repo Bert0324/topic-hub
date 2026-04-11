@@ -6,7 +6,6 @@ export interface CommandContext {
   platform: string;
   groupId: string;
   userId: string;
-  tenantId: string;
   hasActiveTopic: boolean;
   dispatchMeta?: DispatchMeta;
 }
@@ -17,7 +16,7 @@ export interface RouteResult {
 }
 
 export interface SkillRegistryPort {
-  getTypeSkillForType(topicType: string, opts?: { tenantId?: string }): any | undefined;
+  getTypeSkillForType(topicType: string): any | undefined;
   getByCategory(category: SkillCategory): Array<{ skill: any; registration: any }>;
 }
 

@@ -12,37 +12,36 @@ export class SkillConfigService {
     private readonly logger: TopicHubLogger,
   ) {}
 
-  async enableForTenant(tenantId: string, skillName: string): Promise<void> {
+  async enableForTenant(skillName: string): Promise<void> {
     await this.configModel
       .findOneAndUpdate(
-        { tenantId, skillName },
+        { skillName },
         { enabled: true },
         { upsert: true, new: true },
       )
       .exec();
-    this.logger.log(`Enabled skill ${skillName} for tenant ${tenantId}`);
+    this.logger.log(`Enabled skill ${skillName}`);
   }
 
-  async disableForTenant(tenantId: string, skillName: string): Promise<void> {
+  async disableForTenant(skillName: string): Promise<void> {
     await this.configModel
       .findOneAndUpdate(
-        { tenantId, skillName },
+        { skillName },
         { enabled: false },
         { upsert: true, new: true },
       )
       .exec();
-    this.logger.log(`Disabled skill ${skillName} for tenant ${tenantId}`);
+    this.logger.log(`Disabled skill ${skillName}`);
   }
 
   async setConfig(
-    tenantId: string,
     skillName: string,
     config: Record<string, unknown>,
   ): Promise<void> {
     const encrypted = this.encryptSecrets(config);
     await this.configModel
       .findOneAndUpdate(
-        { tenantId, skillName },
+        { skillName },
         { config: encrypted },
         { upsert: true, new: true },
       )
@@ -50,11 +49,10 @@ export class SkillConfigService {
   }
 
   async getConfig(
-    tenantId: string,
     skillName: string,
   ): Promise<Record<string, unknown>> {
     const doc: any = await this.configModel
-      .findOne({ tenantId, skillName })
+      .findOne({ skillName })
       .lean()
       .exec();
     if (!doc) throw new NotFoundError('Skill config not found');
@@ -62,11 +60,10 @@ export class SkillConfigService {
   }
 
   async getMaskedConfig(
-    tenantId: string,
     skillName: string,
   ): Promise<Record<string, unknown>> {
     const doc: any = await this.configModel
-      .findOne({ tenantId, skillName })
+      .findOne({ skillName })
       .lean()
       .exec();
     if (!doc) throw new NotFoundError('Skill config not found');
@@ -74,11 +71,10 @@ export class SkillConfigService {
   }
 
   async isEnabledForTenant(
-    tenantId: string,
     skillName: string,
   ): Promise<boolean> {
     const doc: any = await this.configModel
-      .findOne({ tenantId, skillName })
+      .findOne({ skillName })
       .lean()
       .exec();
     return doc?.enabled === true;

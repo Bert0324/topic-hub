@@ -15,7 +15,6 @@ export interface ResolvedPlatformUser {
 }
 
 export interface ResolvedClaimTokenUser {
-  tenantId: string;
   topichubUserId: string;
 }
 
@@ -27,7 +26,6 @@ export class IdentityService {
   ) {}
 
   async generatePairingCode(
-    tenantId: string,
     platform: string,
     platformUserId: string,
     channel: string,
@@ -36,7 +34,6 @@ export class IdentityService {
     const expiresAt = new Date(Date.now() + PAIRING_CODE_TTL_MS);
 
     await this.pairingCodeModel.create({
-      tenantId,
       code,
       platform,
       platformUserId,
@@ -45,12 +42,11 @@ export class IdentityService {
       expiresAt,
     });
 
-    this.logger.log(`Pairing code generated for ${platform}:${platformUserId} tenant=${tenantId}`);
+    this.logger.log(`Pairing code generated for ${platform}:${platformUserId}`);
     return code;
   }
 
   async claimPairingCode(
-    tenantId: string,
     code: string,
     claimToken: string,
   ): Promise<ClaimResult | null> {
@@ -59,7 +55,6 @@ export class IdentityService {
     const pairingCode = await this.pairingCodeModel
       .findOneAndUpdate(
         {
-          tenantId,
           code,
           claimed: false,
           expiresAt: { $gt: now },
@@ -70,7 +65,7 @@ export class IdentityService {
       .exec();
 
     if (!pairingCode) {
-      this.logger.debug(`Pairing code claim failed: code=${code} tenant=${tenantId}`);
+      this.logger.debug(`Pairing code claim failed: code=${code}`);
       return null;
     }
 
@@ -85,7 +80,6 @@ export class IdentityService {
     await this.bindingModel
       .findOneAndUpdate(
         {
-          tenantId,
           platform: pairingCode.platform,
           platformUserId: pairingCode.platformUserId,
         },
@@ -119,12 +113,11 @@ export class IdentityService {
   }
 
   async resolveUserByPlatform(
-    tenantId: string,
     platform: string,
     platformUserId: string,
   ): Promise<ResolvedPlatformUser | undefined> {
     const binding = await this.bindingModel
-      .findOne({ tenantId, platform, platformUserId, active: true })
+      .findOne({ platform, platformUserId, active: true })
       .exec();
 
     if (!binding) return undefined;
@@ -145,25 +138,23 @@ export class IdentityService {
     if (!binding) return undefined;
 
     return {
-      tenantId: binding.tenantId,
       topichubUserId: binding.topichubUserId,
     };
   }
 
   async deactivateBinding(
-    tenantId: string,
     platform: string,
     platformUserId: string,
   ): Promise<boolean> {
     const result = await this.bindingModel
       .findOneAndUpdate(
-        { tenantId, platform, platformUserId, active: true },
+        { platform, platformUserId, active: true },
         { $set: { active: false } },
       )
       .exec();
 
     if (result) {
-      this.logger.log(`Binding deactivated: ${platform}:${platformUserId} tenant=${tenantId}`);
+      this.logger.log(`Binding deactivated: ${platform}:${platformUserId}`);
     }
 
     return result != null;
@@ -185,11 +176,10 @@ export class IdentityService {
   }
 
   async getBindingsForUser(
-    tenantId: string,
     topichubUserId: string,
   ): Promise<any[]> {
     return this.bindingModel
-      .find({ tenantId, topichubUserId, active: true })
+      .find({ topichubUserId, active: true })
       .exec();
   }
 }

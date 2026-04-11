@@ -4,9 +4,8 @@ import type { CommandContext } from '../command-router';
 export class ShowHandler {
   constructor(private readonly topicService: TopicService) {}
 
-  async execute(tenantId: string, _parsed: unknown, context: CommandContext) {
+  async execute(_parsed: unknown, context: CommandContext) {
     const topic = await this.topicService.findActiveTopicByGroup(
-      tenantId,
       context.platform,
       context.groupId,
     );

@@ -6,7 +6,7 @@ import type { ParsedCommand } from '../command-parser';
 import type { CommandContext } from '../command-router';
 
 export interface SkillPipelinePort {
-  execute(tenantId: string, operation: string, topic: any, actor: string, extra?: Record<string, unknown>, dispatchMeta?: DispatchMeta): Promise<void>;
+  execute(operation: string, topic: any, actor: string, extra?: Record<string, unknown>, dispatchMeta?: DispatchMeta): Promise<void>;
 }
 
 const STATUS_VALUES = Object.values(TopicStatus) as string[];
@@ -18,7 +18,7 @@ export class UpdateHandler {
     private readonly logger: TopicHubLogger,
   ) {}
 
-  async execute(tenantId: string, parsed: ParsedCommand, context: CommandContext) {
+  async execute(parsed: ParsedCommand, context: CommandContext) {
     const newStatus = parsed.args.status as string | undefined;
     if (!newStatus) {
       return { success: false, error: 'Missing --status flag. Usage: /topichub update --status <status>' };
@@ -32,7 +32,6 @@ export class UpdateHandler {
     }
 
     const topic = await this.topicService.findActiveTopicByGroup(
-      tenantId,
       context.platform,
       context.groupId,
     );
@@ -43,14 +42,12 @@ export class UpdateHandler {
     try {
       const oldStatus = topic.status;
       const updated = await this.topicService.updateStatus(
-        tenantId,
         topic._id.toString(),
         newStatus as TopicStatus,
         context.userId,
       );
 
       await this.skillPipeline.execute(
-        tenantId,
         'status_changed',
         updated,
         context.userId,

@@ -19,7 +19,6 @@ export interface ParsedSkillMd {
 
 export interface TopicSnapshot {
   _id: string;
-  tenantId: string;
   type: string;
   title: string;
   sourceUrl?: string;

@@ -15,7 +15,6 @@ export interface DispatchMeta {
 }
 
 export interface CreateDispatchDto {
-  tenantId: string;
   topicId: string;
   eventType: string;
   skillName: string;
@@ -55,7 +54,6 @@ export class DispatchService {
 
   async create(dto: CreateDispatchDto): Promise<any> {
     const dispatch = await this.dispatchModel.create({
-      tenantId: dto.tenantId,
       topicId: new mongoose.Types.ObjectId(dto.topicId),
       eventType: dto.eventType,
       skillName: dto.skillName,
@@ -80,11 +78,9 @@ export class DispatchService {
   }
 
   async findUnclaimed(
-    tenantId: string,
     options?: { limit?: number; since?: Date; targetUserId?: string },
   ): Promise<any[]> {
     const filter: Record<string, unknown> = {
-      tenantId,
       status: DispatchStatus.UNCLAIMED,
     };
     if (options?.since) {
@@ -105,11 +101,10 @@ export class DispatchService {
   }
 
   async findUnclaimedForUser(
-    tenantId: string,
     topichubUserId: string,
     options?: { limit?: number; since?: Date },
   ): Promise<any[]> {
-    return this.findUnclaimed(tenantId, {
+    return this.findUnclaimed({
       ...options,
       targetUserId: topichubUserId,
     });
@@ -281,12 +276,9 @@ export class DispatchService {
       .exec();
   }
 
-  async countByStatus(
-    tenantId: string,
-  ): Promise<Record<DispatchStatus, number>> {
+  async countByStatus(): Promise<Record<DispatchStatus, number>> {
     const results = await this.dispatchModel
       .aggregate([
-        { $match: { tenantId } },
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ])
       .exec();
