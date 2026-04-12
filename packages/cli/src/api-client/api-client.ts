@@ -1,4 +1,4 @@
-import { loadAdminToken, loadIdToken } from '../auth/auth.js';
+import { loadAdminToken, loadIdentityToken, loadIdToken } from '../auth/auth.js';
 import { loadConfigOrNull } from '../config/config.js';
 import { normalizeTopicHubServerRoot, postNativeGateway } from './native-gateway.js';
 
@@ -27,6 +27,11 @@ export class ApiClient {
 
   async ensureAuth(): Promise<void> {
     if (this.token) return;
+    const identity = await loadIdentityToken();
+    if (identity) {
+      this.token = identity;
+      return;
+    }
     const admin = await loadAdminToken();
     if (admin) {
       this.token = admin;

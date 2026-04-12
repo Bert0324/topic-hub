@@ -37,21 +37,39 @@ async function main() {
       break;
     }
     case 'login': {
-      const { saveAdminToken } = await import('./auth/auth.js');
+      const { saveIdentityToken } = await import('./auth/auth.js');
+      const { loadConfigOrNull } = await import('./config/config.js');
+      const { postNativeGateway } = await import('./api-client/native-gateway.js');
       const tokenArg = args[1];
-      if (tokenArg) {
-        await saveAdminToken(tokenArg);
-        console.log('  ✓ Token saved.');
-      } else {
+      const tokenFromPrompt = async () => {
         const { password } = await import('@inquirer/prompts');
-        const token = await password({
-          message: 'Paste your admin token',
+        return password({
+          message: 'Paste your identity/admin token',
           mask: '*',
           validate: (val) => val.length >= 10 || 'Token seems too short',
         });
-        await saveAdminToken(token);
-        console.log('  ✓ Token saved.');
+      };
+      const token = (tokenArg ?? (await tokenFromPrompt())).trim();
+      const config = loadConfigOrNull();
+      if (config) {
+        process.stdout.write('  Validating token... ');
+        try {
+          await postNativeGateway(
+            config.serverUrl,
+            'identity.me',
+            {},
+            { authorization: token, signal: AbortSignal.timeout(5000) },
+          );
+          console.log('✓ Token valid');
+        } catch (err) {
+          console.log('✗ Failed');
+          const msg = err instanceof Error ? err.message : String(err);
+          throw new Error(`Token validation failed: ${msg}`);
+        }
       }
+
+      await saveIdentityToken(token);
+      console.log('  ✓ Token saved.');
       break;
     }
     case 'logout': {
@@ -72,7 +90,7 @@ function printHelp() {
 
   Setup & Auth
     init                              Interactive local environment setup
-    login [token]                     Save admin token (from identity create)
+    login [token]                     Save identity/admin token (from /id create)
     logout                            Clear all stored tokens
 
   Runtime

@@ -1,55 +1,43 @@
 import { password } from '@inquirer/prompts';
-import { saveAdminToken, loadAdminToken } from '../../../auth/auth.js';
+import {
+  saveIdentityToken,
+  loadIdentityToken,
+  loadAdminToken,
+} from '../../../auth/auth.js';
 import { postNativeGateway } from '../../../api-client/native-gateway.js';
 
-async function tryBootstrap(serverUrl: string): Promise<string | null> {
-  try {
-    const data = await postNativeGateway<{ superadminToken?: string }>(
-      serverUrl,
-      'system.init',
-      {},
-      { signal: AbortSignal.timeout(5000) },
-    );
-    return data.superadminToken ?? null;
-  } catch {
-    return null;
-  }
-}
-
-export async function promptAdminToken(serverUrl: string): Promise<string> {
-  const existing = await loadAdminToken();
-
-  const bootstrapToken = await tryBootstrap(serverUrl);
-  if (bootstrapToken) {
-    console.log('  ✓ First-time setup — superadmin token generated.\n');
-    console.log(`    Token: ${bootstrapToken}\n`);
-    console.log('  ⚠ Store this token securely — it cannot be retrieved again.\n');
-    await saveAdminToken(bootstrapToken);
-    return bootstrapToken;
-  }
-
-  const hasExisting = existing !== null;
+export async function promptAdminToken(serverUrl: string): Promise<string | null> {
+  const existingIdentity = await loadIdentityToken();
+  const existingAdmin = await loadAdminToken();
+  const hasExisting = existingIdentity !== null || existingAdmin !== null;
 
   const token = await password({
     message: hasExisting
-      ? 'Admin token (press Enter to keep current)'
-      : 'Paste your admin token',
+      ? 'Identity/Admin token (optional, press Enter to keep current)'
+      : 'Identity/Admin token (optional, press Enter to skip)',
     mask: '*',
     validate: (val) => {
-      if (!val && hasExisting) return true;
-      if (!val) return 'Token is required';
+      if (!val) return true;
       if (val.length < 10) return 'Token seems too short';
       return true;
     },
   });
 
-  const tokenToUse = token || existing!;
+  const tokenToUse = token.trim();
+  if (!tokenToUse) {
+    if (hasExisting) {
+      console.log('  ✓ Keeping existing saved token');
+      return existingIdentity ?? existingAdmin;
+    }
+    console.log('  ✓ Skipped token setup');
+    return null;
+  }
 
   process.stdout.write('  Validating token... ');
   try {
     await postNativeGateway(
       serverUrl,
-      'admin.identities.list',
+      'identity.me',
       {},
       { authorization: tokenToUse, signal: AbortSignal.timeout(5000) },
     );
@@ -60,6 +48,6 @@ export async function promptAdminToken(serverUrl: string): Promise<string> {
     throw new Error(`Token validation failed: ${msg}`);
   }
 
-  await saveAdminToken(tokenToUse);
+  await saveIdentityToken(tokenToUse);
   return tokenToUse;
 }

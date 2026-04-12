@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import matter from 'gray-matter';
-import { loadAdminToken, loadIdToken } from '../../auth/auth.js';
+import { loadAdminToken, loadIdentityToken, loadIdToken } from '../../auth/auth.js';
 import { loadConfig } from '../../config/config.js';
 import { ApiClient } from '../../api-client/api-client.js';
 import {
@@ -161,8 +161,9 @@ export async function handlePublishCommand(args: string[]): Promise<void> {
   }
 
   const admin = await loadAdminToken();
+  const identity = await loadIdentityToken();
   const idToken = await loadIdToken();
-  if (!admin && !idToken) {
+  if (!admin && !identity && !idToken) {
     console.error(
       'Not authenticated. Save an identity or executor token (init / login), or an admin token.',
     );

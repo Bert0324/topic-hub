@@ -6,7 +6,7 @@ import {
 } from '@topichub/core';
 import { postNativeGateway } from '../../api-client/native-gateway.js';
 import { loadConfig } from '../../config/config.js';
-import { loadAdminToken } from '../../auth/auth.js';
+import { loadAdminToken, loadIdentityToken } from '../../auth/auth.js';
 import { detectAgents, isAgentAvailable } from '../../executors/detector.js';
 import { EventConsumer, type DispatchEvent } from './event-consumer.js';
 import { TaskProcessor } from './task-processor.js';
@@ -35,9 +35,12 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     ? Math.max(1, Math.min(10, parseInt(maxAgentsFlag, 10) || DEFAULT_MAX_CONCURRENT_AGENTS))
     : config.maxConcurrentAgents ?? DEFAULT_MAX_CONCURRENT_AGENTS;
 
-  const token = await loadAdminToken();
+  const identityToken = await loadIdentityToken();
+  const token = identityToken ?? (await loadAdminToken());
   if (!token) {
-    console.error('No admin token found. Run `topichub-admin init` first.');
+    console.error(
+      'No identity/admin token found. Run `topichub-admin login <identity-token>` first (or enter one during `init`).',
+    );
     process.exit(1);
   }
 
