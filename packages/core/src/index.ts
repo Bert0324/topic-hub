@@ -84,6 +84,37 @@ export type {
 
 export { purifyImRelayText } from './im/im-relay-text';
 export { IM_SUMMARY_MIN_LENGTH, pickImNotifyBody } from './im/im-notify-body';
+export {
+  IM_TASK_COMPLETED_PREFIX,
+  getImPlatformTotalMessageMax,
+  getImTaskCompletionBodyBudgetChars,
+} from './im/im-platform-limits';
+export { formatQaHowToReplyLine } from './im/im-list-format';
+export {
+  MAX_LOCAL_AGENTS,
+  IM_PAYLOAD_AGENT_SLOT_KEY,
+  IM_PAYLOAD_AGENT_OP_KEY,
+  IM_PAYLOAD_AGENT_DELETE_SLOT_KEY,
+} from './im/agent-slot-constants';
+export {
+  stripLeadingAgentSlotFromPlainRelay,
+  stripAgentSlotFromSlashInvocationLine,
+} from './im/agent-slot-parse';
+export {
+  formatAgentRosterListMarkdown,
+  formatAgentCreateAck,
+  formatAgentDeleteAck,
+  type AgentRosterRow,
+} from './im/im-agent-list-format';
+export {
+  parseImAgentControlOpFromEnrichedPayload,
+  type ImAgentControlOp,
+} from './im/im-agent-control-dispatch';
+export {
+  stripOptionalImAgentTargetPrefix,
+  readAgentSlotFromDispatchDoc,
+} from './im/im-agent-target-prefix';
+export { formatImClaimRunningMessage, formatImClaimQueuedMessage } from './im/im-claim-message';
 
 // Services
 export { IdentityService } from './identity/identity.service';

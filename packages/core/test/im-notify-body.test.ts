@@ -18,4 +18,15 @@ describe('pickImNotifyBody', () => {
     const text = 'y'.repeat(IM_SUMMARY_MIN_LENGTH);
     expect(pickImNotifyBody(text, undefined)).toBe(text.trim());
   });
+
+  it('prefers imSummary when body exceeds IM budget', () => {
+    const text = 'a'.repeat(5000);
+    const imSummary = 'short';
+    expect(pickImNotifyBody(text, imSummary, 2000)).toBe('short');
+  });
+
+  it('returns full body when within IM budget', () => {
+    const text = 'hello';
+    expect(pickImNotifyBody(text, 'ignored', 2000)).toBe('hello');
+  });
 });

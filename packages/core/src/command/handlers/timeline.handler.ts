@@ -1,5 +1,6 @@
 import type { TopicService } from '../../services/topic.service';
 import type { TimelineService } from '../../services/timeline.service';
+import { formatImTimelineReply } from '../../im/im-topic-read-replies';
 import type { ParsedCommand } from '../command-parser';
 import type { CommandContext } from '../command-router';
 
@@ -28,6 +29,10 @@ export class TimelineHandler {
       page,
     );
 
-    return { success: true, data: timeline };
+    return {
+      success: true,
+      data: timeline,
+      message: formatImTimelineReply(timeline as any),
+    };
   }
 }

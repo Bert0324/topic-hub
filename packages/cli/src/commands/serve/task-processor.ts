@@ -12,7 +12,33 @@ import { writeMcpConfig, cleanupMcpConfig } from '../../mcp/mcp-config-writer.js
 import type { ExecutorType } from '../../config/config.schema.js';
 import type { DispatchEvent } from './event-consumer.js';
 import type { EventLogEntry } from './status-display.js';
-import { purifyImRelayText } from '@topichub/core';
+import {
+  DEFAULT_MAX_CONCURRENT_AGENTS,
+  MAX_LOCAL_AGENTS,
+  getImTaskCompletionBodyBudgetChars,
+  purifyImRelayText,
+  IM_PAYLOAD_AGENT_DELETE_SLOT_KEY,
+  IM_PAYLOAD_AGENT_OP_KEY,
+  IM_PAYLOAD_AGENT_SLOT_KEY,
+  formatAgentCreateAck,
+  formatAgentDeleteAck,
+  formatAgentRosterListMarkdown,
+  parseImAgentControlOpFromEnrichedPayload,
+} from '@topichub/core';
+import { resolveAgentWorkingDir } from './resolve-agent-cwd.js';
+import {
+  extractLeadingSlashToken,
+  findClaudeProjectSkillMd,
+} from './claude-project-skill.js';
+import {
+  addAgent,
+  ensureAtLeastOneAgent,
+  listAgentSlots,
+  loadAgents,
+  markClaudeHeadlessSessionReady,
+  removeAgentAtSlot,
+  setAgentSlotBusy,
+} from './agent-roster.js';
 
 export interface TaskProcessorOptions {
   serverUrl: string;
@@ -22,8 +48,12 @@ export interface TaskProcessorOptions {
   cliExecutorFlag?: string;
   executorArgs?: string[];
   maxConcurrentAgents?: number;
+  /**
+   * Optional cwd override (`serve --agent-cwd` or `TOPICHUB_AGENT_CWD`). If unset, agent cwd defaults
+   * to `INIT_CWD` (shell directory when `pnpm`/`npm` started the script) or `process.cwd()`. Per-topic `metadata.executorCwd` still wins when valid.
+   */
+  sessionAgentCwd?: string;
   onEventUpdate: (entry: EventLogEntry) => void;
-  onAgentQuestion?: (dispatchId: string, question: string, context?: { skillName: string; topicTitle: string }) => Promise<string | null>;
 }
 
 interface SkillFrontmatter {
@@ -36,8 +66,11 @@ interface SkillFrontmatter {
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 
+/** Ask the server to extend the dispatch claim while an agent is still running. */
+const CLAIM_RENEW_INTERVAL_MS = 120_000;
+
 /**
- * Hard cap for each `claude` / `codex` subprocess under `serve`.
+ * Hard cap for each local agent subprocess under `serve`.
  * Set `TOPICHUB_AGENT_TIMEOUT_MS=0` to disable (no Node spawn timeout — can hang indefinitely).
  */
 function resolveDispatchAgentTimeoutMs(): number {
@@ -46,6 +79,29 @@ function resolveDispatchAgentTimeoutMs(): number {
   const n = parseInt(raw, 10);
   if (!Number.isFinite(n) || n < 0) return DEFAULT_TIMEOUT_MS;
   return n;
+}
+
+function claudeHeadlessSessionOpts(
+  executorType: string,
+  token: string,
+  slot1Based: number,
+): Pick<ExecutorOptions, 'claudeSessionId' | 'claudeResumeSession'> {
+  if (executorType !== 'claude-code' || process.env.TOPICHUB_CLAUDE_IM_SESSION === '0') {
+    return {};
+  }
+  const agents = loadAgents(token);
+  const e = agents[slot1Based - 1];
+  if (!e?.id) {
+    return {};
+  }
+  const sid = e.id.trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sid)) {
+    return {};
+  }
+  return {
+    claudeSessionId: sid,
+    claudeResumeSession: e.claudeHeadlessResume === true,
+  };
 }
 
 function truncateOneLine(s: string, max: number): string {
@@ -97,11 +153,30 @@ function extractUserFacingInput(event: { payload?: unknown } | undefined): strin
   return chunks.join('\n\n').trim();
 }
 
+/** 1-based roster slot from SSE / pre-claim `enrichedPayload` (defaults to **#1**). */
+function readImAgentSlotFromEnrichedDispatch(dispatch: DispatchEvent): number {
+  const ep = (dispatch as { enrichedPayload?: { event?: { payload?: unknown } } }).enrichedPayload;
+  const pRaw = ep?.event?.payload;
+  if (pRaw == null || typeof pRaw !== 'object' || Array.isArray(pRaw)) {
+    return 1;
+  }
+  const raw = (pRaw as Record<string, unknown>)[IM_PAYLOAD_AGENT_SLOT_KEY];
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 1) {
+    return Math.min(MAX_LOCAL_AGENTS, Math.max(1, Math.floor(raw)));
+  }
+  return 1;
+}
+
 export class TaskProcessor {
   private readonly api: ApiClient;
   private readonly claimId: string;
   private activeCount = 0;
   private readonly activeDispatches = new Set<string>();
+  /**
+   * One async chain per roster slot so two dispatches for the same headless Claude session never run
+   * concurrently (avoids “session id already in use”).
+   */
+  private readonly slotSerializationTails = new Map<number, Promise<void>>();
 
   constructor(private readonly options: TaskProcessorOptions) {
     this.api = new ApiClient(options.serverUrl);
@@ -118,7 +193,7 @@ export class TaskProcessor {
   }
 
   get concurrencyLimit(): number {
-    return this.options.maxConcurrentAgents ?? 1;
+    return this.options.maxConcurrentAgents ?? DEFAULT_MAX_CONCURRENT_AGENTS;
   }
 
   canAcceptMore(): boolean {
@@ -131,8 +206,63 @@ export class TaskProcessor {
       console.log(`[DISPATCH] Skip duplicate in-flight ${dispatchId}`);
       return;
     }
-    this.activeCount++;
+
+    const imControlFromSse = parseImAgentControlOpFromEnrichedPayload(
+      (dispatch as { enrichedPayload?: unknown }).enrichedPayload,
+    );
+
     this.activeDispatches.add(dispatchId);
+    try {
+      if (imControlFromSse != null) {
+        await this.runDispatchPipeline(dispatch, dispatchId);
+        return;
+      }
+      const slot = readImAgentSlotFromEnrichedDispatch(dispatch);
+      const hadPriorOnSlot = this.slotSerializationTails.has(slot);
+      if (hadPriorOnSlot) {
+        void this.api
+          .post<{ ok: boolean }>(`/api/v1/dispatches/${dispatchId}/notify-queued-local`, {})
+          .then((r) => {
+            if (r?.ok) {
+              console.log(
+                `[QUEUE]    **Agent #${slot}** — posted "queued" notice to the topic group (dispatch ${dispatchId.slice(0, 8)}…).`,
+              );
+            }
+          })
+          .catch((err) => {
+            console.warn(
+              `[QUEUE]    Could not post "queued" notice to IM: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+      }
+      const prevTail = this.slotSerializationTails.get(slot) ?? Promise.resolve();
+      const runAfterPrior = async () => {
+        if (hadPriorOnSlot) {
+          console.log(
+            `[QUEUE]    **Agent #${slot}** — starting this dispatch after the prior task on this slot finished.`,
+          );
+        }
+        await this.runDispatchPipeline(dispatch, dispatchId);
+      };
+      const nextTail = prevTail.then(runAfterPrior, runAfterPrior);
+      this.slotSerializationTails.set(slot, nextTail);
+      await nextTail;
+      if (this.slotSerializationTails.get(slot) === nextTail) {
+        this.slotSerializationTails.delete(slot);
+      }
+    } finally {
+      this.activeDispatches.delete(dispatchId);
+    }
+  }
+
+  private async runDispatchPipeline(dispatch: DispatchEvent, dispatchId: string): Promise<void> {
+    const imControlFromSse = parseImAgentControlOpFromEnrichedPayload(
+      (dispatch as { enrichedPayload?: unknown }).enrichedPayload,
+    );
+    const reservesConcurrency = imControlFromSse == null;
+    if (reservesConcurrency) {
+      this.activeCount++;
+    }
     const topicIdStr = mongoIdToString(dispatch.topicId) || String(dispatch.topicId);
     const topicTitle =
       (dispatch as any).enrichedPayload?.topic?.title ??
@@ -151,6 +281,8 @@ export class TaskProcessor {
     );
     this.options.onEventUpdate(logEntry);
 
+    let claimRenewTimer: ReturnType<typeof setInterval> | undefined;
+    let slotMarkedBusy: number | null = null;
     try {
       const claimed = await this.claimDispatch(dispatchId);
       if (!claimed) {
@@ -162,7 +294,81 @@ export class TaskProcessor {
 
       console.log(`[CLAIM]    Claimed dispatch ${dispatchId}`);
 
-      const { systemPromptPath, frontmatter } = this.loadSkill(dispatch.skillName);
+      const promptPayloadEarly = {
+        ...(typeof claimed === 'object' && claimed !== null ? claimed : {}),
+        enrichedPayload:
+          (claimed as any)?.enrichedPayload ??
+          (dispatch as any).enrichedPayload,
+      };
+      const mergedEp = (promptPayloadEarly as { enrichedPayload?: unknown }).enrichedPayload;
+      const evEarly = (promptPayloadEarly as { enrichedPayload?: { event?: { payload?: unknown } } })
+        .enrichedPayload?.event;
+      const pRaw = evEarly?.payload;
+      const plEarly =
+        pRaw != null && typeof pRaw === 'object' && !Array.isArray(pRaw)
+          ? (pRaw as Record<string, unknown>)
+          : {};
+      const agentCtlOp = parseImAgentControlOpFromEnrichedPayload(mergedEp);
+      if (agentCtlOp != null) {
+        const token = this.options.token;
+        /** Same body as `/agent list` (bootstrap **#1** when needed). */
+        const rosterListMarkdown = (): string => {
+          ensureAtLeastOneAgent(token);
+          const rows = listAgentSlots(token).map((r) => ({
+            slot: r.slot,
+            label: r.label,
+            state: r.state,
+          }));
+          return formatAgentRosterListMarkdown(rows);
+        };
+        let out = '';
+        if (agentCtlOp === 'list') {
+          out = rosterListMarkdown();
+        } else if (agentCtlOp === 'create') {
+          const { newSlot } = addAgent(token);
+          out = `${formatAgentCreateAck(newSlot)}\n\n${rosterListMarkdown()}`;
+        } else {
+          const n = plEarly[IM_PAYLOAD_AGENT_DELETE_SLOT_KEY];
+          const slot = typeof n === 'number' ? n : parseInt(String(n), 10);
+          const r = removeAgentAtSlot(token, slot);
+          if (!r.ok) {
+            const hintRows = listAgentSlots(token).map((row) => ({
+              slot: row.slot,
+              label: row.label,
+              state: row.state,
+            }));
+            const errMsg =
+              r.error.includes('busy') && hintRows.length > 0
+                ? `${r.error}\n\n${formatAgentRosterListMarkdown(hintRows)}`
+                : r.error;
+            await this.failDispatch(dispatchId, errMsg, false);
+            logEntry.status = 'failed';
+            logEntry.error = truncateOneLine(errMsg, 200);
+            return;
+          }
+          out = `${formatAgentDeleteAck(slot)}\n\n${rosterListMarkdown()}`;
+        }
+        await this.completeDispatch(dispatchId, {
+          text: out,
+          executorType: 'topichub-im-agent',
+          durationMs: 0,
+          exitCode: 0,
+        });
+        logEntry.status = 'completed';
+        logEntry.durationMs = 0;
+        console.log(`[RESULT]   IM agent control (${agentCtlOp}) completed`);
+        return;
+      }
+
+      const renew = () => {
+        void this.touchClaim(dispatchId).catch((err) => {
+          console.warn(
+            `[DISPATCH] touch-claim failed for ${dispatchId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+      };
+      renew();
+      claimRenewTimer = setInterval(renew, CLAIM_RENEW_INTERVAL_MS);
 
       // Claim API historically omitted `enrichedPayload`; SSE payload may still carry it — merge so the agent always sees topic + event.
       const promptPayload = {
@@ -171,6 +377,78 @@ export class TaskProcessor {
           (claimed as any)?.enrichedPayload ??
           (dispatch as any).enrichedPayload,
       };
+
+      ensureAtLeastOneAgent(this.options.token);
+      const evForSlot = (promptPayload as { enrichedPayload?: { event?: { payload?: unknown } } })
+        .enrichedPayload?.event;
+      const pSlot = evForSlot?.payload;
+      const plSlot =
+        pSlot != null && typeof pSlot === 'object' && !Array.isArray(pSlot)
+          ? (pSlot as Record<string, unknown>)
+          : {};
+      const rawAgentSlot = plSlot[IM_PAYLOAD_AGENT_SLOT_KEY];
+      const agentSlot1Based =
+        typeof rawAgentSlot === 'number' && Number.isFinite(rawAgentSlot) && rawAgentSlot >= 1
+          ? Math.floor(rawAgentSlot)
+          : 1;
+      slotMarkedBusy = agentSlot1Based;
+      setAgentSlotBusy(this.options.token, agentSlot1Based, true);
+
+      const topicMeta = (promptPayload as { enrichedPayload?: { topic?: { metadata?: Record<string, unknown> } } })
+        .enrichedPayload?.topic?.metadata;
+      const { cwd: agentCwd, source: agentCwdSource, topicExecutorCwdInvalid } = resolveAgentWorkingDir({
+        topicMetadata: topicMeta,
+        sessionDefaultCwd: this.options.sessionAgentCwd,
+      });
+      if (topicExecutorCwdInvalid) {
+        console.warn(
+          '[AGENT]    topic.metadata.executorCwd is not a valid directory; using session override or INIT_CWD / process.cwd().',
+        );
+      }
+      if (agentCwd && agentCwdSource !== 'pwd') {
+        console.log(`[AGENT]    subprocess cwd (${agentCwdSource}): ${agentCwd}`);
+      }
+
+      const eventForSkill = (promptPayload as { enrichedPayload?: { event?: { payload?: unknown } } })
+        .enrichedPayload?.event;
+      const userLineForProjectSkill = extractUserFacingInput(eventForSkill);
+      const slashToken = extractLeadingSlashToken(userLineForProjectSkill);
+      const projectSkillMatch = findClaudeProjectSkillMd(agentCwd, slashToken);
+
+      const instr = (promptPayload as { enrichedPayload?: { skillInstructions?: Record<string, unknown> } })
+        .enrichedPayload?.skillInstructions;
+      const useServerSkill =
+        instr &&
+        typeof (instr as { primaryInstruction?: string }).primaryInstruction === 'string' &&
+        ((instr as { primaryInstruction: string }).primaryInstruction as string).trim().length > 0;
+
+      let systemPromptPath: string | null;
+      let frontmatter: SkillFrontmatter;
+
+      if (useServerSkill) {
+        systemPromptPath = null;
+        frontmatter = {
+          name: (instr as { frontmatter?: { name?: string } }).frontmatter?.name,
+          description: (instr as { frontmatter?: { description?: string } }).frontmatter?.description,
+          executor: (instr as { frontmatter?: { executor?: string } }).frontmatter?.executor,
+          maxTurns: (instr as { frontmatter?: { maxTurns?: number } }).frontmatter?.maxTurns,
+          allowedTools: (instr as { frontmatter?: { allowedTools?: string[] } }).frontmatter?.allowedTools,
+        } as SkillFrontmatter;
+      } else {
+        const base = this.loadSkill(dispatch.skillName);
+        if (projectSkillMatch) {
+          const raw = fs.readFileSync(projectSkillMatch.path, 'utf-8');
+          const parsed = matter(raw);
+          systemPromptPath = projectSkillMatch.path;
+          frontmatter = { ...base.frontmatter, ...(parsed.data ?? {}) } as SkillFrontmatter;
+          console.log(
+            `[AGENT]    Project local skill (${projectSkillMatch.localBundle}): ${projectSkillMatch.skillDirName} → ${projectSkillMatch.path}`,
+          );
+        } else {
+          systemPromptPath = base.systemPromptPath;
+          frontmatter = base.frontmatter;
+        }
+      }
 
       const prompt = this.buildPrompt(promptPayload, !!systemPromptPath);
 
@@ -190,36 +468,59 @@ export class TaskProcessor {
 
       console.log(`[AGENT]    Running ${executorType} with ${dispatch.skillName} (headless)…`);
 
-      const execOptions: ExecutorOptions = {
+      const baseExecOptions: ExecutorOptions = {
         timeoutMs: resolveDispatchAgentTimeoutMs(),
         maxTurns: frontmatter?.maxTurns,
         allowedTools: frontmatter?.allowedTools,
         mcpConfigPath,
         extraArgs: this.options.executorArgs,
         headless: true,
+        ...(agentCwd ? { cwd: agentCwd } : {}),
       };
+
+      const buildExecOptions = (): ExecutorOptions => ({
+        ...baseExecOptions,
+        ...claudeHeadlessSessionOpts(executorType, this.options.token, agentSlot1Based),
+      });
 
       const startMs = Date.now();
       let result: ExecutionResult;
       try {
-        result = await executor.execute(prompt, systemPromptPath, execOptions);
+        result = await executor.execute(prompt, systemPromptPath, buildExecOptions());
+        if (result.exitCode === 0 && executorType === 'claude-code') {
+          markClaudeHeadlessSessionReady(this.options.token, agentSlot1Based);
+        }
       } finally {
         cleanupMcpConfig(mcpConfigPath);
       }
 
       const elapsed = result.durationMs ?? Date.now() - startMs;
 
+      let timelineResult: ExecutionResult = result;
       if (result.exitCode === 0) {
+        const sourcePlatform =
+          (dispatch as { sourcePlatform?: string }).sourcePlatform ??
+          (typeof claimed === 'object' && claimed !== null
+            ? (claimed as { sourcePlatform?: string }).sourcePlatform
+            : undefined);
+        const imBodyBudget = getImTaskCompletionBodyBudgetChars(sourcePlatform);
+        let completionText = result.text ?? '';
+        completionText = `*(agent #${agentSlot1Based})*\n\n${completionText}`;
+        const resultForIm: ExecutionResult = { ...result, text: completionText };
         const imSummary = await maybeSummarizeForIm(
-          result.text,
+          completionText,
           executorType,
           this.options.executorArgs,
+          {
+            imBodyBudgetChars: imBodyBudget,
+            sourcePlatform,
+            ...(agentCwd ? { agentCwd } : {}),
+          },
         );
-        const payload =
-          imSummary != null
-            ? { ...result, imSummary }
-            : result;
+        const payload: ExecutionResult & { imSummary?: string } =
+          imSummary != null ? { ...resultForIm, imSummary } : resultForIm;
         await this.completeDispatch(dispatchId, payload);
+        timelineResult = payload;
         logEntry.status = 'completed';
         logEntry.durationMs = elapsed;
         console.log(`[RESULT]   Completed in ${elapsed}ms`);
@@ -237,7 +538,7 @@ export class TaskProcessor {
         );
       }
 
-      await this.writeTimelineEntry(dispatch, topicIdStr, result);
+      await this.writeTimelineEntry(dispatch, topicIdStr, timelineResult);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
@@ -261,10 +562,21 @@ export class TaskProcessor {
         // Best-effort
       }
     } finally {
-      this.activeCount--;
-      this.activeDispatches.delete(dispatchId);
+      if (slotMarkedBusy != null) {
+        setAgentSlotBusy(this.options.token, slotMarkedBusy, false);
+      }
+      if (claimRenewTimer) {
+        clearInterval(claimRenewTimer);
+      }
+      if (reservesConcurrency) {
+        this.activeCount--;
+      }
       this.options.onEventUpdate(logEntry);
     }
+  }
+
+  private async touchClaim(dispatchId: string): Promise<void> {
+    await this.api.post(`/api/v1/dispatches/${dispatchId}/touch-claim`, {});
   }
 
   private async claimDispatch(dispatchId: string): Promise<any | null> {
@@ -349,9 +661,48 @@ export class TaskProcessor {
   private buildPrompt(claimedDispatch: any, hasSkillMdOnDisk: boolean): string {
     const payload = claimedDispatch.enrichedPayload ?? claimedDispatch;
     const event = payload.event ?? {};
+    const rawPayload = event.payload;
+    const eventForDisplay =
+      rawPayload != null && typeof rawPayload === 'object' && !Array.isArray(rawPayload)
+        ? {
+            ...event,
+            payload: (() => {
+              const p = { ...(rawPayload as Record<string, unknown>) };
+              delete p.queueAfterDispatchId;
+              delete p[IM_PAYLOAD_AGENT_SLOT_KEY];
+              delete p[IM_PAYLOAD_AGENT_OP_KEY];
+              delete p[IM_PAYLOAD_AGENT_DELETE_SLOT_KEY];
+              return p;
+            })(),
+          }
+        : event;
+    const publishedMiss =
+      rawPayload != null &&
+      typeof rawPayload === 'object' &&
+      !Array.isArray(rawPayload) &&
+      (rawPayload as Record<string, unknown>).publishedSkillRouting;
+    const missHint =
+      publishedMiss &&
+        typeof publishedMiss === 'object' &&
+        (publishedMiss as { status?: string }).status === 'miss' &&
+        typeof (publishedMiss as { token?: string }).token === 'string'
+        ? truncateOneLine(
+          `No published Skill Center skill matched "${(publishedMiss as { token: string }).token}"; proceed using local skills / general instructions.`,
+          240,
+        )
+        : '';
+
     const userLine = extractUserFacingInput(event);
+    let agentSlotBanner = '';
+    if (rawPayload != null && typeof rawPayload === 'object' && !Array.isArray(rawPayload)) {
+      const as = (rawPayload as Record<string, unknown>)[IM_PAYLOAD_AGENT_SLOT_KEY];
+      if (typeof as === 'number' && Number.isFinite(as) && as >= 1) {
+        agentSlotBanner =
+          `# Local agent slot\n\nThis run is bound to **agent #${Math.floor(as)}** on your local executor (the user may run several in parallel).\n\n`;
+      }
+    }
     const topicJson = JSON.stringify(payload.topic ?? {}, null, 2);
-    const eventJson = JSON.stringify(event ?? {}, null, 2);
+    const eventJson = JSON.stringify(eventForDisplay ?? {}, null, 2);
 
     const looksLikePureGreeting =
       userLine.length > 0 &&
@@ -362,6 +713,10 @@ export class TaskProcessor {
       '# Role',
       'You are the **topic assistant** in a group chat. Write for **end users** (teammates), not for engineers.',
       '',
+      ...(agentSlotBanner ? [agentSlotBanner] : []),
+      ...(missHint
+        ? ['# Skill Center routing', missHint, '']
+        : []),
       '# How to answer (strict)',
       '- Your final reply must be **natural language** suitable to post back into the chat.',
       '- Do **not** discuss JSON, HTTP, "dispatch", "claim", "executor", "Topic Hub internals", or empty `{}` fields.',
@@ -414,7 +769,7 @@ export class TaskProcessor {
       sections.push('# Skill playbook (default — no SKILL.md for this topic type on disk)');
       sections.push(
         'There is no dedicated SKILL.md for this skill name. Still: treat **What the user said** as the real task. ' +
-          'When the user names absolute paths or asks for directory trees, architecture, or code exploration, use every tool you are allowed to run (e.g. Bash for `tree`/`find`/`ls`, Read for files) on the **host where you run** (often the machine running the executor), then answer with concrete structure and summaries—not a generic welcome.',
+        'When the user names absolute paths or asks for directory trees, architecture, or code exploration, use every tool you are allowed to run (e.g. Bash for `tree`/`find`/`ls`, Read for files) on the **host where you run** (often the machine running the executor), then answer with concrete structure and summaries—not a generic welcome.',
       );
       sections.push('');
     }

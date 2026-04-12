@@ -31,6 +31,11 @@ async function main() {
       await handleSkillsCommand(subcommand, restArgs);
       break;
     }
+    case 'skill-repo': {
+      const { handleSkillRepoCommand } = await import('./commands/skill-repo/index.js');
+      await handleSkillRepoCommand(subcommand, restArgs);
+      break;
+    }
     case 'login': {
       const { saveAdminToken } = await import('./auth/auth.js');
       const tokenArg = args[1];
@@ -74,6 +79,7 @@ function printHelp() {
     serve [options]                   Start executor daemon (SSE + heartbeat)
       --executor <name>               Override configured executor
       --max-agents <n>                Max concurrent agents (1–10)
+      --agent-cwd <dir>               Override agent cwd (else TOPICHUB_AGENT_CWD, else INIT_CWD / process.cwd())
       --force                         Force start even if executor not on PATH
       --yes                           Skip executor launch prompts (use defaults for headless flags)
 
@@ -90,7 +96,7 @@ function printHelp() {
   Skills
     publish [--id <id>] <path>         Publish a skill (identity/executor/admin token; author-only updates)
                                       Use --id from "skills list" to update that registration
-                                      <path>: skill directory, or SKILL.md / package.json inside it
+                                      <path>: skill directory, or SKILL.md / package.json inside it (md-only: no package.json)
                                       (alias: skills publish …)
     skills list [--page n] [--limit n] [--sort popular|recent|usage]
                                       List published skills (author, version, uses, likes)
@@ -98,6 +104,7 @@ function printHelp() {
     skills view <name>                Download skill by name into skillsDir
     skills view --id <id>            Download skill by registration id
     skills delete <id>               Unpublish by registration id (author only; id from list)
+    skill-repo list [--page n] …      List published skills (Skill Center catalog)
 
   help                                Show this message
 `;

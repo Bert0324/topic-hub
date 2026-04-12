@@ -1,4 +1,5 @@
 import type { TopicService } from '../../services/topic.service';
+import { formatImShowTopicReply } from '../../im/im-topic-read-replies';
 import type { CommandContext } from '../command-router';
 
 export class ShowHandler {
@@ -32,6 +33,7 @@ export class ShowHandler {
         updatedAt: topic.updatedAt,
         closedAt: topic.closedAt,
       },
+      message: formatImShowTopicReply(topic as any),
     };
   }
 }

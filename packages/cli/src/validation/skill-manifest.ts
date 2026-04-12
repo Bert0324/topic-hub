@@ -4,6 +4,21 @@ import { z } from 'zod';
 const SKILL_NAME_REGEX = /^[a-z][a-z0-9-]{1,62}[a-z0-9]$/;
 const REGISTRATION_ID_REGEX = /^[a-fA-F0-9]{24}$/;
 
+/** SKILL.md frontmatter for md-only skills (no package.json). */
+export const SkillMdOnlyPublishFrontmatterSchema = z.object({
+  name: z
+    .string()
+    .regex(
+      SKILL_NAME_REGEX,
+      'Skill name must be 3-64 chars, lowercase, hyphens allowed',
+    ),
+  description: z.string().min(1).max(1024),
+  category: z.enum(['type', 'platform', 'adapter']).optional(),
+  topicType: z.string().optional(),
+  platform: z.string().optional(),
+  sourceSystem: z.string().optional(),
+});
+
 export const SkillManifestSchema = z.object({
   name: z
     .string()

@@ -1,12 +1,13 @@
 import { CommandParser, ParsedCommand } from '../command/command-parser';
 import { CommandRouter, CommandContext } from '../command/command-router';
+import type { PublishedSkillCatalog } from '../services/published-skill-catalog';
 import { TopicService } from '../services/topic.service';
 import { IngestionService } from '../ingestion/ingestion.service';
 import { OpenClawBridge } from '../bridge/openclaw-bridge';
 import type { OpenClawInboundResult } from '../bridge/openclaw-types';
 import type { TopicHubLogger } from '../common/logger';
-import { AnswerTextSchema } from '../identity/identity-types';
 import { purifyImRelayText } from '../im/im-relay-text.js';
+import { stripOptionalImAgentTargetPrefix } from '../im/im-agent-target-prefix.js';
 
 export interface WebhookIdentityOps {
   claimPairingCode(platform: string, platformUserId: string, code: string): Promise<{ topichubUserId: string }>;
@@ -25,12 +26,6 @@ export interface WebhookHeartbeatOps {
     topichubUserId: string,
     boundExecutorToken: string,
   ): Promise<boolean>;
-}
-
-export interface WebhookQaOps {
-  findPendingByUser(topichubUserId: string): Promise<any | null>;
-  findAllPendingByUser(topichubUserId: string): Promise<any[]>;
-  submitAnswer(qaId: string, answerText: string): Promise<any | null>;
 }
 
 export interface WebhookResult {
@@ -56,10 +51,13 @@ export class WebhookHandler {
     private readonly bridge?: OpenClawBridge,
     private readonly identityOps?: WebhookIdentityOps,
     private readonly heartbeatOps?: WebhookHeartbeatOps,
-    private readonly qaOps?: WebhookQaOps,
-  ) {}
+    private readonly publishedSkillCatalog?: PublishedSkillCatalog,
+  ) { }
 
-  /** Route IM replies on the same OpenClaw session as the inbound message. */
+  /**
+   * Route IM replies on the same OpenClaw session as the inbound message.
+   * Always pass `sessionKey` so thread/DM routing cannot drift from the triggering envelope.
+   */
   private sendThreadReply(result: OpenClawInboundResult, text: string) {
     return this.bridge!.sendMessage(result.platform, result.channel, text, {
       sessionKey: result.sessionId,
@@ -81,6 +79,14 @@ export class WebhookHandler {
     }
 
     let cmd = result.rawCommand;
+    let imTargetAgentSlot: number | undefined;
+    {
+      const ap = stripOptionalImAgentTargetPrefix(cmd);
+      if (ap.imTargetAgentSlot != null) {
+        imTargetAgentSlot = ap.imTargetAgentSlot;
+        cmd = ap.line;
+      }
+    }
 
     // /help works without binding (FR-028) — also match 'help' without slash
     if (cmd === '/help' || cmd === 'help' || cmd.startsWith('/help ') || cmd.startsWith('help ')) {
@@ -96,15 +102,12 @@ export class WebhookHandler {
       return this.handleRegister(result, code);
     }
 
-    // /answer — group only, requires binding (checked inside)
-    if (cmd.startsWith('/answer ')) {
-      if (result.isDm) {
-        this.sendThreadReply(result, 'Please use `/answer` in the topic group chat.').catch((err) =>
-          this.logger.error('Failed to send OpenClaw reply', String(err)),
-        );
-        return { success: true, response: { status: 'rejected_dm_not_allowed' } };
-      }
-      return this.handleAnswer(result, cmd.slice('/answer '.length));
+    if (result.isDm && /^\s*\/(?:answer|queue)\b/i.test(cmd.trim())) {
+      this.sendThreadReply(
+        result,
+        'Hub does not handle `/answer` or `/queue`. In the **topic group**, use `/agent #M <line>` with the **agent #M** from the executor claim line (or plain text / `/SkillName` for the default slot).',
+      ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+      return { success: true, response: { status: 'rejected_dm_not_allowed' } };
     }
 
     // /unregister — DM only
@@ -116,6 +119,72 @@ export class WebhookHandler {
         return { success: true, response: { status: 'rejected_not_dm' } };
       }
       return this.handleUnregister(result);
+    }
+
+    // /skills — DM only. List is public (no pairing). Star needs identity (+ live serve below).
+    const cmdTrimSkills = cmd.trim();
+    if (/^\s*\/skills\b/i.test(cmdTrimSkills)) {
+      if (!result.isDm) {
+        this.sendThreadReply(
+          result,
+          '`/skills list` and `/skills star` only work in a **direct message** with the bot. Open a DM with the bot and try again.',
+        ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+        return { success: true, response: { status: 'skills_dm_only' } };
+      }
+      const parsedSkills = this.parser.parse(cmdTrimSkills);
+      if (parsedSkills.action === 'skills') {
+        const skSub = parsedSkills.type?.toLowerCase();
+        if (skSub === 'list') {
+          if (this.publishedSkillCatalog) {
+            await this.publishedSkillCatalog.refreshIfNeeded();
+          }
+          const listCtx: CommandContext = {
+            platform: result.platform,
+            groupId: result.channel,
+            userId: result.userId,
+            hasActiveTopic: false,
+            imChatLine: cmdTrimSkills,
+            imCommandUsedSlash: cmdTrimSkills.startsWith('/'),
+          };
+          const listExec = await this.commandDispatcher('skills', parsedSkills, listCtx);
+          const listMsg = this.formatOpenClawCommandReply(listExec);
+          if (listMsg.trim()) {
+            this.sendThreadReply(result, listMsg).catch((err) =>
+              this.logger.error('Failed to send OpenClaw reply', String(err)),
+            );
+          }
+          return { success: true, response: listExec };
+        }
+        if (skSub === 'star') {
+          const boundForStar = await this.identityOps?.resolveUserByPlatform(
+            result.platform,
+            result.userId,
+          );
+          if (!boundForStar) {
+            this.sendThreadReply(
+              result,
+              '`/skills star` needs a linked identity. Run `/register <code>` in this DM first (pairing code from `topichub-admin serve`).',
+            ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+            return { success: true, response: { status: 'skills_star_unregistered' } };
+          }
+          // Fall through: enforce heartbeat and run star via normal command path.
+        } else {
+          const routeSkills = this.router.route(parsedSkills, {
+            platform: result.platform,
+            groupId: result.channel,
+            userId: result.userId,
+            hasActiveTopic: false,
+            imChatLine: cmdTrimSkills,
+            imCommandUsedSlash: cmdTrimSkills.startsWith('/'),
+          });
+          if (routeSkills.error) {
+            this.sendThreadReply(result, routeSkills.error).catch((err) =>
+              this.logger.error('Failed to send OpenClaw reply', String(err)),
+            );
+            return { success: true, response: { status: 'skills_usage' } };
+          }
+        }
+      }
     }
 
     // All other commands require an active executor binding
@@ -136,9 +205,9 @@ export class WebhookHandler {
 
     const sessionLive = this.heartbeatOps
       ? await this.heartbeatOps.isBoundExecutorSessionLive(
-          topichubUserId,
-          identity.claimToken,
-        )
+        topichubUserId,
+        identity.claimToken,
+      )
       : false;
     if (sessionLive !== true) {
       this.sendThreadReply(
@@ -148,10 +217,20 @@ export class WebhookHandler {
       return { success: true, response: { status: 'executor_unavailable' } };
     }
 
+    if (result.isDm && /^\s*\/agent\b/i.test(cmd.trim())) {
+      this.sendThreadReply(
+        result,
+        '`/agent` runs in a **topic group** with an active topic. Open your team topic chat, then try `/agent list` or `/agent create`.',
+      ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+      return { success: true, response: { status: 'agent_dm_only' } };
+    }
+
     const activeTopic = await this.topicService.findActiveTopicByGroup(
       result.platform,
       result.channel,
     );
+
+    const workingCmd = cmd;
 
     const context: CommandContext = {
       platform: result.platform,
@@ -159,19 +238,71 @@ export class WebhookHandler {
       userId: result.userId,
       hasActiveTopic: !!activeTopic,
       relayText: purifyImRelayText(result.originalMessage),
-      imChatLine: cmd,
-      imCommandUsedSlash: cmd.trimStart().startsWith('/'),
+      imChatLine: workingCmd,
+      imCommandUsedSlash: workingCmd.trimStart().startsWith('/'),
       dispatchMeta: {
         targetUserId: topichubUserId,
         targetExecutorToken: identity.claimToken,
         sourceChannel: result.channel,
         sourcePlatform: result.platform,
       },
+      ...(imTargetAgentSlot != null ? { imTargetAgentSlot } : {}),
     };
 
-    const parsed = this.parser.parse(cmd);
+    const trimmedCmdForAgent = cmd.trim();
+    const trimmedWorkingForAgent = workingCmd.trim();
+    const agentLineForDispatch =
+      /^\s*\/agent\b/i.test(trimmedCmdForAgent)
+        ? trimmedCmdForAgent
+        : /^\s*\/agent\b/i.test(trimmedWorkingForAgent)
+          ? trimmedWorkingForAgent
+          : '';
+    if (!result.isDm && agentLineForDispatch) {
+      if (!activeTopic) {
+        this.sendThreadReply(
+          result,
+          'No active topic in this group. Create one first with `/create <type>`, then use `/agent`.',
+        ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+        return { success: true, response: { status: 'agent_no_topic' } };
+      }
+      const parsedAgent = this.parser.parse(agentLineForDispatch);
+      const agentCtx: CommandContext = {
+        ...context,
+        imChatLine: agentLineForDispatch,
+        imCommandUsedSlash: true,
+      };
+      const execAgent = await this.commandDispatcher('agent', parsedAgent, agentCtx);
+      const agentMsg = this.formatOpenClawCommandReply(execAgent);
+      if (agentMsg.trim()) {
+        this.sendThreadReply(result, agentMsg).catch((err) =>
+          this.logger.error('Failed to send OpenClaw reply', String(err)),
+        );
+      } else if (execAgent?.success && execAgent?.deferOpenClawThreadReply) {
+        this.sendThreadReply(
+          result,
+          'Forwarded to your linked **`serve`** session — watch for **Task completed** with the roster (and a short “running this task” line when the executor claims it).',
+        ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+      }
+      return { success: true, response: execAgent };
+    }
 
-    if (result.isDm && parsed.action !== 'create') {
+    const parsed = this.parser.parse(workingCmd);
+
+    if (!result.isDm && parsed.action === 'skills') {
+      this.sendThreadReply(
+        result,
+        '`/skills list` and `/skills star` only work in a **direct message** with the bot. Open a DM with the bot and try again.',
+      ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+      return { success: true, response: { status: 'skills_dm_only' } };
+    }
+
+    if (this.publishedSkillCatalog) {
+      await this.publishedSkillCatalog.refreshIfNeeded();
+    }
+
+    /** `/skills list` may be satisfied earlier without binding; DM also allows `list`/`star` here. */
+    const skillsCommandsInDm = parsed.action === 'skills';
+    if (result.isDm && parsed.action !== 'create' && !skillsCommandsInDm) {
       this.sendThreadReply(
         result,
         'This command can only be used in a topic group chat. Use `/create` to start a new topic.',
@@ -191,15 +322,25 @@ export class WebhookHandler {
     const dispatchContext: CommandContext =
       route.skillInvocationName != null
         ? { ...context, skillInvocationName: route.skillInvocationName }
-        : context;
+        : route.publishedSkillMissToken != null
+          ? {
+            ...context,
+            publishedSkillRouting: {
+              status: 'miss',
+              token: route.publishedSkillMissToken,
+            },
+          }
+          : context;
 
     const execResult = await this.commandDispatcher(route.handler, parsed, dispatchContext);
 
     const replyMessage = this.formatOpenClawCommandReply(execResult);
 
-    this.sendThreadReply(result, replyMessage).catch((err) =>
-      this.logger.error('Failed to send OpenClaw reply', String(err)),
-    );
+    if (replyMessage.trim()) {
+      this.sendThreadReply(result, replyMessage).catch((err) =>
+        this.logger.error('Failed to send OpenClaw reply', String(err)),
+      );
+    }
 
     return { success: true, response: execResult };
   }
@@ -209,6 +350,9 @@ export class WebhookHandler {
       return execResult?.error ?? 'Command failed';
     }
     const data = execResult.data;
+    if (execResult.deferOpenClawThreadReply) {
+      return '';
+    }
     if (data?.commands && Array.isArray(data.commands)) {
       return [
         '📋 **Topic Hub**',
@@ -216,20 +360,20 @@ export class WebhookHandler {
         '**Topic lifecycle**',
         '1. **Bind** — DM the bot: `/register <code>` (code from `topic-hub serve` on your machine). Keep serve running.',
         '2. **Open a topic** — In the group channel: `/create <type>` (optional `--title "…"`). Each group may have **one** non-`closed` topic at a time; set status to `closed` (or reopen an old one) before creating another.',
-        '3. **Work** — Plain text in that group is relayed to your local executor while a topic is active. Use `/answer [#N] <text>` for agent Q&A; `/use <skill>` or `/SkillName …` to run a loaded skill.',
-        '4. **Track** — `/show` current topic · `/timeline` events · `/history` past topics in this group.',
+        '3. **Work** — Plain text in that group is relayed to your local executor while a topic is active. Optional **agent `#N`** prefix on plain lines or `/SkillName #N …` targets a **local agent slot** (see **`/agent list`**); default is **agent `#1`**. Use **`/agent #M <line>`** to force roster slot **M** for that line (plain text or **`/Skill …`**). There is **no** Hub-side `/queue` or `/answer` — ordering and follow-ups are handled by your **local executor** (e.g. per-slot session). `/use <skill>` or `/SkillName …` to run a loaded skill.',
+        '4. **Track** — `/show`, `/timeline`, and `/history` are answered **in this chat** from Topic Hub (no local executor).',
         '5. **Status** — `/update --status <s>` moves the topic. Valid values: `open`, `in_progress`, `resolved`, `closed` (only **allowed** transitions apply; the bot explains if a jump is invalid).',
         '6. **Handoff** — `/assign --user <id>` sets assignee (when permitted).',
         '7. **Done or restart** — `/update --status closed` (or `resolved` then `closed`) finishes the topic; `/reopen` revives a closed topic in this group when there is no other active topic (check `/history` if you have many).',
         '',
         '**DM only** (direct message with bot):',
-        '`/register <code>` bind executor · `/unregister` unbind',
+        '`/register <code>` bind executor · `/unregister` unbind · `/skills list` browse published skills (no link required) · `/skills star <name>` like/unlike (after `/register`, with serve running)',
         '',
         '**Group only** (topic group chat):',
         '`/show` details · `/timeline` history · `/update --status <s>`',
         '`/assign --user <id>` · `/reopen` · `/history`',
         '`/search --type <t>` · `/use <skill>` invoke skill',
-        '`/answer [#N] <text>` reply to agent',
+        '`/agent list` · `/agent create` · `/agent delete #N` · `/agent #M <anything>` → slot M',
         'Plain text (with an active topic) is sent to your local executor.',
         '`/RegisteredSkillName …` runs that skill via the local executor when the name matches a loaded skill.',
         '',
@@ -378,61 +522,6 @@ export class WebhookHandler {
     } catch (err) {
       this.logger.error('Unregister command failed', String(err));
       return { success: false, error: 'Failed to unregister identity' };
-    }
-  }
-
-  private async handleAnswer(result: OpenClawInboundResult, answerBody: string): Promise<WebhookResult> {
-    if (!this.identityOps || !this.bridge || !this.qaOps) {
-      return { success: false, error: 'Q&A operations not configured' };
-    }
-
-    try {
-      const identity = await this.identityOps.resolveUserByPlatform(
-        result.platform,
-        result.userId,
-      );
-
-      if (!identity) {
-        await this.sendThreadReply(result, 'You need to register first.');
-        return { success: true, response: { status: 'unregistered' } };
-      }
-
-      let answerText = answerBody;
-      let targetQa: any = null;
-
-      const refMatch = answerBody.match(/^#(\d+)\s+([\s\S]*)$/);
-      if (refMatch) {
-        const refIndex = parseInt(refMatch[1], 10);
-        answerText = refMatch[2];
-        const allPending = await this.qaOps.findAllPendingByUser(identity.topichubUserId);
-        if (refIndex >= 1 && refIndex <= allPending.length) {
-          targetQa = allPending[refIndex - 1];
-        } else {
-          targetQa = allPending.length > 0 ? allPending[allPending.length - 1] : null;
-        }
-      } else {
-        targetQa = await this.qaOps.findPendingByUser(identity.topichubUserId);
-      }
-
-      if (!targetQa) {
-        await this.sendThreadReply(result, 'No pending questions to answer.');
-        return { success: true, response: { status: 'no_pending' } };
-      }
-
-      const answerParsed = AnswerTextSchema.safeParse(answerText.trim());
-      if (!answerParsed.success) {
-        await this.sendThreadReply(result, 'Answer is empty or too long (max 5000 characters).');
-        return { success: true, response: { status: 'invalid_answer' } };
-      }
-
-      await this.qaOps.submitAnswer(String(targetQa._id), answerParsed.data);
-
-      await this.sendThreadReply(result, 'Answer received. Your agent will continue.');
-
-      return { success: true, response: { status: 'answered' } };
-    } catch (err) {
-      this.logger.error('Answer command failed', String(err));
-      return { success: false, error: 'Failed to process answer' };
     }
   }
 

@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import type { AgentExecutor, ExecutionResult, ExecutorOptions } from './executor.interface.js';
+import { spawnOptionsWithExecutorCwd } from './spawn-agent-options.js';
 import { argvHasClaudePermissionMode } from './executor-launch-arg-guards.js';
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
@@ -133,6 +134,21 @@ export class ClaudeCodeExecutor implements AgentExecutor {
       args.push('--permission-mode', mode);
     }
 
+    if (
+      options.headless
+      && process.env.TOPICHUB_CLAUDE_IM_SESSION !== '0'
+      && options.claudeSessionId
+    ) {
+      const sid = options.claudeSessionId.trim();
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sid)) {
+        if (options.claudeResumeSession) {
+          args.push('--resume', sid);
+        } else {
+          args.push('--session-id', sid);
+        }
+      }
+    }
+
     args.push('-p', prompt, '--output-format', 'json');
     // `--verbose` emits a JSON *array* of stream events; programmatic callers expect a single object + `.result`.
     if (process.env.TOPICHUB_CLAUDE_VERBOSE === '1') {
@@ -152,9 +168,10 @@ export class ClaudeCodeExecutor implements AgentExecutor {
     }
 
     return new Promise<ExecutionResult>((resolve, reject) => {
-      const spawnOpts: import('child_process').SpawnOptions = {
+      const baseSpawnOpts: import('child_process').SpawnOptions = {
         stdio: options.headless ? ['ignore', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'],
       };
+      const spawnOpts = spawnOptionsWithExecutorCwd(baseSpawnOpts, options);
       if (timeoutMs > 0) {
         spawnOpts.timeout = timeoutMs;
       }
@@ -163,11 +180,11 @@ export class ClaudeCodeExecutor implements AgentExecutor {
       let stdout = '';
       let stderr = '';
 
-      child.stdout.on('data', (data: Buffer) => {
+      child.stdout?.on('data', (data: Buffer) => {
         stdout += data.toString();
       });
 
-      child.stderr.on('data', (data: Buffer) => {
+      child.stderr?.on('data', (data: Buffer) => {
         stderr += data.toString();
       });
 

@@ -27,20 +27,22 @@ describe('TopicHub Facade', () => {
     expect(hub.ingestion).toBeDefined();
     expect(hub.webhook).toBeDefined();
     expect(hub.messaging).toBeDefined();
-    expect(hub.auth).toBeDefined();
+    expect(hub.identityAuth).toBeDefined();
     expect(hub.search).toBeDefined();
     expect(hub.skills).toBeDefined();
     expect(hub.dispatch).toBeDefined();
   });
 
   it('should list topics (empty initially)', async () => {
-    const result = await hub.topics.list('test-tenant');
+    const result = await hub.topics.list({ status: 'open', limit: 20, offset: 0 });
     expect(result).toBeDefined();
+    expect(Array.isArray(result.topics)).toBe(true);
   });
 
   it('should search topics without text query', async () => {
-    const result = await hub.search.search('test-tenant', { status: 'open' });
+    const result = await hub.search.search({ status: 'open', limit: 20, offset: 0 });
     expect(result).toBeDefined();
+    expect(Array.isArray(result.topics)).toBe(true);
   });
 
   it('should list registered skills', () => {

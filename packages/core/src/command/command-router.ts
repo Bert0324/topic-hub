@@ -1,6 +1,10 @@
 import type { ParsedCommand } from './command-parser';
 import type { DispatchMeta } from '../services/dispatch.service';
 
+export type PublishedSkillRoutingPayload =
+  | { status: 'hit'; name: string }
+  | { status: 'miss'; token: string };
+
 export interface CommandContext {
   platform: string;
   groupId: string;
@@ -18,6 +22,13 @@ export interface CommandContext {
   imCommandUsedSlash?: boolean;
   /** Set by router when routing `/RegisteredSkillName` to {@link SkillInvokeHandler}. */
   skillInvocationName?: string;
+  /**
+   * When the IM line used optional prefix `/agent #N …`, Hub forces this roster slot on the inner relay
+   * or slash invoke (overrides inner `#M` / default).
+   */
+  imTargetAgentSlot?: number;
+  /** Relay hint: how the first slash token matched the Skill Center catalog (see IM dispatch contract). */
+  publishedSkillRouting?: PublishedSkillRoutingPayload;
 }
 
 export interface RouteResult {
@@ -25,9 +36,14 @@ export interface RouteResult {
   error?: string;
   /** Canonical skill name for `skill_invoke` handler. */
   skillInvocationName?: string;
+  /**
+   * When relaying a slash line in a topic, first token that did not resolve to a skill after
+   * built-in routing (used to populate `publishedSkillRouting` miss in the webhook).
+   */
+  publishedSkillMissToken?: string;
 }
 
-const GLOBAL_COMMANDS = ['create', 'search', 'help', 'use'];
+const GLOBAL_COMMANDS = ['create', 'search', 'help', 'use', 'skills', 'agent'];
 const TOPIC_COMMANDS = [
   'update',
   'assign',
@@ -60,7 +76,7 @@ export class CommandRouter {
         return { handler: 'skill_invoke', skillInvocationName: skillName };
       }
       // Any other `/…` line (e.g. `/home/...` natural language) → same as freeform relay to the bound executor.
-      return { handler: 'relay' };
+      return { handler: 'relay', publishedSkillMissToken: action };
     }
 
     // Freeform text in a topic group → local executor (not a slash-command)
@@ -79,6 +95,23 @@ export class CommandRouter {
   }
 
   private routeGlobal(parsed: ParsedCommand, context: CommandContext): RouteResult {
+    if (parsed.action === 'agent') {
+      if (!context.hasActiveTopic) {
+        return {
+          handler: 'agent',
+          error: 'No active topic in this group. Create one first with /create <type>.',
+        };
+      }
+      const sub = parsed.type?.toLowerCase();
+      if (!sub || !['list', 'create', 'delete'].includes(sub)) {
+        return {
+          handler: 'agent',
+          error: 'Usage: `/agent list`, `/agent create`, or `/agent delete #N`.',
+        };
+      }
+      return { handler: 'agent' };
+    }
+
     if (parsed.action === 'create' && context.hasActiveTopic) {
       return {
         handler: 'create',
@@ -102,6 +135,18 @@ export class CommandRouter {
         return { handler: 'use', error: `Unknown skill "${name}".` };
       }
       return { handler: 'skill_invoke', skillInvocationName: canonical };
+    }
+
+    if (parsed.action === 'skills') {
+      const sub = parsed.type?.toLowerCase();
+      if (sub !== 'list' && sub !== 'star') {
+        return {
+          handler: 'skills',
+          error:
+            'Usage: `/skills list` [--page N] [--limit N] [--sort popular|recent|usage] · `/skills star <skill-name>`',
+        };
+      }
+      return { handler: 'skills' };
     }
 
     return { handler: parsed.action };

@@ -1,8 +1,0 @@
-{
-  "name": "github-trending-insights",
-  "version": "0.0.3",
-  "main": "index.ts",
-  "topichub": {
-    "category": "type"
-  }
-}

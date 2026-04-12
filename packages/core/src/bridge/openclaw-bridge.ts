@@ -67,17 +67,28 @@ export function normalizeImCommandMessage(raw: string): string {
       ) {
         const words = prefix.split(/\s+/).filter(Boolean);
         if (words.length >= 1 && words.length <= 3) {
-          s = tail;
+          const last = words[words.length - 1]!;
+          // Keep `agent #N` when the label is "Bot #2 /skill …" or even "#2 /skill …" (slot before slash).
+          if (/^#\d+$/.test(last)) {
+            s = `${last} ${tail}`;
+          } else {
+            s = tail;
+          }
         }
       }
     }
   }
 
-  // Plain @mention text before a slash command
+  // Plain @mention text before a slash command — preserve leading `#N` for `@Bot #2 /Skill …`
   if (s.startsWith('@')) {
-    const slashIdx = s.indexOf('/');
-    if (slashIdx > 0) {
-      s = s.slice(slashIdx);
+    const atAgentSlash = s.match(/^@(.+?)\s+(#\d+)\s+(\/.*)$/s);
+    if (atAgentSlash) {
+      s = `${atAgentSlash[2]} ${atAgentSlash[3].trimStart()}`;
+    } else {
+      const slashIdx = s.indexOf('/');
+      if (slashIdx > 0) {
+        s = s.slice(slashIdx);
+      }
     }
   }
 
@@ -308,12 +319,13 @@ export class OpenClawBridge {
    * @param target Delivery peer id (chat id, `user:…`, etc.).
    * @param opts.sessionKey When set, must be the inbound OpenClaw session key so replies route to the same DM/group.
    */
+  /** @returns true when OpenClaw accepted the send (HTTP 2xx). */
   async sendMessage(
     channel: string,
     target: string,
     message: string,
     opts?: { sessionKey?: string },
-  ): Promise<void> {
+  ): Promise<boolean> {
     const url = `${this.config.gatewayUrl}/tools/invoke`;
     const sessionKey =
       opts?.sessionKey?.trim()
@@ -344,12 +356,15 @@ export class OpenClawBridge {
           `OpenClaw send failed: ${res.status} ${res.statusText}`,
           body,
         );
+        return false;
       }
+      return true;
     } catch (err) {
       this.logger.error(
         'OpenClaw send request failed',
         err instanceof Error ? err.message : String(err),
       );
+      return false;
     }
   }
 

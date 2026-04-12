@@ -2,7 +2,8 @@ import mongoose from 'mongoose';
 import { getModelForClass } from '@typegoose/typegoose';
 import { TopicHubConfigSchema, TopicHubConfig } from './config';
 import { defaultLoggerFactory, LoggerFactory, TopicHubLogger } from './common/logger';
-import { NotFoundError, TopicHubError } from './common/errors';
+import { ConflictError, NotFoundError, TopicHubError } from './common/errors';
+import { DispatchStatus } from './common/enums';
 import { getBuiltinSkills } from './builtin-skills';
 
 import { Topic } from './entities/topic.entity';
@@ -34,12 +35,15 @@ import type { ExecutorHeartbeatMeta, RegisterExecutorResult } from './services/h
 import { QaService } from './services/qa.service';
 import { SuperadminService } from './services/superadmin.service';
 import { SkillCenterService } from './services/skill-center.service';
+import { PublishedSkillCatalog } from './services/published-skill-catalog';
 import type { InitResult, CreateIdentityResult } from './services/superadmin.service';
 import { AuthService } from './services/auth.service';
 import type { ResolvedAuth } from './services/auth.service';
 import { Identity } from './entities/identity.entity';
 import { ExecutorRegistration } from './entities/executor-registration.entity';
 import { ImBinding } from './entities/im-binding.entity';
+import { formatQaReminderMessage } from './im/im-list-format.js';
+import { formatImClaimQueuedMessage, formatImClaimRunningMessage } from './im/im-claim-message.js';
 import { SkillLike } from './entities/skill-like.entity';
 import { SkillUsage } from './entities/skill-usage.entity';
 
@@ -48,8 +52,10 @@ import { SkillMdParser } from './skill/registry/skill-md-parser';
 import { SkillRegistry } from './skill/registry/skill-registry';
 import { SkillPipeline } from './skill/pipeline/skill-pipeline';
 import { pickImNotifyBody } from './im/im-notify-body';
+import { getImTaskCompletionBodyBudgetChars, IM_TASK_COMPLETED_PREFIX } from './im/im-platform-limits';
 import { CommandParser } from './command/command-parser';
 import { CommandRouter, CommandContext } from './command/command-router';
+import { createCompositeSkillCommandMatcher } from './command/composite-skill-command-matcher';
 import { CreateHandler } from './command/handlers/create.handler';
 import { UpdateHandler } from './command/handlers/update.handler';
 import { AssignHandler } from './command/handlers/assign.handler';
@@ -60,6 +66,8 @@ import { HistoryHandler } from './command/handlers/history.handler';
 import { HelpHandler } from './command/handlers/help.handler';
 import { RelayHandler } from './command/handlers/relay.handler';
 import { SkillInvokeHandler } from './command/handlers/skill-invoke.handler';
+import { SkillsHandler } from './command/handlers/skills.handler';
+import { AgentHandler } from './command/handlers/agent.handler';
 
 import { IngestionService } from './ingestion/ingestion.service';
 import {
@@ -67,7 +75,6 @@ import {
   WebhookResult,
   WebhookIdentityOps,
   WebhookHeartbeatOps,
-  WebhookQaOps,
 } from './webhook/webhook-handler';
 import { OpenClawBridge } from './bridge/openclaw-bridge';
 import { BridgeManager } from './bridge/bridge-manager';
@@ -206,9 +213,21 @@ export interface SkillCenterOperations {
 export interface DispatchOperations {
   list(filters: { executorToken: string; status?: string; limit?: number }): Promise<any[]>;
   findById(dispatchId: string): Promise<any | null>;
+  /** Executor-scoped read for queue / status polling (returns null if not found or token mismatch). */
+  findByIdForExecutor(
+    dispatchId: string,
+    executorToken: string,
+  ): Promise<{ id: string; status: string; topicId: string } | null>;
   onTask(listener: (task: any) => void): () => void;
   /** Returns the claimed dispatch document (incl. `enrichedPayload`), or `null` if not claimable. */
   claim(taskId: string, claimedBy: string, executorToken: string): Promise<any | null>;
+  /** Keeps an active claim from expiring while the executor is still working. */
+  renewClaim(taskId: string, executorToken: string): Promise<boolean>;
+  /**
+   * Post a short IM line when `serve` serializes this unclaimed dispatch behind another task on the
+   * same local roster slot (before {@link claim}).
+   */
+  notifyExecutorQueuedIm(taskId: string, executorToken: string): Promise<{ ok: boolean }>;
   complete(taskId: string, result: unknown, executorToken: string): Promise<void>;
   fail(taskId: string, error: string, executorToken: string, retryable?: boolean): Promise<void>;
 }
@@ -272,6 +291,17 @@ export interface IdentityAuthOperations {
 
 const REMINDER_CHECK_INTERVAL_MS = 60_000;
 
+/** Optional extra cap on IM completion body (min with per-platform budget). */
+const IM_COMPLETE_NOTIFY_ABS_MAX_CHARS = 50_000_000;
+
+function resolveOptionalImBodyHardCap(): number | null {
+  const raw = process.env.TOPICHUB_IM_COMPLETE_MAX_CHARS?.trim();
+  if (!raw) return null;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1) return null;
+  return Math.min(n, IM_COMPLETE_NOTIFY_ABS_MAX_CHARS);
+}
+
 export class TopicHub {
   private reminderTimer?: ReturnType<typeof setInterval>;
 
@@ -297,6 +327,7 @@ export class TopicHub {
     private readonly qaService: QaService,
     private readonly superadminService: SuperadminService,
     private readonly authServiceNew: AuthService,
+    private readonly publishedSkillCatalog: PublishedSkillCatalog,
     private readonly skillCenterService: SkillCenterService,
   ) {}
 
@@ -343,6 +374,11 @@ export class TopicHub {
     const SkillLikeModel = model(SkillLike, 'skill_likes');
     const SkillUsageModel = model(SkillUsage, 'skill_usages');
 
+    const publishedSkillCatalog = new PublishedSkillCatalog(
+      SkillRegistrationModel,
+      loggerFactory('PublishedSkillCatalog'),
+    );
+
     // Crypto
     const secretManager = new SecretManager(
       loggerFactory('SecretManager'),
@@ -385,6 +421,16 @@ export class TopicHub {
     // Skill system
     const skillLoader = new SkillLoader(validated.skillsDir, loggerFactory('SkillLoader'));
     const skillMdParser = new SkillMdParser(loggerFactory('SkillMdParser'));
+
+    const skillCenterService = new SkillCenterService(
+      SkillRegistrationModel,
+      SkillLikeModel,
+      IdentityModel,
+      skillMdParser,
+      loggerFactory('SkillCenter'),
+      publishedSkillCatalog,
+    );
+
     const skillRegistry = new SkillRegistry(
       skillLoader,
       skillMdParser,
@@ -397,11 +443,17 @@ export class TopicHub {
       dispatchService,
       loggerFactory('SkillPipeline'),
       bridge,
+      skillMdParser,
+      SkillRegistrationModel,
     );
 
     // Command system
     const commandParser = new CommandParser();
-    const commandRouter = new CommandRouter((token) => skillRegistry.matchSkillCommandToken(token));
+    const commandRouter = new CommandRouter(
+      createCompositeSkillCommandMatcher(publishedSkillCatalog, (token) =>
+        skillRegistry.matchSkillCommandToken(token),
+      ),
+    );
 
     const createHandler = new CreateHandler(topicService, skillPipeline, loggerFactory('CreateHandler'));
     const updateHandler = new UpdateHandler(topicService, skillPipeline, loggerFactory('UpdateHandler'));
@@ -413,6 +465,8 @@ export class TopicHub {
     const helpHandler = new HelpHandler();
     const relayHandler = new RelayHandler(topicService, skillPipeline, loggerFactory('RelayHandler'));
     const skillInvokeHandler = new SkillInvokeHandler(topicService, skillPipeline, loggerFactory('SkillInvokeHandler'));
+    const skillsHandler = new SkillsHandler(skillCenterService, loggerFactory('SkillsHandler'));
+    const agentHandler = new AgentHandler(topicService, skillPipeline, loggerFactory('AgentHandler'));
 
     const handlers = new Map<string, any>([
       ['create', createHandler],
@@ -425,6 +479,8 @@ export class TopicHub {
       ['help', helpHandler],
       ['relay', relayHandler],
       ['skill_invoke', skillInvokeHandler],
+      ['skills', skillsHandler],
+      ['agent', agentHandler],
     ]);
 
     // Ingestion
@@ -464,12 +520,6 @@ export class TopicHub {
         heartbeatService.isBoundExecutorSessionLive(topichubUserId, boundExecutorToken),
     };
 
-    const webhookQaOps: WebhookQaOps = {
-      findPendingByUser: (topichubUserId) => qaService.findPendingByUser(topichubUserId),
-      findAllPendingByUser: (topichubUserId) => qaService.findAllPendingByUser(topichubUserId),
-      submitAnswer: (qaId, answerText) => qaService.submitAnswer(qaId, answerText),
-    };
-
     const webhookHandler = new WebhookHandler(
       commandParser,
       commandRouter,
@@ -480,7 +530,7 @@ export class TopicHub {
       bridge ?? undefined,
       webhookIdentityOps,
       webhookHeartbeatOps,
-      webhookQaOps,
+      publishedSkillCatalog,
     );
 
     // Stage 1: Load built-in md-only skills (unless builtins: false)
@@ -499,14 +549,6 @@ export class TopicHub {
 
     // Init dispatch
     dispatchService.init();
-
-    const skillCenterService = new SkillCenterService(
-      SkillRegistrationModel,
-      SkillLikeModel,
-      IdentityModel,
-      skillMdParser,
-      loggerFactory('SkillCenter'),
-    );
 
     const hub = new TopicHub(
       connection,
@@ -530,6 +572,7 @@ export class TopicHub {
       qaService,
       superadminService,
       authServiceNew,
+      publishedSkillCatalog,
       skillCenterService,
     );
 
@@ -550,16 +593,51 @@ export class TopicHub {
     }
   }
 
+  /** OpenClaw `to` peer for a DM when only the platform user id is known (from identity binding). */
+  private static openClawDmTarget(platformUserId: string): string {
+    const id = String(platformUserId).trim();
+    if (!id) return '';
+    return id.startsWith('user:') ? id : `user:${id}`;
+  }
+
   private async checkUnclaimedReminders(): Promise<void> {
     if (!this.bridge) return;
 
     const stale = await this.dispatchService.findUnclaimedWithReminder(DISPATCH_UNCLAIMED_REMINDER_MS);
     for (const dispatch of stale) {
       try {
+        const topichubUserId = dispatch.targetUserId as string | null | undefined;
+        const boundToken = dispatch.targetExecutorToken as string | null | undefined;
+        const platform = dispatch.sourcePlatform as string | null | undefined;
+        if (!topichubUserId || !boundToken || !platform) {
+          continue;
+        }
+
+        const sessionLive = await this.heartbeatService.isBoundExecutorSessionLive(
+          topichubUserId,
+          boundToken,
+        );
+        if (sessionLive) {
+          // Heartbeat says the executor is up — skip noisy group pings while the queue catches up.
+          continue;
+        }
+
+        const bindings = await this.identityService.getBindingsForUser(topichubUserId);
+        const binding = bindings.find((b: { platform: string }) => b.platform === platform);
+        const dmTarget = binding?.platformUserId
+          ? TopicHub.openClawDmTarget(binding.platformUserId)
+          : '';
+        if (!dmTarget) {
+          this.logger.warn(
+            `Unclaimed dispatch ${dispatch._id}: no active IM binding for platform ${platform}; cannot send DM reminder`,
+          );
+          continue;
+        }
+
         await this.bridge.sendMessage(
-          dispatch.sourcePlatform,
-          dispatch.sourceChannel,
-          'Your task is still waiting. Is your local agent running? Start with: `topichub-admin serve`',
+          platform,
+          dmTarget,
+          'Your task is still waiting, but your local executor has no active heartbeat (disconnected or session out of date). Start `topichub-admin serve`; if the terminal shows a new pairing code, DM the bot with `/register <code>`.',
         );
         await this.dispatchService.markReminderSent(dispatch._id.toString());
       } catch (err) {
@@ -577,10 +655,13 @@ export class TopicHub {
     const expired = await this.qaService.getExpiredForReminder();
     for (const qa of expired) {
       try {
+        const allPending = await this.qaService.findAllPendingByUser(qa.topichubUserId);
+        const refIdx = allPending.findIndex((x) => String(x._id) === String(qa._id));
+        const answerRef = refIdx >= 0 ? refIdx + 1 : Math.max(1, allPending.length);
         await this.bridge.sendMessage(
           qa.sourcePlatform,
           qa.sourceChannel,
-          'Reminder: your agent is waiting for an answer. Reply with `/answer <your response>`.',
+          formatQaReminderMessage(answerRef, qa),
         );
         await this.qaService.markReminderSent(String(qa._id));
       } catch (err) {
@@ -677,6 +758,7 @@ export class TopicHub {
           ...context,
           hasActiveTopic: !!activeTopic,
         };
+        await this.publishedSkillCatalog.refreshIfNeeded();
         const route = this.commandRouter.route(parsed, routeContext);
         if (route.error) {
           return { success: false, error: route.error };
@@ -690,7 +772,15 @@ export class TopicHub {
         const execContext: CommandContext =
           route.skillInvocationName != null
             ? { ...routeContext, skillInvocationName: route.skillInvocationName }
-            : routeContext;
+            : route.publishedSkillMissToken != null
+              ? {
+                  ...routeContext,
+                  publishedSkillRouting: {
+                    status: 'miss',
+                    token: route.publishedSkillMissToken,
+                  },
+                }
+              : routeContext;
 
         const result = await handler.execute(parsed, execContext);
         return {
@@ -789,6 +879,8 @@ export class TopicHub {
         }),
       findById: (dispatchId) =>
         this.dispatchService.findById(dispatchId),
+      findByIdForExecutor: (dispatchId, executorToken) =>
+        this.dispatchService.findByIdForExecutor(dispatchId, executorToken),
       onTask: (listener) => {
         this.dispatchService.onNewDispatch(listener);
         return () => this.dispatchService.offNewDispatch(listener);
@@ -796,30 +888,82 @@ export class TopicHub {
       claim: async (taskId, claimedBy, executorToken) => {
         const result = await this.dispatchService.claim(taskId, claimedBy, executorToken);
         if (result && result.sourceChannel && result.sourcePlatform && this.bridge) {
+          const claimLine = formatImClaimRunningMessage(result.enrichedPayload);
           this.bridge
-            .sendMessage(result.sourcePlatform, result.sourceChannel, 'Task picked up by your local agent. Processing...')
+            .sendMessage(result.sourcePlatform, result.sourceChannel, claimLine)
             .catch((err) => this.logger.error('IM claim notification failed', String(err)));
         }
         return result;
       },
+      renewClaim: (taskId, executorToken) =>
+        this.dispatchService.renewClaim(taskId, executorToken),
+      notifyExecutorQueuedIm: async (taskId, executorToken) => {
+        try {
+          const doc = await this.dispatchService.findById(taskId);
+          if (!doc || doc.targetExecutorToken !== executorToken) {
+            return { ok: false };
+          }
+          if (doc.status !== DispatchStatus.UNCLAIMED) {
+            return { ok: false };
+          }
+          const platform = doc.sourcePlatform as string | undefined;
+          const channel = doc.sourceChannel as string | undefined;
+          if (!platform || !channel || !this.bridge) {
+            return { ok: false };
+          }
+          const line = formatImClaimQueuedMessage(doc.enrichedPayload);
+          const sent = await this.bridge.sendMessage(platform, channel, line);
+          return { ok: sent };
+        } catch (err) {
+          this.logger.error('notifyExecutorQueuedIm failed', String(err));
+          return { ok: false };
+        }
+      },
       complete: async (taskId, result, executorToken) => {
         const dispatch = await this.dispatchService.complete(taskId, result as any, executorToken);
+        if (!dispatch) {
+          throw new ConflictError(
+            'Cannot complete dispatch: not in claimed state, wrong executor token, or claim expired.',
+          );
+        }
         if (dispatch?.sourceChannel && dispatch?.sourcePlatform && this.bridge) {
-          const IM_COMPLETE_PREVIEW = 2000;
+          const bridge = this.bridge;
+          const platformBudget = getImTaskCompletionBodyBudgetChars(dispatch.sourcePlatform);
+          const hardCap = resolveOptionalImBodyHardCap();
+          const maxBody = hardCap != null ? Math.min(platformBudget, hardCap) : platformBudget;
           const r = dispatch.result as { text?: string; imSummary?: string } | undefined;
-          const raw = pickImNotifyBody(r?.text, r?.imSummary);
+          const raw = pickImNotifyBody(r?.text, r?.imSummary, maxBody);
           const summary = raw
-            ? (raw.length > IM_COMPLETE_PREVIEW
-              ? `Task completed: ${raw.slice(0, IM_COMPLETE_PREVIEW)}…`
-              : `Task completed: ${raw}`)
+            ? (raw.length > maxBody
+              ? `${IM_TASK_COMPLETED_PREFIX}${raw.slice(0, maxBody)}…`
+              : `${IM_TASK_COMPLETED_PREFIX}${raw}`)
             : 'Task completed successfully.';
-          this.bridge
-            .sendMessage(dispatch.sourcePlatform, dispatch.sourceChannel, summary)
-            .catch((err) => this.logger.error('IM complete notification failed', String(err)));
+          const platform = dispatch.sourcePlatform;
+          const channel = dispatch.sourceChannel;
+          const sendCompletionToIm = async () => {
+            const ok = await bridge.sendMessage(platform, channel, summary);
+            if (ok) return;
+            this.logger.error('IM complete notification send failed; sending user-visible fallback', '');
+            const fallback =
+              '✅ 任务已完成，但详细结果未能发送到本群（OpenClaw/网关错误）。请查看服务端日志或通过 API 拉取该 dispatch 的 result。\n' +
+              '(Task completed; the result could not be posted to this chat. Check server logs / OpenClaw gateway.)';
+            const fallbackOk = await bridge.sendMessage(platform, channel, fallback);
+            if (!fallbackOk) {
+              this.logger.error('IM complete fallback notice also failed to send', '');
+            }
+          };
+          sendCompletionToIm().catch((err) =>
+            this.logger.error('IM complete notification failed', String(err)),
+          );
         }
       },
       fail: async (taskId, error, executorToken, retryable = false) => {
         const dispatch = await this.dispatchService.fail(taskId, error, retryable, executorToken);
+        if (!dispatch) {
+          throw new ConflictError(
+            'Cannot fail dispatch: not in claimed state, wrong executor token, or claim expired.',
+          );
+        }
         if (dispatch?.sourceChannel && dispatch?.sourcePlatform && this.bridge) {
           this.bridge
             .sendMessage(dispatch.sourcePlatform, dispatch.sourceChannel, `Task failed: ${error}`)

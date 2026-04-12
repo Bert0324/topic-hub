@@ -1,20 +1,31 @@
 import os from 'node:os';
-import { HEARTBEAT_INTERVAL_MS, DEFAULT_MAX_CONCURRENT_AGENTS } from '@topichub/core';
+import {
+  HEARTBEAT_INTERVAL_MS,
+  DEFAULT_MAX_CONCURRENT_AGENTS,
+  parseImAgentControlOpFromEnrichedPayload,
+} from '@topichub/core';
 import { loadConfig } from '../../config/config.js';
 import { loadAdminToken } from '../../auth/auth.js';
 import { detectAgents, isAgentAvailable } from '../../executors/detector.js';
-import { ApiClient } from '../../api-client/api-client.js';
 import { EventConsumer, type DispatchEvent } from './event-consumer.js';
 import { TaskProcessor } from './task-processor.js';
-import { QaRelay } from './qa-relay.js';
 import { renderStatus, type ServeStatus, type EventLogEntry } from './status-display.js';
 import { resolveServeExecutorArgs } from './resolve-executor-args.js';
+import { normalizeAgentCwd, resolveServeInvocationDirectory } from './resolve-agent-cwd.js';
 
 export async function handleServeCommand(args: string[]): Promise<void> {
   const config = loadConfig();
 
   const executorFlag = extractFlag(args, '--executor');
   const maxAgentsFlag = extractFlag(args, '--max-agents');
+  const agentCwdFlag = extractFlag(args, '--agent-cwd');
+  const sessionAgentCwdRaw = (agentCwdFlag ?? process.env.TOPICHUB_AGENT_CWD)?.trim();
+  const sessionAgentCwd = normalizeAgentCwd(sessionAgentCwdRaw || undefined);
+  if (sessionAgentCwdRaw && !sessionAgentCwd) {
+    console.warn(
+      '⚠ --agent-cwd / TOPICHUB_AGENT_CWD is not an existing directory; agent cwd falls back to INIT_CWD or process.cwd().',
+    );
+  }
   const forceFlag = args.includes('--force');
   const skipExecutorPrompts = args.includes('--yes');
 
@@ -151,6 +162,7 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     skillsDir: config.skillsDir,
     maxConcurrentAgents,
     identityUniqueId: regData.identityUniqueId,
+    defaultAgentCwd: sessionAgentCwd ?? resolveServeInvocationDirectory() ?? process.cwd(),
     agentCliLine,
     executorLaunchArgsLine,
     pairingCode,
@@ -168,19 +180,15 @@ export async function handleServeCommand(args: string[]): Promise<void> {
 
   const taskQueue: DispatchEvent[] = [];
 
+  let drainQueue: () => void = () => {};
+
   const onEventUpdate = (entry: EventLogEntry) => {
-    let idx =
+    // Only merge by stable dispatch id. A fuzzy (skill + topic + running) match would collapse
+    // parallel runs (e.g. two `chat` dispatches on different agent slots) into one row and undercount RUN.
+    const idx =
       entry.dispatchId != null
         ? status.events.findIndex((e) => e.dispatchId === entry.dispatchId)
         : -1;
-    if (idx < 0) {
-      idx = status.events.findIndex(
-        (e) =>
-          e.skillName === entry.skillName &&
-          e.topicTitle === entry.topicTitle &&
-          e.status === 'running',
-      );
-    }
     if (idx >= 0) {
       status.events[idx] = entry;
     } else {
@@ -197,9 +205,6 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     updateDisplay();
   };
 
-  const qaApiClient = new ApiClient(config.serverUrl, executorToken);
-  const qaRelay = new QaRelay(qaApiClient);
-
   const processor = new TaskProcessor({
     serverUrl: config.serverUrl,
     token: executorToken,
@@ -208,38 +213,33 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     cliExecutorFlag: executorFlag,
     executorArgs: resolvedExecutorArgs,
     maxConcurrentAgents,
+    sessionAgentCwd,
     onEventUpdate,
-    onAgentQuestion: async (dispatchId, question, context) => {
-      try {
-        const { qaId } = await qaRelay.postQuestion(dispatchId, question, context);
-        console.log(`[QA]       Question posted (qaId=${qaId}), waiting for answer...`);
-        const answer = await qaRelay.waitForAnswer(dispatchId, qaId);
-        if (answer) {
-          console.log(`[QA]       Answer received for qaId=${qaId}`);
-        } else {
-          console.log(`[QA]       Timed out waiting for answer (qaId=${qaId})`);
-        }
-        return answer;
-      } catch (err) {
-        console.error(`[QA]       Failed to relay question: ${err instanceof Error ? err.message : String(err)}`);
-        return null;
-      }
-    },
   });
 
-  const drainQueue = () => {
+  drainQueue = () => {
     while (taskQueue.length > 0 && processor.canAcceptMore()) {
       const dispatch = taskQueue.shift()!;
       processor.process(dispatch).finally(drainQueue);
     }
   };
 
+  const enqueueIncomingDispatch = async (event: DispatchEvent) => {
+    if (parseImAgentControlOpFromEnrichedPayload(event.enrichedPayload) != null) {
+      void processor.process(event).finally(() => {
+        drainQueue();
+      });
+      return;
+    }
+    taskQueue.push(event);
+    drainQueue();
+  };
+
   const consumer = new EventConsumer({
     serverUrl: config.serverUrl,
     token: executorToken,
     onDispatch: (event) => {
-      taskQueue.push(event);
-      drainQueue();
+      void enqueueIncomingDispatch(event);
     },
     onConnected: () => {
       status.connected = true;

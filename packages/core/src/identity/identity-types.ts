@@ -8,7 +8,7 @@ export const PAIRING_CODE_LENGTH = 6;
 export const DISPATCH_UNCLAIMED_REMINDER_MS = 120_000;
 export const QA_REMINDER_MS = 300_000;
 export const QA_TIMEOUT_MS = 600_000;
-export const DEFAULT_MAX_CONCURRENT_AGENTS = 1;
+export const DEFAULT_MAX_CONCURRENT_AGENTS = 5;
 
 export const SAFE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
@@ -40,7 +40,12 @@ export const RegisterExecutorRequestSchema = z.object({
   executorMeta: z
     .object({
       agentType: z.string().min(1).max(64),
-      maxConcurrentAgents: z.number().int().positive().max(10).default(1),
+      maxConcurrentAgents: z
+        .number()
+        .int()
+        .positive()
+        .max(10)
+        .default(DEFAULT_MAX_CONCURRENT_AGENTS),
       hostname: z.string().min(1).max(253),
       pid: z.number().int().nonnegative().max(2_147_483_647),
     })
