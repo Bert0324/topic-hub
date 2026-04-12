@@ -152,20 +152,23 @@ curl http://localhost:3000/api/v1/identity/me \
   -H "Authorization: Bearer <identity-token>"
 ```
 
-### 执行器注册与配对码
+### 执行器注册与配对码（原生网关 `POST /topic-hub`）
 
 ```bash
-# 注册执行器
-curl -X POST http://localhost:3000/api/v1/executors/register \
+# 注册执行器（identity Bearer）
+curl -sS -X POST http://localhost:3000/topic-hub \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <identity-token>" \
-  -d '{"executorMeta": {"agentType": "claude-code", "maxConcurrentAgents": 2}}'
+  -d '{"v":1,"op":"executors.register","payload":{"executorMeta":{"agentType":"claude-code","maxConcurrentAgents":2,"hostname":"dev","pid":1}}}'
 
-# 生成配对码（使用返回的 executorToken）
-curl -X POST http://localhost:3000/api/v1/executors/pairing-code \
+# 生成配对码（executor Bearer）
+curl -sS -X POST http://localhost:3000/topic-hub \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <executor-token>"
+  -H "Authorization: Bearer <executor-token>" \
+  -d '{"v":1,"op":"executors.pairing_code","payload":{}}'
 ```
+
+若设置了 `TOPICHUB_HTTP_PREFIX`（例如 `topic-hub`），则 URL 为 `http://localhost:3000/topic-hub/topic-hub`（前缀 + 网关路径）。
 
 ### Skill 发布
 

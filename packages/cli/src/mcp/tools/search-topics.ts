@@ -17,15 +17,14 @@ export function registerSearchTopics(server: McpServer, api: ApiClient): void {
     schema,
     async (params: { query?: string; type?: string; status?: string; tags?: string[]; limit?: number }) => {
       try {
-        const queryParts: string[] = [];
-        if (params.query) queryParts.push(`q=${encodeURIComponent(params.query)}`);
-        if (params.type) queryParts.push(`type=${encodeURIComponent(params.type)}`);
-        if (params.status) queryParts.push(`status=${encodeURIComponent(params.status)}`);
-        if (params.tags) queryParts.push(`tags=${params.tags.map(encodeURIComponent).join(',')}`);
-        if (params.limit) queryParts.push(`limit=${params.limit}`);
-
-        const qs = queryParts.length > 0 ? `?${queryParts.join('&')}` : '';
-        const results = await api.get(`/api/v1/search/topics${qs}`);
+        const results = await api.nativeGateway('topics.search', {
+          q: params.query,
+          type: params.type,
+          status: params.status,
+          tags: params.tags,
+          page: 1,
+          pageSize: params.limit ?? 10,
+        });
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(results, null, 2) }],
         };

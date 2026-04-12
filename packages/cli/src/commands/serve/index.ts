@@ -4,6 +4,7 @@ import {
   DEFAULT_MAX_CONCURRENT_AGENTS,
   parseImAgentControlOpFromEnrichedPayload,
 } from '@topichub/core';
+import { postNativeGateway } from '../../api-client/native-gateway.js';
 import { loadConfig } from '../../config/config.js';
 import { loadAdminToken } from '../../auth/auth.js';
 import { detectAgents, isAgentAvailable } from '../../executors/detector.js';
@@ -48,23 +49,25 @@ export async function handleServeCommand(args: string[]): Promise<void> {
 
   // ── Executor registration ──────────────────────────────────────────
   const baseUrl = config.serverUrl.replace(/\/+$/, '');
-  let regRes: Response;
+  let regData: { executorToken: string; identityId: string; identityUniqueId: string };
   try {
-    regRes = await fetch(`${baseUrl}/api/v1/executors/register`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({
+    regData = await postNativeGateway<{
+      executorToken: string;
+      identityId: string;
+      identityUniqueId: string;
+    }>(
+      baseUrl,
+      'executors.register',
+      {
         executorMeta: {
           agentType: activeExecutor,
           maxConcurrentAgents,
           hostname: os.hostname(),
           pid: process.pid,
         },
-      }),
-    });
+      },
+      { authorization: token },
+    );
   } catch (err) {
     const code =
       err instanceof Error && err.cause && typeof err.cause === 'object' && 'code' in err.cause
@@ -80,17 +83,6 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     throw err;
   }
 
-  if (!regRes.ok) {
-    const err = await regRes.json().catch(() => ({ message: regRes.statusText })) as { message?: string };
-    console.error(`✗ Executor registration failed: ${err.message ?? `HTTP ${regRes.status}`}`);
-    process.exit(1);
-  }
-
-  const regData = await regRes.json() as {
-    executorToken: string;
-    identityId: string;
-    identityUniqueId: string;
-  };
   const executorToken = regData.executorToken;
 
   let pairingCode: string | null = null;
@@ -99,25 +91,16 @@ export async function handleServeCommand(args: string[]): Promise<void> {
 
   // Generate pairing code for IM binding (shown in renderStatus — avoid console.log here: console.clear wipes it)
   try {
-    const pairingRes = await fetch(`${baseUrl}/api/v1/executors/pairing-code`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${executorToken}`,
-      },
-    });
-    if (pairingRes.ok) {
-      const pairingData = await pairingRes.json() as { code: string; expiresAt: string };
-      pairingCode = pairingData.code;
-      pairingExpiresAt = pairingData.expiresAt;
-    } else {
-      const errBody = await pairingRes.text().catch(() => '');
-      const snippet = errBody.trim().slice(0, 160);
-      pairingWarning = `pairing-code HTTP ${pairingRes.status}${snippet ? `: ${snippet}` : ''}`;
-    }
+    const pairingData = await postNativeGateway<{ code: string; expiresAt: string }>(
+      baseUrl,
+      'executors.pairing_code',
+      {},
+      { authorization: executorToken },
+    );
+    pairingCode = pairingData.code;
+    pairingExpiresAt = pairingData.expiresAt;
   } catch (err) {
-    pairingWarning =
-      err instanceof Error ? err.message : 'Could not reach pairing-code endpoint';
+    pairingWarning = err instanceof Error ? err.message : 'Could not reach pairing-code gateway op';
   }
 
   const agents = detectAgents();
@@ -142,13 +125,12 @@ export async function handleServeCommand(args: string[]): Promise<void> {
   // ── Heartbeat timer ────────────────────────────────────────────────
   const heartbeatTimer = setInterval(async () => {
     try {
-      await fetch(`${baseUrl}/api/v1/executors/heartbeat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${executorToken}`,
-        },
-      });
+      await postNativeGateway(
+        baseUrl,
+        'executors.heartbeat',
+        {},
+        { authorization: executorToken },
+      );
     } catch {
       // heartbeat failure is non-fatal; server will consider executor stale after threshold
     }
@@ -281,13 +263,12 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     consumer.stop();
 
     try {
-      await fetch(`${baseUrl}/api/v1/executors/deregister`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${executorToken}`,
-        },
-      });
+      await postNativeGateway(
+        baseUrl,
+        'executors.deregister',
+        {},
+        { authorization: executorToken },
+      );
     } catch {
       // best-effort deregister
     }

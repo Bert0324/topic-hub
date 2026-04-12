@@ -43,11 +43,8 @@ export async function handleSkillRepoCommand(subcommand: string | undefined, arg
   const page = pickArg(args, '--page') ?? '1';
   const limit = pickArg(args, '--limit') ?? '50';
   const sort = pickArg(args, '--sort') ?? 'popular';
-  const q = new URLSearchParams({ page, limit, sort });
-  const pathStr = `/api/v1/skills?${q.toString()}`;
-
   try {
-    const body = await client.get<{
+    const body = await client.nativeGatewayPublic<{
       skills: Array<{
         id: string;
         name: string;
@@ -59,7 +56,7 @@ export async function handleSkillRepoCommand(subcommand: string | undefined, arg
       total: number;
       page: number;
       limit: number;
-    }>(pathStr, { auth: false });
+    }>('skills.catalog_list', { page, limit, sort });
 
     if (body.skills.length === 0) {
       console.log('No published skills on this server.');

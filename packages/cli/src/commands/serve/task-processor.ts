@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import matter from 'gray-matter';
-import { ApiClient } from '../../api-client/api-client.js';
+import { postNativeGateway } from '../../api-client/native-gateway.js';
 import {
   resolveExecutorType,
   createExecutor,
@@ -168,7 +168,6 @@ function readImAgentSlotFromEnrichedDispatch(dispatch: DispatchEvent): number {
 }
 
 export class TaskProcessor {
-  private readonly api: ApiClient;
   private readonly claimId: string;
   private activeCount = 0;
   private readonly activeDispatches = new Set<string>();
@@ -179,8 +178,6 @@ export class TaskProcessor {
   private readonly slotSerializationTails = new Map<number, Promise<void>>();
 
   constructor(private readonly options: TaskProcessorOptions) {
-    this.api = new ApiClient(options.serverUrl);
-    this.api.setToken(options.token);
     this.claimId = `cli:${require('os').hostname()}:${process.pid}`;
   }
 
@@ -220,8 +217,12 @@ export class TaskProcessor {
       const slot = readImAgentSlotFromEnrichedDispatch(dispatch);
       const hadPriorOnSlot = this.slotSerializationTails.has(slot);
       if (hadPriorOnSlot) {
-        void this.api
-          .post<{ ok: boolean }>(`/api/v1/dispatches/${dispatchId}/notify-queued-local`, {})
+        void postNativeGateway<{ ok: boolean }>(
+          this.options.serverUrl,
+          'dispatches.notify_queued_local',
+          { id: dispatchId },
+          { authorization: this.options.token },
+        )
           .then((r) => {
             if (r?.ok) {
               console.log(
@@ -576,16 +577,19 @@ export class TaskProcessor {
   }
 
   private async touchClaim(dispatchId: string): Promise<void> {
-    await this.api.post(`/api/v1/dispatches/${dispatchId}/touch-claim`, {});
+    await postNativeGateway(this.options.serverUrl, 'dispatches.touch_claim', { id: dispatchId }, {
+      authorization: this.options.token,
+    });
   }
 
   private async claimDispatch(dispatchId: string): Promise<any | null> {
     try {
-      return await this.api.post(`/api/v1/dispatches/${dispatchId}/claim`, {
+      return await postNativeGateway(this.options.serverUrl, 'dispatches.claim', {
+        id: dispatchId,
         claimedBy: this.claimId,
-      });
+      }, { authorization: this.options.token });
     } catch (err) {
-      if (err instanceof Error && err.message.includes('409')) return null;
+      if (err instanceof Error && /HTTP 409\b/.test(err.message)) return null;
       throw err;
     }
   }
@@ -594,15 +598,21 @@ export class TaskProcessor {
     dispatchId: string,
     result: ExecutionResult & { imSummary?: string },
   ): Promise<void> {
-    await this.api.post(`/api/v1/dispatches/${dispatchId}/complete`, {
-      result: {
-        text: result.text,
-        ...(result.imSummary != null ? { imSummary: result.imSummary } : {}),
-        executorType: result.executorType,
-        tokenUsage: result.tokenUsage,
-        durationMs: result.durationMs,
+    await postNativeGateway(
+      this.options.serverUrl,
+      'dispatches.complete',
+      {
+        id: dispatchId,
+        result: {
+          text: result.text,
+          ...(result.imSummary != null ? { imSummary: result.imSummary } : {}),
+          executorType: result.executorType,
+          tokenUsage: result.tokenUsage,
+          durationMs: result.durationMs,
+        },
       },
-    });
+      { authorization: this.options.token },
+    );
   }
 
   private async failDispatch(
@@ -610,10 +620,12 @@ export class TaskProcessor {
     error: string,
     retryable: boolean,
   ): Promise<void> {
-    await this.api.post(`/api/v1/dispatches/${dispatchId}/fail`, {
-      error,
-      retryable,
-    });
+    await postNativeGateway(
+      this.options.serverUrl,
+      'dispatches.fail',
+      { id: dispatchId, error, retryable },
+      { authorization: this.options.token },
+    );
   }
 
   private async writeTimelineEntry(
@@ -622,17 +634,23 @@ export class TaskProcessor {
     result: ExecutionResult,
   ): Promise<void> {
     try {
-      await this.api.post(`/api/v1/topics/${topicIdStr}/timeline`, {
-        actionType: 'ai_response',
-        actor: `ai:${dispatch.skillName}`,
-        payload: {
-          skillName: dispatch.skillName,
-          content: result.text,
-          executorType: result.executorType,
-          durationMs: result.durationMs,
-          tokenUsage: result.tokenUsage,
+      await postNativeGateway(
+        this.options.serverUrl,
+        'topics.timeline.append',
+        {
+          topicId: topicIdStr,
+          actionType: 'ai_response',
+          actor: `ai:${dispatch.skillName}`,
+          payload: {
+            skillName: dispatch.skillName,
+            content: result.text,
+            executorType: result.executorType,
+            durationMs: result.durationMs,
+            tokenUsage: result.tokenUsage,
+          },
         },
-      });
+        { authorization: this.options.token },
+      );
     } catch {
       // Non-fatal: dispatch is already marked complete
     }

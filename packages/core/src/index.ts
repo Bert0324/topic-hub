@@ -5,6 +5,7 @@ export type {
   CommandOperations,
   IngestionOperations,
   WebhookOperations,
+  NativeGatewayOperations,
   MessagingOperations,
   SearchOperations,
   SkillOperations,
@@ -16,6 +17,16 @@ export type {
   SuperadminOperations,
   IdentityAuthOperations,
 } from './topichub';
+
+export { NATIVE_INTEGRATION_SEGMENT } from './gateway/constants';
+export { NativeIntegrationGateway } from './gateway/native-integration-gateway';
+export { SkillCenterHttpAdapter } from './gateway/skill-center-http-adapter';
+export type { NativeGatewayEnvelope } from './gateway/native-gateway.schema';
+export type {
+  NativeGatewaySuccess,
+  NativeGatewayFailure,
+  NativeGatewayResponseBody,
+} from './gateway/native-integration-gateway';
 
 // Config
 export { TopicHubConfigSchema } from './config';

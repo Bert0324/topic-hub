@@ -54,11 +54,8 @@ export async function handleSkillsCommand(subcommand: string | undefined, args: 
     const page = pickArg(args, '--page') ?? '1';
     const limit = pickArg(args, '--limit') ?? '50';
     const sort = pickArg(args, '--sort') ?? 'popular';
-    const q = new URLSearchParams({ page, limit, sort });
-    const pathStr = `/api/v1/skills?${q.toString()}`;
-
     try {
-      const body = await client.get<{
+      const body = await client.nativeGatewayPublic<{
         skills: Array<{
           id: string;
           name: string;
@@ -70,7 +67,7 @@ export async function handleSkillsCommand(subcommand: string | undefined, args: 
         total: number;
         page: number;
         limit: number;
-      }>(pathStr, { auth: false });
+      }>('skills.catalog_list', { page, limit, sort });
 
       if (body.skills.length === 0) {
         console.log('No published skills on this server.');
@@ -112,10 +109,9 @@ export async function handleSkillsCommand(subcommand: string | undefined, args: 
     }
 
     try {
-      const res = await client.post<{ liked: boolean; likeCount: number }>(
-        `/api/v1/skills/${encodeURIComponent(name)}/like`,
-        {},
-      );
+      const res = await client.nativeGateway<{ liked: boolean; likeCount: number }>('skills.like', {
+        name,
+      });
       console.log(res.liked ? `Liked "${name}". Total likes: ${res.likeCount}` : `Unliked "${name}". Total likes: ${res.likeCount}`);
     } catch (e) {
       console.error('Like failed:', e instanceof Error ? e.message : e);
@@ -137,15 +133,15 @@ export async function handleSkillsCommand(subcommand: string | undefined, args: 
     }
 
     try {
-      const pathStr = regId
-        ? `/api/v1/skills/by-id/${encodeURIComponent(regId)}/content`
-        : `/api/v1/skills/${encodeURIComponent(name!)}/content`;
-      const res = await client.get<{
+      type SkillContent = {
         name: string;
         version: string;
         skillMdRaw: string;
         manifest: Record<string, unknown>;
-      }>(pathStr, { auth: false });
+      };
+      const res = regId
+        ? await client.nativeGatewayPublic<SkillContent>('skills.content_by_id', { id: regId })
+        : await client.nativeGatewayPublic<SkillContent>('skills.content_by_name', { name: name! });
 
       const dir = path.join(skillsDir, res.name);
       fs.mkdirSync(dir, { recursive: true });
@@ -178,9 +174,9 @@ export async function handleSkillsCommand(subcommand: string | undefined, args: 
     }
 
     try {
-      await client.delete<{ deleted: true; id: string }>(
-        `/api/v1/skills/by-id/${encodeURIComponent(registrationId)}`,
-      );
+      await client.nativeGateway<{ deleted: true; id: string }>('skills.delete_by_id', {
+        id: registrationId,
+      });
       console.log(`Deleted published skill id=${registrationId} from the server catalog.`);
     } catch (e) {
       console.error('Delete failed:', e instanceof Error ? e.message : e);

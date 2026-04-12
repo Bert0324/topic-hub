@@ -79,6 +79,8 @@ import {
 import { OpenClawBridge } from './bridge/openclaw-bridge';
 import { BridgeManager } from './bridge/bridge-manager';
 import type { OpenClawConfig, BridgeConfig } from './bridge/openclaw-types';
+import { NativeIntegrationGateway } from './gateway/native-integration-gateway';
+import { SkillCenterHttpAdapter } from './gateway/skill-center-http-adapter';
 
 // --- Operation namespace types ---
 
@@ -141,6 +143,13 @@ export interface WebhookOperations {
     rawBody?: Buffer | string,
     headers?: Record<string, string | string[] | undefined>,
   ): Promise<WebhookResult>;
+}
+
+export interface NativeGatewayOperations {
+  handle(
+    body: unknown,
+    headers: Record<string, string | string[] | undefined>,
+  ): Promise<{ status: number; body: unknown }>;
 }
 
 export interface MessagingOperations {
@@ -329,6 +338,8 @@ export class TopicHub {
     private readonly authServiceNew: AuthService,
     private readonly publishedSkillCatalog: PublishedSkillCatalog,
     private readonly skillCenterService: SkillCenterService,
+    private readonly nativeIntegrationGateway: NativeIntegrationGateway,
+    private readonly skillCenterHttpAdapter: SkillCenterHttpAdapter,
   ) {}
 
   static async create(config: TopicHubConfig): Promise<TopicHub> {
@@ -550,6 +561,17 @@ export class TopicHub {
     // Init dispatch
     dispatchService.init();
 
+    const hubHolder: { current?: TopicHub } = {};
+    const nativeIntegrationGateway = new NativeIntegrationGateway(() => {
+      const h = hubHolder.current;
+      if (!h) {
+        throw new TopicHubError('Topic Hub not initialized');
+      }
+      return h;
+    });
+
+    const skillCenterHttpAdapter = new SkillCenterHttpAdapter(skillCenterService, authServiceNew);
+
     const hub = new TopicHub(
       connection,
       ownsConnection,
@@ -574,7 +596,11 @@ export class TopicHub {
       authServiceNew,
       publishedSkillCatalog,
       skillCenterService,
+      nativeIntegrationGateway,
+      skillCenterHttpAdapter,
     );
+
+    hubHolder.current = hub;
 
     hub.startReminderTimer();
 
@@ -619,6 +645,15 @@ export class TopicHub {
         );
         if (sessionLive) {
           // Heartbeat says the executor is up — skip noisy group pings while the queue catches up.
+          continue;
+        }
+
+        // Unclaimed rows may still reference an older `targetExecutorToken` after the user
+        // re-ran `serve` or re-registered; `isBoundExecutorSessionLive` is then false even though
+        // `serve` is healthy. Do not DM "no heartbeat" in that case.
+        const anyFreshHeartbeat = await this.heartbeatService.isAvailable(topichubUserId);
+        if (anyFreshHeartbeat) {
+          await this.dispatchService.markReminderSent(dispatch._id.toString());
           continue;
         }
 
@@ -815,6 +850,14 @@ export class TopicHub {
         headers?: Record<string, string | string[] | undefined>,
       ) => this.webhookHandler.handleOpenClaw(payload, rawBody, headers),
     };
+  }
+
+  get nativeGateway(): NativeGatewayOperations {
+    return this.nativeIntegrationGateway;
+  }
+
+  get skillCenterHttp(): SkillCenterHttpAdapter {
+    return this.skillCenterHttpAdapter;
   }
 
   get messaging(): MessagingOperations {

@@ -1,15 +1,15 @@
 import { password } from '@inquirer/prompts';
 import { saveAdminToken, loadAdminToken } from '../../../auth/auth.js';
+import { postNativeGateway } from '../../../api-client/native-gateway.js';
 
 async function tryBootstrap(serverUrl: string): Promise<string | null> {
   try {
-    const res = await fetch(`${serverUrl}/api/v1/init`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { superadminToken?: string };
+    const data = await postNativeGateway<{ superadminToken?: string }>(
+      serverUrl,
+      'system.init',
+      {},
+      { signal: AbortSignal.timeout(5000) },
+    );
     return data.superadminToken ?? null;
   } catch {
     return null;
@@ -47,11 +47,12 @@ export async function promptAdminToken(serverUrl: string): Promise<string> {
 
   process.stdout.write('  Validating token... ');
   try {
-    const res = await fetch(`${serverUrl}/api/v1/admin/identities`, {
-      headers: { Authorization: `Bearer ${tokenToUse}` },
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await postNativeGateway(
+      serverUrl,
+      'admin.identities.list',
+      {},
+      { authorization: tokenToUse, signal: AbortSignal.timeout(5000) },
+    );
     console.log('✓ Token valid');
   } catch (err) {
     console.log('✗ Failed');

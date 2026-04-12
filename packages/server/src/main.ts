@@ -9,9 +9,20 @@ function jsonBodyLimit(): string {
   return raw && raw.length > 0 ? raw : '15mb';
 }
 
+/** Strip leading/trailing slashes; empty → no prefix. */
+function normalizeHttpPrefix(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const t = raw.trim().replace(/^\/+|\/+$/g, '');
+  return t.length > 0 ? t : undefined;
+}
+
 async function bootstrap() {
   const limit = jsonBodyLimit();
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
+  const httpPrefix = normalizeHttpPrefix(process.env.TOPICHUB_HTTP_PREFIX);
+  if (httpPrefix) {
+    app.setGlobalPrefix(httpPrefix);
+  }
   app.useBodyParser('json', { limit });
   app.useBodyParser('urlencoded', { limit, extended: true });
   app.useGlobalFilters(new GlobalExceptionFilter());
