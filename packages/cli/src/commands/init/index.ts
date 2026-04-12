@@ -18,8 +18,8 @@ export async function handleInitCommand(): Promise<void> {
     console.log('  Step 1/4: Remote Server URL');
     const serverUrl = await promptServerUrl(existing?.serverUrl);
 
-    // Step 2: Admin Token
-    console.log('\n  Step 2/4: Admin Token');
+    // Step 2: Optional Identity/Admin Token
+    console.log('\n  Step 2/4: Identity/Admin Token (optional)');
     await promptAdminToken(serverUrl);
 
     // Step 3: Executor Selection

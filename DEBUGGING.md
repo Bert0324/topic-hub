@@ -8,6 +8,66 @@
 - pnpm 9+
 - Docker（用于 MongoDB）
 
+### 体验服快速自检（Discord 工作流）
+
+如果你走的是线上体验路径（非本地自建），优先按这张清单逐项检查：
+
+1. 已加入 Discord 群：[topic hub discord](https://discord.gg/C6fgRpNs)
+2. 已在 Discord DM Bot 执行 `/id create` 并拿到 `identity token`
+3. 本地已安装 `claude code` 或 `codex`，以及 `topichub-cli`
+4. 已执行 `topichub-admin init`（Server URL = `https://hk.ltflange.cn`，token 可跳过）
+5. 已执行 `topichub-admin login <identity-token>`
+6. `serve` 启动成功并输出匹配码（pairing code）
+7. 已在 Discord DM Bot 执行 `/register <匹配码>`
+8. 已在体验 server 新建 channel 并执行 `/create`
+9. 新建 topic 后，任务能被本地执行引擎消费
+
+推荐启动命令：
+
+```bash
+# 先初始化（token 可直接回车跳过）
+topichub-admin init
+
+# 再登录（使用 /id create 得到的 token）
+topichub-admin login <identity-token>
+
+# Claude Code
+topichub-admin serve --executor claude-code
+
+# Codex
+topichub-admin serve --executor codex
+```
+
+---
+
+## 体验链路排障（优先看）
+
+### 1) `serve` 无法连上体验服
+
+- 检查 `base-url` 是否误配为本地地址（如 `http://localhost:3000`）
+- 确认 `topichub-admin init` 配置的是 `https://hk.ltflange.cn`
+- 如果终端提示鉴权失败，通常是 `identity token` 过期/复制错误；可重新执行 `/id create` 后再 `topichub-admin login`
+
+### 2) `/register <匹配码>` 失败
+
+- 确认匹配码来自**当前正在运行**的 `serve` 会话
+- 匹配码通常有时效，过期后需要重启 `serve` 获取新码
+- 检查是否在 Discord 的 **DM Bot** 场景输入，而不是普通群聊
+
+### 3) `/create` 后没有触发本地执行
+
+- 查看 `serve` 终端是否出现 dispatch / claim / run 日志
+- 如果没有日志，先确认账号已完成 `/register`
+- 如果有 dispatch 但无执行结果，重点检查本地执行器可用性（`claude code` / `codex`）
+
+### 4) 能创建 topic，但 Agent 无响应或超时
+
+- 首先观察 `serve` 控制台是否出现执行报错
+- 检查本地网络和执行器登录状态
+- 确认当前 topic 指令是否缺少必要上下文（可先发一个更短更明确的任务）
+
+---
+
 ### 启动 MongoDB
 
 ```bash
@@ -212,15 +272,15 @@ cd packages/cli
 pnpm start init
 
 # 认证
-pnpm start login
+pnpm start login <identity-token>
 pnpm start logout
 
 # 查看自己的身份
-pnpm start identity me --token <your-token>
+pnpm start identity me
 
 # 身份管理（超管）
-pnpm start identity create --token <superadmin-token> --unique-id user1 --name "张三"
-pnpm start identity list --token <superadmin-token>
+pnpm start identity create --unique-id user1 --name "张三"
+pnpm start identity list
 
 # 本地执行器（启动后会显示配对码）
 pnpm start serve --executor claude-code
@@ -236,11 +296,9 @@ pnpm start topic create bug --platform discord --channel general
 
 # 或设置别名
 alias thub='pnpm --filter cli start'
-thub identity me --token <token>
+thub login <identity-token>
+thub identity me
 thub serve
-thub skill create
-thub publish ./my-skill
-thub topic create deploy --platform feishu --channel oc_xxx
 ```
 
 > **注意：** 不要在 `pnpm start` 后面加 `--`。`pnpm start` 会自动将
@@ -255,7 +313,7 @@ thub topic create deploy --platform feishu --channel oc_xxx
   "type": "node",
   "request": "launch",
   "runtimeExecutable": "tsx",
-  "args": ["src/index.tsx", "identity", "me", "--token", "xxx"],
+  "args": ["src/index.tsx", "identity", "me"],
   "cwd": "${workspaceFolder}/packages/cli",
   "console": "integratedTerminal"
 }
@@ -274,6 +332,8 @@ thub topic create deploy --platform feishu --channel oc_xxx
 | 指令 | 说明 |
 |------|------|
 | `/help` | 查看所有可用指令 |
+| `/id create` | DM 自助注册并获取 identity token |
+| `/id me` | 查看当前 identity 信息（含 token） |
 | `/register <配对码>` | 将 IM 账号绑定到本地执行器 |
 
 ### 需要绑定执行器
@@ -294,11 +354,13 @@ thub topic create deploy --platform feishu --channel oc_xxx
 
 ### 配对流程
 
-1. 本地运行 `topichub-admin serve`，控制台显示配对码
-2. 在 IM 中 @Bot 输入 `/register <配对码>`
-3. 绑定成功后即可使用所有指令
-4. 一个执行器可被多个 IM 账号绑定（1:N）
-5. 每个 IM 账号同时只能绑定一个执行器
+1. 在 IM 私聊 Bot 执行 `/id create`，拿到 identity token
+2. 本地执行 `topichub-admin login <identity-token>`
+3. 本地运行 `topichub-admin serve`，控制台显示配对码
+4. 在 IM 中 @Bot 输入 `/register <配对码>`
+5. 绑定成功后即可使用所有指令
+6. 一个执行器可被多个 IM 账号绑定（1:N）
+7. 每个 IM 账号同时只能绑定一个执行器
 
 ---
 
@@ -537,6 +599,7 @@ kill -9 <PID>
 - 使用 `/help` 检查 Bot 是否在线（无需绑定执行器）
 - 如果提示 "register first"，先用 `/register <code>` 绑定执行器
 - 旧的 `/topichub` 前缀已不再支持，直接使用 `/create`、`/show` 等
+- 体验服场景请优先使用 DM Bot 完成 `/register <匹配码>`，再回到频道执行 `/create`
 
 ### pnpm install 失败
 
