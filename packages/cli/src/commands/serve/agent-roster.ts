@@ -28,10 +28,33 @@ function tokenHash(token: string): string {
   return crypto.createHash('sha256').update(token, 'utf8').digest('hex').slice(0, 24);
 }
 
+/** Override with a writable directory if `~/.config/...` is not creatable (e.g. root-owned `~/.config`). */
+export function getAgentRosterBaseDir(): string {
+  const fromEnv = process.env.TOPIC_HUB_AGENT_ROSTER_DIR?.trim();
+  if (fromEnv) {
+    return path.resolve(fromEnv);
+  }
+  return path.join(os.homedir(), '.config', 'topic-hub', 'agent-roster');
+}
+
+function ensureAgentRosterDir(dir: string): void {
+  try {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === 'EACCES' || err.code === 'EPERM') {
+      throw new Error(
+        `Cannot create agent roster directory "${dir}": ${err.message}. On macOS/Linux, fix ownership of ~/.config (e.g. sudo chown -R "$(whoami)" ~/.config) or set TOPIC_HUB_AGENT_ROSTER_DIR to a writable path.`,
+      );
+    }
+    throw e;
+  }
+}
+
 export function getAgentRosterFilePath(executorToken: string): string {
   const h = tokenHash(executorToken);
-  const dir = path.join(os.homedir(), '.config', 'topic-hub', 'agent-roster');
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const dir = getAgentRosterBaseDir();
+  ensureAgentRosterDir(dir);
   return path.join(dir, `${h}.json`);
 }
 
@@ -55,7 +78,7 @@ function readFileJson(file: string): RosterFile {
 
 function writeFileJson(file: string, data: RosterFile): void {
   const dir = path.dirname(file);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  ensureAgentRosterDir(dir);
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
   try {

@@ -1,6 +1,7 @@
 /// <reference types="jest" />
 
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import {
   addAgent,
@@ -74,5 +75,28 @@ describe('agent-roster', () => {
     expect(fs.existsSync(f)).toBe(true);
     const st = fs.statSync(f);
     expect((st.mode & 0o777) & 0o077).toBe(0);
+  });
+
+  it('TOPIC_HUB_AGENT_ROSTER_DIR overrides roster directory', () => {
+    const override = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'topic-hub-roster-test-')));
+    const prev = process.env.TOPIC_HUB_AGENT_ROSTER_DIR;
+    process.env.TOPIC_HUB_AGENT_ROSTER_DIR = override;
+    try {
+      ensureAtLeastOneAgent(token);
+      const f = getAgentRosterFilePath(token);
+      expect(f.startsWith(override)).toBe(true);
+      expect(fs.existsSync(f)).toBe(true);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.TOPIC_HUB_AGENT_ROSTER_DIR;
+      } else {
+        process.env.TOPIC_HUB_AGENT_ROSTER_DIR = prev;
+      }
+      try {
+        fs.rmSync(override, { recursive: true, force: true });
+      } catch {
+        /* ignore */
+      }
+    }
   });
 });
