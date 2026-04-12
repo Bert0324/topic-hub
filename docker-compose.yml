@@ -1,0 +1,29 @@
+services:
+  mongodb:
+    image: mongo:7
+    ports:
+      - '27017:27017'
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: topichub
+
+  server:
+    build:
+      context: .
+      dockerfile: packages/server/Dockerfile
+    ports:
+      - '3000:3000'
+    environment:
+      MONGODB_URI: mongodb://mongodb:27017/topichub
+      PORT: '3000'
+      SKILLS_DIR: /app/skills
+      LOG_FORMAT: json
+      LOG_LEVEL: info
+    volumes:
+      - ./skills:/app/skills
+    depends_on:
+      - mongodb
+
+volumes:
+  mongodb_data:

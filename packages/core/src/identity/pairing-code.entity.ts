@@ -1,0 +1,44 @@
+import {
+  prop,
+  modelOptions,
+  index,
+} from '@typegoose/typegoose';
+
+@modelOptions({
+  schemaOptions: {
+    collection: 'pairing_codes',
+    timestamps: { createdAt: true, updatedAt: false },
+  },
+})
+@index({ code: 1 }, { unique: true })
+export class PairingCode {
+  @prop({ required: true })
+  code!: string;
+
+  @prop({ required: true })
+  topichubUserId!: string;
+
+  @prop({ required: true })
+  executorClaimToken!: string;
+
+  @prop()
+  platform?: string;
+
+  @prop()
+  platformUserId?: string;
+
+  @prop()
+  channel?: string;
+
+  @prop({ required: true, default: false })
+  claimed!: boolean;
+
+  @prop()
+  claimedByUserId?: string;
+
+  /** Legacy field from TTL pairing; no longer written. */
+  @prop()
+  expiresAt?: Date;
+
+  createdAt!: Date;
+}

@@ -1,0 +1,40 @@
+{
+  "name": "topichub-cli",
+  "version": "0.0.4",
+  "bin": {
+    "topichub-admin": "./dist/bin/topichub-admin.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "tsx src/index.tsx",
+    "test": "jest",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "@topichub/core": "^0.0.3",
+    "@inquirer/prompts": "^8.4.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "eventsource": "^4.1.0",
+    "gray-matter": "^4.0.3",
+    "ink": "^5.0.0",
+    "keytar": "^7.9.0",
+    "open": "^10.1.0",
+    "pastel": "^3.0.0",
+    "react": "^18.3.0",
+    "zod": "^3.23.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/eventsource": "^3.0.0",
+    "@types/jest": "^29.5.0",
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.3.0",
+    "ink-testing-library": "^4.0.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.5.0"
+  }
+}

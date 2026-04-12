@@ -1,0 +1,73 @@
+---
+description: Project Development Guidelines
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# topic-hub Development Guidelines
+
+Auto-generated from all feature plans. Last updated: 2026-04-12
+
+## Active Technologies
+- TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Typegoose + Mongoose (ODM), zod (validation) (001-topic-hub-app)
+- MongoDB 7 (001-topic-hub-app)
+- TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Typegoose + Mongoose (ODM), zod (validation), jsonwebtoken + jwks-rsa (JWT/JWKS verification) (001-topic-hub-app)
+- MongoDB 7 (new collections: `ai_classifications`, `topic_links`, `ai_usage_records`) (002-ai-driven-skills)
+- MongoDB 7 (new collection: `ai_usage_records`) (002-ai-driven-skills)
+- TypeScript 5.x, Node.js 20 LTS + NestJS 10, Typegoose + Mongoose 8, zod, gray-matter (new — YAML frontmatter parsing) (002-ai-driven-skills)
+- MongoDB 7 (existing collections: `topics`, `timeline_entries`, `skill_registrations`, `tenant_skill_configs`, `ai_usage_records`) (002-ai-driven-skills)
+- TypeScript 5.x, Node.js 20 LTS + NestJS 10, Typegoose + Mongoose 8, zod, gray-matter (server); Ink 5 + React 18, zod (CLI — existing deps, Ink unused so far); `@modelcontextprotocol/sdk` (new — MCP server for CLI) (003-local-agent-executor)
+- MongoDB 7 (existing collections + new `task_dispatches` collection) (003-local-agent-executor)
+- TypeScript 5.x, Node.js 20 LTS + NestJS 10, Typegoose + Mongoose 8, zod (server) (004-simplify-skill-types)
+- MongoDB 7 (existing `skill_registrations` collection may contain `category: 'auth'` records) (004-simplify-skill-types)
+- TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI, Ink unused so far — CLI uses plain console), Typegoose + Mongoose 8 (ODM), zod (validation), gray-matter (YAML frontmatter), @modelcontextprotocol/sdk (MCP), keytar (credential storage) (005-skill-dev-ecosystem)
+- MongoDB 7 (existing collections: `skill_registrations`, `tenant_skill_configs`, `task_dispatches`, `topics`, `timeline_entries`, `ai_usage_records`) (005-skill-dev-ecosystem)
+- TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI, Ink unused — CLI uses plain console), Typegoose + Mongoose 8 (ODM), zod (validation), gray-matter (YAML frontmatter), @modelcontextprotocol/sdk (MCP), keytar (credential storage) (005-skill-dev-ecosystem)
+- TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Typegoose + Mongoose 8, zod, gray-matter, @modelcontextprotocol/sdk, keytar (005-skill-dev-ecosystem)
+- TypeScript 5.5, Node.js 20 LTS + Mongoose 8 + Typegoose 12 (ODM), zod (validation), gray-matter (YAML frontmatter parsing), jsonwebtoken + jwks-rsa (auth) (006-extract-core-package)
+- TypeScript 5.5, Node.js 20 LTS + Mongoose 8 + Typegoose 12 (ODM), zod (validation), NestJS 10 (server), gray-matter (YAML frontmatter) (007-openclaw-im-bridge)
+- MongoDB 7 (existing collections: `topics`, `timeline_entries`, `skill_registrations`, `tenant_skill_configs`) (007-openclaw-im-bridge)
+- TypeScript 5.5, Node.js 20 LTS + Mongoose 8 + Typegoose 12 (ODM), zod (validation), NestJS 10 (server), eventsource (SSE client in CLI), @inquirer/prompts (CLI interaction), @modelcontextprotocol/sdk (MCP) (008-secure-im-dispatch)
+- MongoDB 7 (existing collections: `task_dispatches`; new collections: `user_identity_bindings`, `pairing_codes`, `executor_heartbeats`, `qa_exchanges`) (008-secure-im-dispatch)
+- TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Typegoose + Mongoose 8 (ODM), zod (validation), gray-matter (SKILL.md parsing), @inquirer/prompts (CLI) (010-decouple-skill-ai)
+- MongoDB 7 (existing collections: `task_dispatches`, `topics`, `timeline_entries`, `skill_registrations`, `tenant_skill_configs`, `ai_usage_records`) (010-decouple-skill-ai)
+- TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Typegoose + Mongoose 8 (ODM), zod (validation), gray-matter (SKILL.md parsing), @modelcontextprotocol/sdk (MCP), eventsource (SSE client), @inquirer/prompts (CLI) (012-unified-skill-center)
+- MongoDB 7 (existing collections undergo schema migration) (012-unified-skill-center)
+- TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Typegoose + Mongoose 8 (ODM), zod (validation), @modelcontextprotocol/sdk (MCP), eventsource (SSE client), gray-matter (SKILL.md parsing) (spec/013-streamline-commands-skills)
+- MongoDB 7 (existing collections: `pairing_codes`, `user_identity_bindings`, `executor_heartbeats`, `skill_registrations`, `tenant_skill_configs`) (spec/013-streamline-commands-skills)
+- TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Mongoose 8 / Typegoose 12, existing `@topichub/core` command router & webhook pipeline (014-published-skill-im-routing)
+- MongoDB — existing `skill_registrations`, `user_identity_bindings`, `task_dispatches`, `executor_heartbeats` (014-published-skill-im-routing)
+- TypeScript 5.5, Node.js 20 LTS + NestJS 10 (`packages/server`), `@topichub/core` (command router, webhook, identity, dispatch), CLI `serve` + `TaskProcessor` (`packages/cli`) (015-im-agent-command)
+- MongoDB (existing `im_bindings`, `user_identity_bindings`, `task_dispatches`, …); **local agent roster** v1 proposed as **executor-local persisted JSON** (see `research.md`) (015-im-agent-command)
+- TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Mongoose 8 / Typegoose 12, `@topichub/core` command router + webhook + dispatch pipeline, Ink/React CLI for `serve` (015-im-agent-command)
+- MongoDB 7 — `im_bindings`, `pairing_codes`, `executor_heartbeats`, `task_dispatches`; local JSON roster under `~/.config/topic-hub/agent-roster/` (015-im-agent-command)
+- TypeScript 5.5, Node.js 20 LTS + NestJS 10 (`packages/server`), `@topichub/core` (webhook, identity, dispatch, OpenClaw bridge), Mongoose/Typegoose (existing persistence) (017-simplify-core-integration)
+- MongoDB (existing `im_bindings` / identity collections—see `data-model.md`) (017-simplify-core-integration)
+- TypeScript 5.5, Node.js 20 LTS + `@topichub/core` (OpenClaw bridge, `WebhookHandler`, `IdentityService`, `SuperadminService`), NestJS 10 (`packages/server`), Mongoose / Typegoose (019-im-first-identification)
+- MongoDB — existing `identities`, `user_identity_bindings`, `executor_registrations` (or equivalent); **new** durable `(platform, platformUserId) → identityId` link for IM self-signup (see `data-model.md`) (019-im-first-identification)
+
+- TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Prisma (ORM), zod (validation) (001-topic-hub-app)
+
+## Project Structure
+
+```text
+src/
+tests/
+```
+
+## Commands
+
+npm test && npm run lint
+
+## Code Style
+
+TypeScript 5.x, Node.js 20 LTS: Follow standard conventions
+
+## Recent Changes
+- 019-im-first-identification: Added TypeScript 5.5, Node.js 20 LTS + `@topichub/core` (OpenClaw bridge, `WebhookHandler`, `IdentityService`, `SuperadminService`), NestJS 10 (`packages/server`), Mongoose / Typegoose
+- 017-simplify-core-integration: Added TypeScript 5.5, Node.js 20 LTS + NestJS 10 (`packages/server`), `@topichub/core` (webhook, identity, dispatch, OpenClaw bridge), Mongoose/Typegoose (existing persistence)
+- 015-im-agent-command: Added TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Mongoose 8 / Typegoose 12, `@topichub/core` command router + webhook + dispatch pipeline, Ink/React CLI for `serve`
+
+
+<!-- MANUAL ADDITIONS START -->
+<!-- MANUAL ADDITIONS END -->
