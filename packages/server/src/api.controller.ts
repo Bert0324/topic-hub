@@ -51,7 +51,7 @@ function toHttpError(err: unknown): never {
 
 @Controller('webhooks')
 export class WebhookController {
-  constructor(private readonly hub: TopicHubService) {}
+  constructor(private readonly hub: TopicHubService) { }
 
   @Post('openclaw')
   async handleOpenClaw(
@@ -71,7 +71,7 @@ export class WebhookController {
 
 @Controller()
 export class ApiController {
-  constructor(private readonly hub: TopicHubService) {}
+  constructor(private readonly hub: TopicHubService) { }
 
   @Get('health')
   health() {
@@ -540,7 +540,7 @@ export class ApiController {
 
 @Controller('api/v1/executors')
 export class ExecutorController {
-  constructor(private readonly hub: TopicHubService) {}
+  constructor(private readonly hub: TopicHubService) { }
 
   private extractBearerToken(req: Request): string {
     const auth = req.headers['authorization'] ?? '';
@@ -622,7 +622,7 @@ export class ExecutorController {
 
 @Controller('api/v1/identity')
 export class IdentityController {
-  constructor(private readonly hub: TopicHubService) {}
+  constructor(private readonly hub: TopicHubService) { }
 
   private extractBearerToken(req: Request): string {
     const auth = req.headers['authorization'] ?? '';
