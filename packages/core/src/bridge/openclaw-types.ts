@@ -72,6 +72,11 @@ const OpenClawWebhookDataSchema = z.object({
   sessionId: jsonString(1),
   platform: z.string().min(1).optional(),
   isDm: z.boolean().optional(),
+  /** Optional human display name from relay (e.g. Slack/Feishu profile); used for `/id create` displayName. */
+  displayName: z.preprocess(
+    (v) => (v == null || v === '' ? undefined : String(v).trim()),
+    z.string().min(1).max(256).optional(),
+  ),
 });
 
 /** Body signed by HMAC (embedded relay sends this as raw bytes + `X-TopicHub-Signature` header). */
@@ -98,6 +103,8 @@ export interface OpenClawInboundResult {
   originalMessage: string;
   sessionId: string;
   isDm: boolean;
+  /** When relay sends `data.displayName`; otherwise omit and callers fall back to `userId`. */
+  imDisplayName?: string;
 }
 
 export interface OpenClawSendParams {

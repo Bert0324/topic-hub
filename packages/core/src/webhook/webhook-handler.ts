@@ -8,6 +8,8 @@ import type { OpenClawInboundResult } from '../bridge/openclaw-types';
 import type { TopicHubLogger } from '../common/logger';
 import { purifyImRelayText } from '../im/im-relay-text.js';
 import { stripOptionalImAgentTargetPrefix } from '../im/im-agent-target-prefix.js';
+import { ConflictError } from '../common/errors';
+import type { ImSelfServeIdentitySnapshot } from '../services/im-self-serve-identity.service';
 
 export interface WebhookIdentityOps {
   claimPairingCode(platform: string, platformUserId: string, code: string): Promise<{ topichubUserId: string }>;
@@ -26,6 +28,16 @@ export interface WebhookHeartbeatOps {
     topichubUserId: string,
     boundExecutorToken: string,
   ): Promise<boolean>;
+}
+
+/** IM `/id create` and `/id me` (see specs/017-im-first-identification). */
+export interface WebhookImSelfServeOps {
+  createFromIm(params: {
+    platform: string;
+    platformUserId: string;
+    displayName: string;
+  }): Promise<ImSelfServeIdentitySnapshot>;
+  getMeForIm(params: { platform: string; platformUserId: string }): Promise<ImSelfServeIdentitySnapshot | null>;
 }
 
 export interface WebhookResult {
@@ -51,6 +63,7 @@ export class WebhookHandler {
     private readonly bridge?: OpenClawBridge,
     private readonly identityOps?: WebhookIdentityOps,
     private readonly heartbeatOps?: WebhookHeartbeatOps,
+    private readonly imSelfServeOps?: WebhookImSelfServeOps,
     private readonly publishedSkillCatalog?: PublishedSkillCatalog,
   ) { }
 
@@ -91,6 +104,11 @@ export class WebhookHandler {
     // /help works without binding (FR-028) — also match 'help' without slash
     if (cmd === '/help' || cmd === 'help' || cmd.startsWith('/help ') || cmd.startsWith('help ')) {
       return this.handleHelp(result);
+    }
+
+    // /id create | /id me — DM only (tokens); before generic identity gate (contracts/im-identity-routing.md)
+    if (cmd === '/id' || cmd.startsWith('/id ')) {
+      return this.handleImIdCommands(result, cmd);
     }
 
     // /register <code> — DM only to protect pairing codes; group + valid code invalidates and rotates
@@ -358,7 +376,7 @@ export class WebhookHandler {
         '📋 **Topic Hub**',
         '',
         '**Topic lifecycle**',
-        '1. **Bind** — DM the bot: `/register <code>` (code from `topic-hub serve` on your machine). Keep serve running.',
+        '1. **Identity + bind** — DM the bot: `/id create` (self-serve identity token) or use a superadmin-provisioned token; then `/register <code>` (code from `topic-hub serve` on your machine). Keep serve running.',
         '2. **Open a topic** — In the group channel: `/create <type>` (optional `--title "…"`). Each group may have **one** non-`closed` topic at a time; set status to `closed` (or reopen an old one) before creating another.',
         '3. **Work** — Plain text in that group is relayed to your local executor while a topic is active. Optional **agent `#N`** prefix on plain lines or `/SkillName #N …` targets a **local agent slot** (see **`/agent list`**); default is **agent `#1`**. Use **`/agent #M <line>`** to force roster slot **M** for that line (plain text or **`/Skill …`**). There is **no** Hub-side `/queue` or `/answer` — ordering and follow-ups are handled by your **local executor** (e.g. per-slot session). `/use <skill>` or `/SkillName …` to run a loaded skill.',
         '4. **Track** — `/show`, `/timeline`, and `/history` are answered **in this chat** from Topic Hub (no local executor).',
@@ -367,7 +385,7 @@ export class WebhookHandler {
         '7. **Done or restart** — `/update --status closed` (or `resolved` then `closed`) finishes the topic; `/reopen` revives a closed topic in this group when there is no other active topic (check `/history` if you have many).',
         '',
         '**DM only** (direct message with bot):',
-        '`/register <code>` bind executor · `/unregister` unbind · `/skills list` browse published skills (no link required) · `/skills star <name>` like/unlike (after `/register`, with serve running)',
+        '`/id create` · `/id me` identity (DM) · `/register <code>` bind executor · `/unregister` unbind · `/skills list` browse published skills (no link required) · `/skills star <name>` like/unlike (after `/register`, with serve running)',
         '',
         '**Group only** (topic group chat):',
         '`/show` details · `/timeline` history · `/update --status <s>`',
@@ -385,6 +403,116 @@ export class WebhookHandler {
       return execResult.message.trim();
     }
     return 'Task dispatched to your local agent.';
+  }
+
+  private formatImIdSnapshot(snapshot: ImSelfServeIdentitySnapshot): string {
+    return [
+      '**Identity**',
+      '',
+      `- **name**: ${snapshot.displayName}`,
+      `- **id** (uniqueId): \`${snapshot.uniqueId}\``,
+      `- **token**: \`${snapshot.token}\``,
+      '',
+      '_Store your token securely. Topic Hub shows it in this DM by product design (self-serve onboarding)._',
+    ].join('\n');
+  }
+
+  private async handleImIdCommands(result: OpenClawInboundResult, cmd: string): Promise<WebhookResult> {
+    if (!this.bridge) {
+      return { success: false, error: 'Bridge not configured' };
+    }
+    if (!this.imSelfServeOps) {
+      this.sendThreadReply(
+        result,
+        'IM `/id` self-registration is not available on this deployment.',
+      ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+      return { success: true, response: { status: 'id_unconfigured' } };
+    }
+    if (!result.isDm) {
+      this.sendThreadReply(
+        result,
+        'Use `/id` in a **direct message** with the bot so your token is not shown in a group channel.',
+      ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+      return { success: true, response: { status: 'id_dm_only' } };
+    }
+
+    const trimmed = cmd.trim();
+    if (trimmed === '/id' || trimmed === '/id help' || trimmed.startsWith('/id help ')) {
+      this.sendThreadReply(
+        result,
+        '**`/id` commands** (DM only)\n\n- `/id create` — register this IM account and receive your identity token\n- `/id me` — show your name, id (uniqueId), and token',
+      ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+      return { success: true, response: { status: 'id_usage' } };
+    }
+
+    if (trimmed.startsWith('/id create')) {
+      if (trimmed !== '/id create') {
+        this.sendThreadReply(result, 'Use exactly `/id create` with no extra arguments.').catch((err) =>
+          this.logger.error('Failed to send OpenClaw reply', String(err)),
+        );
+        return { success: true, response: { status: 'id_create_usage' } };
+      }
+      const displayName = result.imDisplayName?.trim() || result.userId;
+      try {
+        const snap = await this.imSelfServeOps.createFromIm({
+          platform: result.platform,
+          platformUserId: result.userId,
+          displayName,
+        });
+        const msg = [
+          '**Registered** — save this token for `topichub-admin serve` / CLI login.',
+          '',
+          this.formatImIdSnapshot(snap),
+        ].join('\n');
+        // CONSTITUTION-EXCEPTION: intentional identity token in IM — specs/017-im-first-identification/spec.md § Clarifications
+        this.sendThreadReply(result, msg).catch((err) =>
+          this.logger.error('Failed to send OpenClaw reply', String(err)),
+        );
+        return { success: true, response: { status: 'id_created' } };
+      } catch (e) {
+        if (e instanceof ConflictError) {
+          this.sendThreadReply(result, e.message).catch((err) =>
+            this.logger.error('Failed to send OpenClaw reply', String(err)),
+          );
+          return { success: true, response: { status: 'id_conflict' } };
+        }
+        this.logger.error('IM /id create failed', e instanceof Error ? e.message : String(e));
+        this.sendThreadReply(result, 'Registration failed. Try again or contact an administrator.').catch((err) =>
+          this.logger.error('Failed to send OpenClaw reply', String(err)),
+        );
+        return { success: true, response: { status: 'id_error' } };
+      }
+    }
+
+    if (trimmed.startsWith('/id me')) {
+      if (trimmed !== '/id me') {
+        this.sendThreadReply(result, 'Use exactly `/id me` with no extra arguments.').catch((err) =>
+          this.logger.error('Failed to send OpenClaw reply', String(err)),
+        );
+        return { success: true, response: { status: 'id_me_usage' } };
+      }
+      const snap = await this.imSelfServeOps.getMeForIm({
+        platform: result.platform,
+        platformUserId: result.userId,
+      });
+      if (!snap) {
+        this.sendThreadReply(
+          result,
+          'No `/id create` registration for this IM account yet. Run `/id create` first (or ask a superadmin to provision you).',
+        ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+        return { success: true, response: { status: 'id_not_registered' } };
+      }
+      // CONSTITUTION-EXCEPTION: intentional identity token in IM — specs/017-im-first-identification/spec.md § Clarifications
+      this.sendThreadReply(result, this.formatImIdSnapshot(snap)).catch((err) =>
+        this.logger.error('Failed to send OpenClaw reply', String(err)),
+      );
+      return { success: true, response: { status: 'id_me' } };
+    }
+
+    this.sendThreadReply(result, 'Unknown `/id` command. Try `/id create`, `/id me`, or `/help`.').catch((err) =>
+      this.logger.error('Failed to send OpenClaw reply', String(err)),
+    );
+    return { success: true, response: { status: 'id_unknown' } };
   }
 
   private async handleHelp(result: OpenClawInboundResult): Promise<WebhookResult> {

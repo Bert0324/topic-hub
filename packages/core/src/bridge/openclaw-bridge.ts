@@ -285,7 +285,8 @@ export class OpenClawBridge {
       return null;
     }
 
-    const { channel, user, message, sessionId, platform: webhookPlatform } = webhook.data;
+    const { channel, user, message, sessionId, platform: webhookPlatform, displayName: webhookDisplayName } =
+      webhook.data;
     const normalized = normalizeImCommandMessage(message);
 
     this.logger.debug(`Inbound webhook: channel=${channel} user=${user} message=${JSON.stringify(normalized)} sessionId=${sessionId}`);
@@ -311,6 +312,7 @@ export class OpenClawBridge {
       originalMessage: message,
       sessionId,
       isDm: !!webhook.data.isDm,
+      ...(webhookDisplayName ? { imDisplayName: webhookDisplayName } : {}),
     };
   }
 

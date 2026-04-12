@@ -27,6 +27,18 @@ export type {
   NativeGatewayFailure,
   NativeGatewayResponseBody,
 } from './gateway/native-integration-gateway';
+export {
+  connectExecutorTaskSse,
+  type ExecutorSseEvent,
+  type ExecutorTaskSseHub,
+  type ExecutorTaskSseOptions,
+  type ExecutorTaskSseSink,
+} from './gateway/executor-task-sse';
+export {
+  buildChatCompletionNoopResponse,
+  type ChatCompletionNoopOptions,
+  type ChatCompletionNoopResponse,
+} from './gateway/chat-completion-noop';
 
 // Config
 export { TopicHubConfigSchema } from './config';

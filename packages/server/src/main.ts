@@ -1,19 +1,14 @@
+import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { GlobalExceptionFilter } from './common/http-exception.filter';
+import { normalizeHttpPrefix } from './http-prefix';
 
 /** Express default is 100kb; webhooks and skill publish can exceed it. */
 function jsonBodyLimit(): string {
   const raw = process.env.TOPICHUB_JSON_BODY_LIMIT?.trim();
   return raw && raw.length > 0 ? raw : '15mb';
-}
-
-/** Strip leading/trailing slashes; empty → no prefix. */
-function normalizeHttpPrefix(raw: string | undefined): string | undefined {
-  if (!raw) return undefined;
-  const t = raw.trim().replace(/^\/+|\/+$/g, '');
-  return t.length > 0 ? t : undefined;
 }
 
 async function bootstrap() {
