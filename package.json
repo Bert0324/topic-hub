@@ -7,7 +7,12 @@
     "build": "turbo run build",
     "test": "turbo run test",
     "lint": "turbo run lint",
-    "dev": "turbo run dev --filter=@topichub/server"
+    "dev": "turbo run dev --filter=@topichub/server",
+    "start": "pm2 start ecosystem.config.cjs",
+    "pm2": "pm2"
+  },
+  "dependencies": {
+    "pm2": "^5.4.3"
   },
   "devDependencies": {
     "turbo": "^2.9.6",
