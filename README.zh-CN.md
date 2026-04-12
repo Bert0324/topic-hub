@@ -34,17 +34,11 @@ Topic Hub 把这条链路接起来：
 
 ## 体验流程
 
-按下面 9 步可以快速跑通 Discord -> Topic -> Agent 执行体验：
+全局安装 CLI：`npm i -g topichub-cli`（需 Node 20+）。再按顺序：
 
-1. 加入 Discord 用户群：[topic hub discord](https://discord.gg/C6fgRpNs)
-2. 在 Discord 私聊 Bot 执行 `/id create`，自助注册并获取 identity token
-3. 确认本地已安装 `claude code` 或 `codex`，以及 `topichub-cli`
-4. 使用体验服务器地址 `https://hk.ltflange.cn`
-5. 本地执行 `topichub-admin init`（token 可跳过），再执行 `topichub-admin login <identity-token>`
-6. 启动本地 `serve` 获取匹配码（pairing code）
-7. 在 Discord 私聊 Bot 执行 `/register <匹配码>`
-8. 在体验 server 新建频道并执行 `/create`
-9. 在频道里分配真实任务，观察本地执行结果回传
+1. 加入 [Topic Hub 的 Discord 服务器](https://discord.gg/C6fgRpNs)。在与 Bot 的私信（DM）里执行 `/id create` 获取 identity token。
+2. 本机装好 `claude code` 或 `codex` 后，执行 `topichub-admin init`：向导**第一步**粘贴体验服地址 `https://hk.ltflange.cn`（identity/admin token 可先跳过），完成后 `topichub-admin login <identity-token>`。
+3. `topichub-admin serve` 拿到配对码；回到该 Discord 服务器，在私信里向 Bot 发送 `/register <配对码>`，再在服务器内新建频道并执行 `/create`，即可在频道里派任务、看本地执行回传。
 
 ## 你会得到什么
 

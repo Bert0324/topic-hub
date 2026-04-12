@@ -28,8 +28,8 @@ importers:
         specifier: ^1.29.0
         version: 1.29.0(zod@3.25.76)
       '@topichub/core':
-        specifier: file:../core
-        version: link:../core
+        specifier: ^0.0.2
+        version: 0.0.2(@aws-sdk/credential-providers@3.1028.0)(@napi-rs/canvas@0.1.97)(@types/express@4.17.25)(apache-arrow@18.1.0)(gcp-metadata@8.1.2)(socks@2.8.7)(typescript@5.9.3)
       eventsource:
         specifier: ^4.1.0
         version: 4.1.0
@@ -1980,6 +1980,9 @@ packages:
 
   '@tootallnate/quickjs-emscripten@0.23.0':
     resolution: {integrity: sha512-C5Mc6rdnsaJDjO3UpGW/CQTHtCKaYlScZTly4JIu97Jxo/odCiH0ITnDXSJPTOrEKk/ycSZ0AOgTmkDtkOsvIA==}
+
+  '@topichub/core@0.0.2':
+    resolution: {integrity: sha512-603ZNSSFZOe8CQy+8KUXy9h7n1p+B4qVJsASkIHXEvJVZrb5LJUDczVUy/dojotlJahhDwnGHK7+9w0wmtcSpg==}
 
   '@tsconfig/node10@1.0.12':
     resolution: {integrity: sha512-UCYBaeFvM11aU2y3YPZ//O5Rhj+xKyzy7mvcIoAjASbigy8mHMryP5cK7dgjlz2hWxh1g5pLw084E0a/wlUSFQ==}
@@ -8701,6 +8704,39 @@ snapshots:
   '@tokenizer/token@0.3.0': {}
 
   '@tootallnate/quickjs-emscripten@0.23.0': {}
+
+  '@topichub/core@0.0.2(@aws-sdk/credential-providers@3.1028.0)(@napi-rs/canvas@0.1.97)(@types/express@4.17.25)(apache-arrow@18.1.0)(gcp-metadata@8.1.2)(socks@2.8.7)(typescript@5.9.3)':
+    dependencies:
+      '@typegoose/typegoose': 12.21.1(mongoose@8.23.0(@aws-sdk/credential-providers@3.1028.0)(gcp-metadata@8.1.2)(socks@2.8.7))
+      gray-matter: 4.0.3
+      jsonwebtoken: 9.0.3
+      jwks-rsa: 3.2.2
+      mongoose: 8.23.0(@aws-sdk/credential-providers@3.1028.0)(gcp-metadata@8.1.2)(socks@2.8.7)
+      openclaw: 2026.4.9(@napi-rs/canvas@0.1.97)(@types/express@4.17.25)(apache-arrow@18.1.0)(typescript@5.9.3)
+      zod: 3.25.76
+    transitivePeerDependencies:
+      - '@aws-sdk/credential-providers'
+      - '@cfworker/json-schema'
+      - '@mongodb-js/zstd'
+      - '@napi-rs/canvas'
+      - '@types/express'
+      - apache-arrow
+      - aws-crt
+      - bufferutil
+      - canvas
+      - debug
+      - encoding
+      - ffmpeg-static
+      - gcp-metadata
+      - kerberos
+      - mongodb-client-encryption
+      - node-llama-cpp
+      - node-opus
+      - snappy
+      - socks
+      - supports-color
+      - typescript
+      - utf-8-validate
 
   '@tsconfig/node10@1.0.12': {}
 

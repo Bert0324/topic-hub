@@ -1,6 +1,6 @@
 {
   "name": "@topichub/core",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Framework-agnostic core library for TopicHub - event topic management, skill pipeline, and AI-driven workflows",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

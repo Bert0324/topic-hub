@@ -1,6 +1,6 @@
 {
   "name": "topichub-cli",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "bin": {
     "topichub-admin": "./dist/bin/topichub-admin.js"
   },
@@ -11,7 +11,7 @@
     "lint": "eslint src/"
   },
   "dependencies": {
-    "@topichub/core": "^0.0.2",
+    "@topichub/core": "^0.0.3",
     "@inquirer/prompts": "^8.4.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "eventsource": "^4.1.0",

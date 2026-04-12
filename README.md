@@ -34,17 +34,11 @@ This keeps collaboration fast, execution controllable, and history auditable.
 
 ## Live Experience Flow
 
-Join and run the full experience in minutes:
+Install the CLI globally: `npm i -g topichub-cli` (Node 20+). Then:
 
-1. Join the Discord community: [topic hub discord](https://discord.gg/C6fgRpNs)
-2. DM the bot and run `/id create` to self-register and get your identity token
-3. Ensure local tools are ready: `claude code` or `codex`, and `topichub-cli`
-4. Use live experience base URL: `https://hk.ltflange.cn`
-5. Run `topichub-admin init` (token is optional), then `topichub-admin login <identity-token>`
-6. Start local `serve` to get a pairing code
-7. DM the bot and run `/register <pairing-code>`
-8. Create a channel in the experience server and run `/create`
-9. Assign real tasks and watch the local executor return results into Discord
+1. Join the [Topic Hub Discord server](https://discord.gg/C6fgRpNs). In a **direct message (DM)** with the bot, run `/id create` to get your identity token.
+2. Install `claude code` or `codex`, run `topichub-admin init`, and paste the live base URL `https://hk.ltflange.cn` at **step 1** of the wizard (identity/admin token can be skipped), then `topichub-admin login <identity-token>`.
+3. Run `topichub-admin serve` for a pairing code. Back in that Discord server, DM the bot `/register <pairing-code>`, create a channel in the server, run `/create`, then assign tasks and watch results flow back from your local executor.
 
 ## What You Get
 
