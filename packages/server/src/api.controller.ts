@@ -1,7 +1,7 @@
 import {
   Body,
   Controller,
-  NotFoundException,
+  OnModuleInit,
   Post,
   Req,
   Res,
@@ -9,7 +9,9 @@ import {
   RawBodyRequest,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { HttpAdapterHost } from '@nestjs/core';
 import { Request, Response } from 'express';
+import type { Express } from 'express';
 import { Observable } from 'rxjs';
 import {
   HEARTBEAT_INTERVAL_MS,
@@ -21,18 +23,11 @@ import {
 } from '@topichub/core';
 import { TopicHubService } from './topichub.provider';
 
-/**
- * Relative POST path for OpenClaw noop chat (after global HTTP prefix).
- * Read from env when this module loads — `main.ts` imports `dotenv/config` first so `.env` applies.
- */
-function chatCompletionNoopPostPath(): string {
-  const rel =
-    process.env.TOPICHUB_CHAT_COMPLETION_NOOP_PATH?.trim() || 'v1/chat/completions';
+function normalizeChatCompletionNoopRelPath(raw: string | undefined): string {
+  const rel = raw?.trim() || 'v1/chat/completions';
   const normalized = rel.replace(/^\/+/, '').replace(/\/+$/g, '');
   return normalized.length > 0 ? normalized : 'v1/chat/completions';
 }
-
-const CHAT_COMPLETION_NOOP_ROUTE = chatCompletionNoopPostPath();
 
 function chatCompletionNoopExplicitlyDisabled(raw: string | undefined): boolean {
   const v = raw?.trim().toLowerCase();
@@ -40,18 +35,19 @@ function chatCompletionNoopExplicitlyDisabled(raw: string | undefined): boolean 
 }
 
 /**
- * Nest HTTP bindings only: paths, raw body, Express response, and RxJS `@Sse()` adapter.
- * Behaviour lives in `@topichub/core`.
+ * Nest HTTP bindings: decorators for webhook, native gateway, SSE; OpenClaw noop POST is
+ * registered on the underlying Express instance in {@link onModuleInit} so path/disable
+ * come from {@link ConfigService} without touching `main.ts`.
  */
 @Controller()
-export class TopicHubController {
+export class TopicHubController implements OnModuleInit {
   private readonly sseHeartbeatIntervalMs: number;
   private readonly chatCompletionNoopOptions: ChatCompletionNoopOptions;
-  private readonly chatCompletionNoopDisabled: boolean;
 
   constructor(
     private readonly hub: TopicHubService,
-    config: ConfigService,
+    private readonly config: ConfigService,
+    private readonly httpAdapterHost: HttpAdapterHost,
   ) {
     const raw = config.get<string>('TOPICHUB_SSE_HEARTBEAT_INTERVAL_MS');
     const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
@@ -64,9 +60,21 @@ export class TopicHubController {
       ...(noopId ? { id: noopId } : {}),
       ...(noopModel ? { model: noopModel } : {}),
     };
-    this.chatCompletionNoopDisabled = chatCompletionNoopExplicitlyDisabled(
-      config.get<string>('TOPICHUB_CHAT_COMPLETION_NOOP_ENABLED'),
+  }
+
+  onModuleInit() {
+    if (chatCompletionNoopExplicitlyDisabled(this.config.get<string>('TOPICHUB_CHAT_COMPLETION_NOOP_ENABLED'))) {
+      return;
+    }
+    const rel = normalizeChatCompletionNoopRelPath(
+      this.config.get<string>('TOPICHUB_CHAT_COMPLETION_NOOP_PATH'),
     );
+    const path = `/${rel}`;
+    const opts = this.chatCompletionNoopOptions;
+    const server = this.httpAdapterHost.httpAdapter.getInstance() as Express;
+    server.post(path, (_req, res) => {
+      res.json(buildChatCompletionNoopResponse(opts));
+    });
   }
 
   @Post('webhooks/openclaw')
@@ -93,14 +101,6 @@ export class TopicHubController {
       req.headers as Record<string, string | string[] | undefined>,
     );
     res.status(status).json(json);
-  }
-
-  @Post(CHAT_COMPLETION_NOOP_ROUTE)
-  handleChatCompletionNoop() {
-    if (this.chatCompletionNoopDisabled) {
-      throw new NotFoundException();
-    }
-    return buildChatCompletionNoopResponse(this.chatCompletionNoopOptions);
   }
 
   @Sse(`${NATIVE_INTEGRATION_SEGMENT}/stream`)

@@ -16,9 +16,9 @@ export function generateWebhookSecret(): string {
 }
 
 /**
- * Topic Hub Nest `POST …/webhooks/openclaw` may sit under a global path prefix
- * (`TOPICHUB_HTTP_PREFIX`). OpenClaw's noop model must use the same prefix for
- * `POST …/v1/chat/completions`, otherwise requests hit `/v1/…` on the origin and return 404.
+ * Derives the OpenClaw HTTP base from the webhook URL: any path segment(s) before
+ * `/webhooks/openclaw` (e.g. reverse-proxy mount) must also prefix `…/v1/chat/completions`,
+ * or the client hits `/v1/…` on the origin and gets 404.
  */
 export function openClawTopichubHttpBaseFromWebhookUrl(webhookUrl: string): string {
   const u = new URL(webhookUrl);
