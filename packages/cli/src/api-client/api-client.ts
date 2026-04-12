@@ -1,6 +1,6 @@
 import { loadAdminToken, loadIdentityToken, loadIdToken } from '../auth/auth.js';
 import { loadConfigOrNull } from '../config/config.js';
-import { postNativeGateway } from './native-gateway.js';
+import { normalizeTopicHubServerRoot, postNativeGateway } from './native-gateway.js';
 
 /** Strip trailing slashes so `${base}${path}` never produces `//` when path starts with `/`. */
 function normalizeBaseUrl(url: string): string {
@@ -17,7 +17,7 @@ export class ApiClient {
       baseUrl ??
       config?.serverUrl ??
       'http://localhost:3000';
-    this.baseUrl = normalizeBaseUrl(raw);
+    this.baseUrl = normalizeTopicHubServerRoot(normalizeBaseUrl(raw));
     if (token) this.token = token;
   }
 

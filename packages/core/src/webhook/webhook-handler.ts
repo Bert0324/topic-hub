@@ -38,6 +38,7 @@ export interface WebhookImSelfServeOps {
     displayName: string;
   }): Promise<ImSelfServeIdentitySnapshot>;
   getMeForIm(params: { platform: string; platformUserId: string }): Promise<ImSelfServeIdentitySnapshot | null>;
+  getByIdentityId(identityId: string): Promise<ImSelfServeIdentitySnapshot | null>;
 }
 
 export interface WebhookResult {
@@ -113,7 +114,7 @@ export class WebhookHandler {
 
     // /register <code> — DM only to protect pairing codes; group + valid code invalidates and rotates
     if (cmd.startsWith('/register ') || cmd === '/register') {
-      const code = cmd.startsWith('/register ') ? cmd.slice('/register '.length).trim() : '';
+      const code = this.extractPairingCodeFromRegisterCommand(cmd);
       if (!result.isDm) {
         return this.handleRegisterInGroup(result, code);
       }
@@ -230,7 +231,7 @@ export class WebhookHandler {
     if (sessionLive !== true) {
       this.sendThreadReply(
         result,
-        'Your linked executor session is not active or is out of date. Start `topichub-admin serve`, then use `/register <code>` with the new pairing code from the terminal.',
+        'Your linked executor session is not active or is out of date. Start `topichub-admin serve`, then DM `/register <code>` using the pairing code shown in the terminal.',
       ).catch((err) => this.logger.error('Failed to send unavailable executor notice', String(err)));
       return { success: true, response: { status: 'executor_unavailable' } };
     }
@@ -320,12 +321,21 @@ export class WebhookHandler {
 
     /** `/skills list` may be satisfied earlier without binding; DM also allows `list`/`star` here. */
     const skillsCommandsInDm = parsed.action === 'skills';
-    if (result.isDm && parsed.action !== 'create' && !skillsCommandsInDm) {
-      this.sendThreadReply(
-        result,
-        'This command can only be used in a topic group chat. Use `/create` to start a new topic.',
-      ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
-      return { success: true, response: { status: 'rejected_dm_not_allowed' } };
+    if (result.isDm) {
+      if (parsed.action === 'create') {
+        this.sendThreadReply(
+          result,
+          '`/create` only runs in a **server or group channel**, not in DM. Add the bot to a server, open a text channel, then run `/create <type>` there. In DM: `/id create`, `/register`, `/skills`, `/help`.',
+        ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+        return { success: true, response: { status: 'rejected_create_dm' } };
+      }
+      if (!skillsCommandsInDm) {
+        this.sendThreadReply(
+          result,
+          'This command only works in a **server or group channel**. Invite the bot to a channel, then run `/create <type>` to start a topic.',
+        ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+        return { success: true, response: { status: 'rejected_dm_not_allowed' } };
+      }
     }
 
     const route = this.router.route(parsed, context);
@@ -387,7 +397,8 @@ export class WebhookHandler {
         '**DM only** (direct message with bot):',
         '`/id create` · `/id me` identity (DM) · `/register <code>` bind executor · `/unregister` unbind · `/skills list` browse published skills (no link required) · `/skills star <name>` like/unlike (after `/register`, with serve running)',
         '',
-        '**Group only** (topic group chat):',
+        '**Group only** (server / group channel):',
+        '`/create <type>` new topic in **this channel**',
         '`/show` details · `/timeline` history · `/update --status <s>`',
         '`/assign --user <id>` · `/reopen` · `/history`',
         '`/search --type <t>` · `/use <skill>` invoke skill',
@@ -395,8 +406,8 @@ export class WebhookHandler {
         'Plain text (with an active topic) is sent to your local executor.',
         '`/RegisteredSkillName …` runs that skill via the local executor when the name matches a loaded skill.',
         '',
-        '**DM + Group:**',
-        '`/create <type>` new topic · `/help` this message',
+        '**Any chat:**',
+        '`/help` this message',
       ].join('\n');
     }
     if (typeof execResult.message === 'string' && execResult.message.trim()) {
@@ -491,14 +502,21 @@ export class WebhookHandler {
         );
         return { success: true, response: { status: 'id_me_usage' } };
       }
-      const snap = await this.imSelfServeOps.getMeForIm({
-        platform: result.platform,
-        platformUserId: result.userId,
-      });
+      let snap: ImSelfServeIdentitySnapshot | null = null;
+      const bound = await this.identityOps?.resolveUserByPlatform(result.platform, result.userId);
+      if (bound) {
+        snap = await this.imSelfServeOps.getByIdentityId(bound.topichubUserId);
+      }
+      if (!snap) {
+        snap = await this.imSelfServeOps.getMeForIm({
+          platform: result.platform,
+          platformUserId: result.userId,
+        });
+      }
       if (!snap) {
         this.sendThreadReply(
           result,
-          'No `/id create` registration for this IM account yet. Run `/id create` first (or ask a superadmin to provision you).',
+          'No identity found for this IM account yet. Run `/register <code>` to view your paired identity, or run `/id create` first.',
         ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
         return { success: true, response: { status: 'id_not_registered' } };
       }
@@ -620,10 +638,22 @@ export class WebhookHandler {
       this.logger.error('Register command failed', msg);
       await this.sendThreadReply(
         result,
-        'Invalid or expired pairing code. Get a fresh code from your local executor (`topichub-admin serve`).',
+        'Invalid pairing code. Copy the code shown next to `topichub-admin serve` (DM only) and try again.',
       );
       return { success: false, error: 'Failed to claim pairing code' };
     }
+  }
+
+  /**
+   * Pairing commands can arrive with extra text/newlines from some IM clients.
+   * We only treat the first non-whitespace token as the code.
+   */
+  private extractPairingCodeFromRegisterCommand(cmd: string): string {
+    if (cmd === '/register') return '';
+    const raw = cmd.slice('/register'.length).trim();
+    if (!raw) return '';
+    const [firstToken] = raw.split(/\s+/);
+    return firstToken?.trim() ?? '';
   }
 
   private async handleUnregister(result: OpenClawInboundResult): Promise<WebhookResult> {

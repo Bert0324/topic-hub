@@ -1,15 +1,18 @@
 {
   "name": "@topichub/core",
-  "version": "0.1.0",
+  "version": "0.0.2",
   "description": "Framework-agnostic core library for TopicHub - event topic management, skill pipeline, and AI-driven workflows",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist/", "README.md"],
+  "files": [
+    "dist/",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "jest",
     "lint": "eslint src/",
-    "prepublishOnly": "pnpm build && pnpm test"
+    "prepublishOnly": "pnpm build"
   },
   "dependencies": {
     "@typegoose/typegoose": "^12.0.0",

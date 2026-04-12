@@ -1,6 +1,9 @@
 import { EventSource } from 'eventsource';
 import { NATIVE_INTEGRATION_SEGMENT } from '@topichub/core';
-import { postNativeGateway } from '../../api-client/native-gateway.js';
+import {
+  normalizeTopicHubServerRoot,
+  postNativeGateway,
+} from '../../api-client/native-gateway.js';
 
 /** Server sends Mongo `_id`; normalize with `getDispatchId` before claim/complete APIs. */
 export interface DispatchEvent {
@@ -17,7 +20,7 @@ export interface DispatchEvent {
 
 export interface PairingRotatedPayload {
   code: string;
-  expiresAt: string;
+  expiresAt?: string;
 }
 
 export interface EventConsumerOptions {
@@ -87,7 +90,8 @@ export class EventConsumer {
       this.es = null;
     }
 
-    const url = `${this.options.serverUrl.replace(/\/+$/, '')}/${NATIVE_INTEGRATION_SEGMENT}/stream`;
+    const root = normalizeTopicHubServerRoot(this.options.serverUrl.replace(/\/+$/, ''));
+    const url = `${root}/${NATIVE_INTEGRATION_SEGMENT}/stream`;
     const es = new EventSource(url, {
       fetch: (input: any, init?: any) =>
         fetch(input, {
@@ -127,7 +131,7 @@ export class EventConsumer {
       es.addEventListener('pairing_rotated', ((evt: MessageEvent) => {
         try {
           const data = JSON.parse(String(evt.data)) as PairingRotatedPayload;
-          if (data?.code && data?.expiresAt) {
+          if (data?.code) {
             cb(data);
           }
         } catch {

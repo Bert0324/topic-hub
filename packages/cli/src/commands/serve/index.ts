@@ -13,6 +13,7 @@ import { TaskProcessor } from './task-processor.js';
 import { renderStatus, type ServeStatus, type EventLogEntry } from './status-display.js';
 import { resolveServeExecutorArgs } from './resolve-executor-args.js';
 import { normalizeAgentCwd, resolveServeInvocationDirectory } from './resolve-agent-cwd.js';
+import { bootstrapAgentRosterDirForServe } from './agent-roster.js';
 
 export async function handleServeCommand(args: string[]): Promise<void> {
   const config = loadConfig();
@@ -47,6 +48,13 @@ export async function handleServeCommand(args: string[]): Promise<void> {
   if (activeExecutor !== 'none' && !isAgentAvailable(activeExecutor as any)) {
     console.warn(
       `⚠ Executor "${activeExecutor}" not found on PATH. Agent execution may fail.`,
+    );
+  }
+
+  const rosterBootstrap = bootstrapAgentRosterDirForServe();
+  if (rosterBootstrap.usedFallback) {
+    console.warn(
+      `⚠ Agent roster storage under ~/.config is not writable; switched to "${rosterBootstrap.dir}" for this serve session.`,
     );
   }
 
@@ -94,14 +102,14 @@ export async function handleServeCommand(args: string[]): Promise<void> {
 
   // Generate pairing code for IM binding (shown in renderStatus — avoid console.log here: console.clear wipes it)
   try {
-    const pairingData = await postNativeGateway<{ code: string; expiresAt: string }>(
+    const pairingData = await postNativeGateway<{ code: string; expiresAt?: string }>(
       baseUrl,
       'executors.pairing_code',
       {},
       { authorization: executorToken },
     );
     pairingCode = pairingData.code;
-    pairingExpiresAt = pairingData.expiresAt;
+    pairingExpiresAt = pairingData.expiresAt ?? null;
   } catch (err) {
     pairingWarning = err instanceof Error ? err.message : 'Could not reach pairing-code gateway op';
   }
@@ -239,7 +247,7 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     },
     onPairingRotated: (payload) => {
       status.pairingCode = payload.code;
-      status.pairingExpiresAt = payload.expiresAt;
+      status.pairingExpiresAt = payload.expiresAt ?? null;
       status.pairingWarning = null;
       status.pairingRotatedNotice =
         'Pairing code was rotated (previous code was exposed). Copy the new code below; use /register in DM only.';

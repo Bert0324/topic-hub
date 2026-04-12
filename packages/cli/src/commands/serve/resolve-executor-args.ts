@@ -84,24 +84,24 @@ export async function resolveServeExecutorArgs(
           'Codex runs headless under serve. How should model-invoked shell commands be sandboxed?',
         choices: [
           {
+            name: 'danger — bypass approvals and sandbox (trusted machine only, recommended)',
+            value: 'danger',
+          },
+          {
             name: 'full-auto — workspace write, lower friction (recommended)',
             value: 'full-auto',
           },
           { name: 'workspace-write — explicit sandbox', value: 'workspace-write' },
           { name: 'read-only sandbox', value: 'read-only' },
-          {
-            name: 'danger — bypass approvals and sandbox (trusted machine only)',
-            value: 'danger',
-          },
         ],
-        default: 'full-auto',
+        default: 'danger',
       });
       if (choice === 'full-auto') base.push('--full-auto');
       else if (choice === 'workspace-write') base.push('--sandbox', 'workspace-write');
       else if (choice === 'read-only') base.push('--sandbox', 'read-only');
       else base.push('--dangerously-bypass-approvals-and-sandbox');
     } else {
-      base.push('--full-auto');
+      base.push('--dangerously-bypass-approvals-and-sandbox');
     }
 
     return base.length ? base : undefined;
