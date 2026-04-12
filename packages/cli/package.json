@@ -1,7 +1,6 @@
 {
-  "name": "@topichub/cli",
-  "version": "0.1.0",
-  "private": true,
+  "name": "topichub-cli",
+  "version": "0.0.3",
   "bin": {
     "topichub-admin": "./dist/bin/topichub-admin.js"
   },
@@ -12,7 +11,7 @@
     "lint": "eslint src/"
   },
   "dependencies": {
-    "@topichub/core": "workspace:*",
+    "@topichub/core": "^0.0.2",
     "@inquirer/prompts": "^8.4.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "eventsource": "^4.1.0",
@@ -23,6 +22,9 @@
     "pastel": "^3.0.0",
     "react": "^18.3.0",
     "zod": "^3.23.0"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "devDependencies": {
     "@types/eventsource": "^3.0.0",
