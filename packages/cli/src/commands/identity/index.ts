@@ -27,14 +27,14 @@ export async function handleIdentityCommand(
     case 'me': {
       const client = buildClient();
       try {
-        const result = await client.get<{
+        const result = await client.nativeGateway<{
           uniqueId: string;
           displayName: string;
           isSuperAdmin: boolean;
           status: string;
           executorCount: number;
           createdAt: string;
-        }>('/api/v1/identity/me');
+        }>('identity.me', {});
 
         const badge = result.isSuperAdmin ? ' [superadmin]' : '';
         console.log(`\n  ${result.uniqueId}${badge} — ${result.displayName}`);
@@ -59,13 +59,13 @@ export async function handleIdentityCommand(
       }
       const client = buildClient();
       try {
-        const result = await client.post<{
+        const result = await client.nativeGateway<{
           id: string;
           uniqueId: string;
           displayName: string;
           token: string;
           message: string;
-        }>('/api/v1/admin/identities', { uniqueId, displayName: name });
+        }>('admin.identities.create', { uniqueId, displayName: name });
 
         console.log('\n  ✓ Identity created\n');
         console.log(`    ID:           ${result.id}`);
@@ -82,7 +82,7 @@ export async function handleIdentityCommand(
     case 'list': {
       const client = buildClient();
       try {
-        const result = await client.get<{ identities: Array<{
+        const result = await client.nativeGateway<{ identities: Array<{
           id: string;
           uniqueId: string;
           displayName: string;
@@ -90,7 +90,7 @@ export async function handleIdentityCommand(
           status: string;
           executorCount: number;
           createdAt: string;
-        }> }>('/api/v1/admin/identities');
+        }> }>('admin.identities.list', {});
 
         console.log('\n  Identities:\n');
         if (!result.identities.length) {
@@ -118,8 +118,9 @@ export async function handleIdentityCommand(
       }
       const client = buildClient();
       try {
-        const result = await client.post<{ status: string; executorsRevoked: number }>(
-          `/api/v1/admin/identities/${id}/revoke`,
+        const result = await client.nativeGateway<{ status: string; executorsRevoked: number }>(
+          'admin.identities.revoke',
+          { id },
         );
         console.log(`\n  ✓ Identity revoked (${result.executorsRevoked} executor(s) also revoked)\n`);
       } catch (err) {
@@ -137,8 +138,9 @@ export async function handleIdentityCommand(
       }
       const client = buildClient();
       try {
-        const result = await client.post<{ token: string; executorsRevoked: number; message: string }>(
-          `/api/v1/admin/identities/${id}/regenerate-token`,
+        const result = await client.nativeGateway<{ token: string; executorsRevoked: number; message: string }>(
+          'admin.identities.regenerate_token',
+          { id },
         );
         console.log('\n  ✓ Token regenerated\n');
         console.log(`    New Token: ${result.token}`);

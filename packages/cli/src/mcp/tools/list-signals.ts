@@ -13,7 +13,7 @@ export function registerListSignals(server: McpServer, api: ApiClient): void {
     schema,
     async ({ topicId }: { topicId: string }) => {
       try {
-        const topic = await api.get<{ signals: any[] }>(`/api/v1/topics/${topicId}`);
+        const topic = await api.nativeGateway<{ signals: any[] }>('topics.get', { id: topicId });
         const signals = topic.signals ?? [];
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(signals, null, 2) }],

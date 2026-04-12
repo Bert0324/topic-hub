@@ -16,7 +16,7 @@ export function registerUpdateTopic(server: McpServer, api: ApiClient): void {
     schema,
     async ({ topicId, ...updates }: { topicId: string; status?: string; metadata?: Record<string, unknown>; tags?: string[] }) => {
       try {
-        const result = await api.patch(`/api/v1/topics/${topicId}`, updates);
+        const result = await api.nativeGateway('topics.patch', { id: topicId, patch: updates });
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
         };

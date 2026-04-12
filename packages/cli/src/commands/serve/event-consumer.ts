@@ -1,5 +1,6 @@
 import { EventSource } from 'eventsource';
-import { ApiClient } from '../../api-client/api-client.js';
+import { NATIVE_INTEGRATION_SEGMENT } from '@topichub/core';
+import { postNativeGateway } from '../../api-client/native-gateway.js';
 
 /** Server sends Mongo `_id`; normalize with `getDispatchId` before claim/complete APIs. */
 export interface DispatchEvent {
@@ -21,7 +22,7 @@ export interface PairingRotatedPayload {
 
 export interface EventConsumerOptions {
   serverUrl: string;
-  /** Bearer token: must be the active `executorToken` from `POST /api/v1/executors/register`. */
+  /** Bearer token: active `executorToken` from native gateway `executors.register`. */
   token: string;
   onDispatch: (event: DispatchEvent) => void;
   onConnected: () => void;
@@ -37,13 +38,9 @@ const SSE_RECONNECT_MS = 3_000;
 export class EventConsumer {
   private es: EventSource | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-  private readonly api: ApiClient;
   private closed = false;
 
-  constructor(private readonly options: EventConsumerOptions) {
-    this.api = new ApiClient(options.serverUrl);
-    this.api.setToken(options.token);
-  }
+  constructor(private readonly options: EventConsumerOptions) {}
 
   async start(): Promise<void> {
     await this.catchUp();
@@ -64,8 +61,12 @@ export class EventConsumer {
 
   private async catchUp(): Promise<void> {
     try {
-      const url = `/api/v1/dispatches?status=unclaimed&limit=50`;
-      const data = await this.api.get<{ dispatches: DispatchEvent[] }>(url);
+      const data = await postNativeGateway<{ dispatches: DispatchEvent[] }>(
+        this.options.serverUrl,
+        'dispatches.list',
+        { status: 'unclaimed', limit: 50 },
+        { authorization: this.options.token },
+      );
       for (const dispatch of data.dispatches) {
         this.options.onDispatch(dispatch);
       }
@@ -86,7 +87,7 @@ export class EventConsumer {
       this.es = null;
     }
 
-    const url = `${this.options.serverUrl}/api/v1/dispatches/stream`;
+    const url = `${this.options.serverUrl.replace(/\/+$/, '')}/${NATIVE_INTEGRATION_SEGMENT}/stream`;
     const es = new EventSource(url, {
       fetch: (input: any, init?: any) =>
         fetch(input, {

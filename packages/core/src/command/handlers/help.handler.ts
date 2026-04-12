@@ -27,6 +27,11 @@ export class HelpHandler {
         command: '/skills star <skill-name>',
         description: 'DM only: like or unlike a published skill (requires `/register` + active serve — same as CLI `skills star`)',
       },
+      {
+        command: '/id create  ·  /id me',
+        description:
+          'DM only: `/id create` register this IM account (get identity token); `/id me` show your name, id (uniqueId), and token (self-serve onboarding)',
+      },
       { command: '/register <code>', description: 'DM: bind this IM user to your local executor (code from serve)' },
       { command: '/unregister', description: 'DM: remove executor binding' },
       {
@@ -41,7 +46,7 @@ export class HelpHandler {
       success: true,
       data: { commands },
       message:
-        'Lifecycle: register in DM → /create in group → plain text or `/agent #M …` / `/SkillName` to work → /update --status to progress → closed frees the group for a new /create; /reopen when needed.',
+        'Lifecycle: `/id create` or superadmin token in DM (identity) → `/register` with serve code (link executor) → /create in group → plain text or `/agent #M …` / `/SkillName` to work → /update --status to progress → closed frees the group for a new /create; /reopen when needed.',
     };
   }
 }

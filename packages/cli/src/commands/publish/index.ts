@@ -195,7 +195,7 @@ export async function handlePublishCommand(args: string[]): Promise<void> {
   console.log(`Publishing ${skill.name}@${versionLabel} to ${serverUrl}…`);
 
   try {
-    const result = await client.post('/admin/skills/publish', payloadParsed.data);
+    const result = await client.publishSkills(payloadParsed.data);
 
     const body = result as {
       published?: Array<{ name: string; status: string }>;

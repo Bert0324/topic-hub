@@ -9,6 +9,7 @@ export LOG_FORMAT="pretty"
 export PORT="3000"
 
 # ── OpenClaw Bridge ────────────────────────────────────────
+# Webhook path matches Nest routes at server root (no Nest `setGlobalPrefix`).
 export TOPICHUB_BRIDGE_WEBHOOK_URL="http://127.0.0.1:${PORT}/webhooks/openclaw"
 
 # Discord

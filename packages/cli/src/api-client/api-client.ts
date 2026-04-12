@@ -1,5 +1,6 @@
 import { loadAdminToken, loadIdToken } from '../auth/auth.js';
 import { loadConfigOrNull } from '../config/config.js';
+import { postNativeGateway } from './native-gateway.js';
 
 /** Strip trailing slashes so `${base}${path}` never produces `//` when path starts with `/`. */
 function normalizeBaseUrl(url: string): string {
@@ -82,7 +83,27 @@ export class ApiClient {
   }
 
   async publishSkills(payload: { skills: unknown[] }): Promise<unknown> {
-    return this.post('/admin/skills/publish', payload);
+    await this.ensureAuth();
+    return postNativeGateway(this.baseUrl, 'admin.skills.publish', payload as Record<string, unknown>, {
+      authorization: this.token!,
+    });
+  }
+
+  /** Authenticated native gateway (`POST /topic-hub`). */
+  async nativeGateway<T = unknown>(
+    op: string,
+    payload: Record<string, unknown> = {},
+  ): Promise<T> {
+    await this.ensureAuth();
+    return postNativeGateway<T>(this.baseUrl, op, payload, { authorization: this.token! });
+  }
+
+  /** Gateway call without Bearer (e.g. public skill catalog). */
+  async nativeGatewayPublic<T = unknown>(
+    op: string,
+    payload: Record<string, unknown> = {},
+  ): Promise<T> {
+    return postNativeGateway<T>(this.baseUrl, op, payload, {});
   }
 
   async createGroup(payload: { name: string; platform: string; memberIds: string[]; topicType?: string }): Promise<unknown> {
@@ -91,6 +112,6 @@ export class ApiClient {
 
   /** Executor-only: returns dispatch id/status/topic when the bearer matches `targetExecutorToken`. */
   getDispatchForExecutor(id: string): Promise<{ id: string; status: string; topicId: string }> {
-    return this.get(`/api/v1/dispatches/${encodeURIComponent(id)}`);
+    return this.nativeGateway('dispatches.get', { id });
   }
 }

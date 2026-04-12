@@ -15,6 +15,22 @@ export function generateWebhookSecret(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
+/**
+ * Derives the OpenClaw HTTP base from the webhook URL: any path segment(s) before
+ * `/webhooks/openclaw` (e.g. reverse-proxy mount) must also prefix `…/v1/chat/completions`,
+ * or the client hits `/v1/…` on the origin and gets 404.
+ */
+export function openClawTopichubHttpBaseFromWebhookUrl(webhookUrl: string): string {
+  const u = new URL(webhookUrl);
+  const marker = '/webhooks/openclaw';
+  const i = u.pathname.indexOf(marker);
+  if (i < 0) {
+    return u.origin;
+  }
+  const prefix = u.pathname.slice(0, i).replace(/\/+$/, '');
+  return prefix ? `${u.origin}${prefix}` : u.origin;
+}
+
 export async function findAvailablePort(): Promise<number> {
   const { createServer } = await import('node:net');
   return new Promise((resolve, reject) => {
@@ -132,7 +148,7 @@ function buildOpenClawJson(
     models: {
       providers: {
         topichub: {
-          baseUrl: new URL(bridgeConfig.webhookUrl).origin + '/v1',
+          baseUrl: `${openClawTopichubHttpBaseFromWebhookUrl(bridgeConfig.webhookUrl)}/v1`,
           apiKey: 'noop',
           api: 'openai-completions',
           models: [

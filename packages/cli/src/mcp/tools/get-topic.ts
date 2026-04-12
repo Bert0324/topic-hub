@@ -11,7 +11,7 @@ export function registerGetTopic(server: McpServer, api: ApiClient): void {
     schema,
     async ({ topicId }: { topicId: string }) => {
       try {
-        const topic = await api.get(`/api/v1/topics/${topicId}`);
+        const topic = await api.nativeGateway('topics.get', { id: topicId });
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(topic, null, 2) }],
         };

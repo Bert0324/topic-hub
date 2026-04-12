@@ -15,7 +15,8 @@ export function registerAddTimelineEntry(server: McpServer, api: ApiClient): voi
     schema,
     async ({ topicId, actionType, payload }: { topicId: string; actionType: string; payload: Record<string, unknown> }) => {
       try {
-        const result = await api.post(`/api/v1/topics/${topicId}/timeline`, {
+        const result = await api.nativeGateway('topics.timeline.append', {
+          topicId,
           actionType,
           payload,
         });

@@ -41,6 +41,10 @@ Auto-generated from all feature plans. Last updated: 2026-04-12
 - MongoDB (existing `im_bindings`, `user_identity_bindings`, `task_dispatches`, …); **local agent roster** v1 proposed as **executor-local persisted JSON** (see `research.md`) (015-im-agent-command)
 - TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Mongoose 8 / Typegoose 12, `@topichub/core` command router + webhook + dispatch pipeline, Ink/React CLI for `serve` (015-im-agent-command)
 - MongoDB 7 — `im_bindings`, `pairing_codes`, `executor_heartbeats`, `task_dispatches`; local JSON roster under `~/.config/topic-hub/agent-roster/` (015-im-agent-command)
+- TypeScript 5.5, Node.js 20 LTS + NestJS 10 (`packages/server`), `@topichub/core` (webhook, identity, dispatch, OpenClaw bridge), Mongoose/Typegoose (existing persistence) (017-simplify-core-integration)
+- MongoDB (existing `im_bindings` / identity collections—see `data-model.md`) (017-simplify-core-integration)
+- TypeScript 5.5, Node.js 20 LTS + `@topichub/core` (OpenClaw bridge, `WebhookHandler`, `IdentityService`, `SuperadminService`), NestJS 10 (`packages/server`), Mongoose / Typegoose (019-im-first-identification)
+- MongoDB — existing `identities`, `user_identity_bindings`, `executor_registrations` (or equivalent); **new** durable `(platform, platformUserId) → identityId` link for IM self-signup (see `data-model.md`) (019-im-first-identification)
 
 - TypeScript 5.x, Node.js 20 LTS + NestJS 10 (server), Ink 5 + React 18 (CLI), Prisma (ORM), zod (validation) (001-topic-hub-app)
 
@@ -60,9 +64,9 @@ npm test && npm run lint
 TypeScript 5.x, Node.js 20 LTS: Follow standard conventions
 
 ## Recent Changes
+- 019-im-first-identification: Added TypeScript 5.5, Node.js 20 LTS + `@topichub/core` (OpenClaw bridge, `WebhookHandler`, `IdentityService`, `SuperadminService`), NestJS 10 (`packages/server`), Mongoose / Typegoose
+- 017-simplify-core-integration: Added TypeScript 5.5, Node.js 20 LTS + NestJS 10 (`packages/server`), `@topichub/core` (webhook, identity, dispatch, OpenClaw bridge), Mongoose/Typegoose (existing persistence)
 - 015-im-agent-command: Added TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Mongoose 8 / Typegoose 12, `@topichub/core` command router + webhook + dispatch pipeline, Ink/React CLI for `serve`
-- 015-im-agent-command: Added TypeScript 5.5, Node.js 20 LTS + NestJS 10 (`packages/server`), `@topichub/core` (command router, webhook, identity, dispatch), CLI `serve` + `TaskProcessor` (`packages/cli`)
-- 014-published-skill-im-routing: Added TypeScript 5.5, Node.js 20 LTS + NestJS 10 (server), Mongoose 8 / Typegoose 12, existing `@topichub/core` command router & webhook pipeline
 
 
 <!-- MANUAL ADDITIONS START -->

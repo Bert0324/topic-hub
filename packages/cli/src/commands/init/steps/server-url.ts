@@ -1,4 +1,5 @@
 import { input } from '@inquirer/prompts';
+import { postNativeGateway } from '../../../api-client/native-gateway.js';
 
 export async function promptServerUrl(currentValue?: string): Promise<string> {
   const serverUrl = await input({
@@ -19,13 +20,16 @@ export async function promptServerUrl(currentValue?: string): Promise<string> {
 
   const baseUrl = serverUrl.replace(/\/+$/, '');
 
-  // Validate connection (health is under the configured base path, not server root)
+  // Validate connection: native integration gateway only (`POST …/topic-hub`, op `health`)
   process.stdout.write('  Connecting... ');
   try {
-    const res = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = (await res.json()) as { version?: string };
-    console.log(`✓ Connected (v${data.version ?? 'unknown'})`);
+    await postNativeGateway<{ status?: string }>(
+      baseUrl,
+      'health',
+      {},
+      { signal: AbortSignal.timeout(5000) },
+    );
+    console.log('✓ Connected (native gateway)');
   } catch (err) {
     console.log('✗ Failed');
     const msg = err instanceof Error ? err.message : String(err);

@@ -34,12 +34,14 @@ import { HeartbeatService } from './services/heartbeat.service';
 import type { ExecutorHeartbeatMeta, RegisterExecutorResult } from './services/heartbeat.service';
 import { QaService } from './services/qa.service';
 import { SuperadminService } from './services/superadmin.service';
+import { ImSelfServeIdentityService } from './services/im-self-serve-identity.service';
 import { SkillCenterService } from './services/skill-center.service';
 import { PublishedSkillCatalog } from './services/published-skill-catalog';
 import type { InitResult, CreateIdentityResult } from './services/superadmin.service';
 import { AuthService } from './services/auth.service';
 import type { ResolvedAuth } from './services/auth.service';
 import { Identity } from './entities/identity.entity';
+import { ImIdentityLink } from './entities/im-identity-link.entity';
 import { ExecutorRegistration } from './entities/executor-registration.entity';
 import { ImBinding } from './entities/im-binding.entity';
 import { formatQaReminderMessage } from './im/im-list-format.js';
@@ -75,10 +77,13 @@ import {
   WebhookResult,
   WebhookIdentityOps,
   WebhookHeartbeatOps,
+  WebhookImSelfServeOps,
 } from './webhook/webhook-handler';
 import { OpenClawBridge } from './bridge/openclaw-bridge';
 import { BridgeManager } from './bridge/bridge-manager';
 import type { OpenClawConfig, BridgeConfig } from './bridge/openclaw-types';
+import { NativeIntegrationGateway } from './gateway/native-integration-gateway';
+import { SkillCenterHttpAdapter } from './gateway/skill-center-http-adapter';
 
 // --- Operation namespace types ---
 
@@ -141,6 +146,13 @@ export interface WebhookOperations {
     rawBody?: Buffer | string,
     headers?: Record<string, string | string[] | undefined>,
   ): Promise<WebhookResult>;
+}
+
+export interface NativeGatewayOperations {
+  handle(
+    body: unknown,
+    headers: Record<string, string | string[] | undefined>,
+  ): Promise<{ status: number; body: unknown }>;
 }
 
 export interface MessagingOperations {
@@ -329,6 +341,8 @@ export class TopicHub {
     private readonly authServiceNew: AuthService,
     private readonly publishedSkillCatalog: PublishedSkillCatalog,
     private readonly skillCenterService: SkillCenterService,
+    private readonly nativeIntegrationGateway: NativeIntegrationGateway,
+    private readonly skillCenterHttpAdapter: SkillCenterHttpAdapter,
   ) {}
 
   static async create(config: TopicHubConfig): Promise<TopicHub> {
@@ -369,6 +383,7 @@ export class TopicHub {
     const ExecutorHeartbeatModel = model(ExecutorHeartbeat, 'executor_heartbeats');
     const QaExchangeModel = model(QaExchange, 'qa_exchanges');
     const IdentityModel = model(Identity, 'identities');
+    const ImIdentityLinkModel = model(ImIdentityLink, 'im_identity_links');
     const ExecutorRegistrationModel = model(ExecutorRegistration, 'executor_registrations');
     const ImBindingModel = model(ImBinding, 'im_bindings');
     const SkillLikeModel = model(SkillLike, 'skill_likes');
@@ -395,6 +410,11 @@ export class TopicHub {
     const heartbeatService = new HeartbeatService(ExecutorHeartbeatModel, loggerFactory('HeartbeatService'));
     const qaService = new QaService(QaExchangeModel, loggerFactory('QaService'));
     const superadminService = new SuperadminService(IdentityModel, ExecutorRegistrationModel, loggerFactory('SuperadminService'));
+    const imSelfServeIdentityService = new ImSelfServeIdentityService(
+      IdentityModel,
+      ImIdentityLinkModel,
+      loggerFactory('ImSelfServeIdentity'),
+    );
     const authServiceNew = new AuthService(IdentityModel, ExecutorRegistrationModel);
 
     let bridge: OpenClawBridge | null = null;
@@ -520,6 +540,11 @@ export class TopicHub {
         heartbeatService.isBoundExecutorSessionLive(topichubUserId, boundExecutorToken),
     };
 
+    const webhookImSelfServeOps: WebhookImSelfServeOps = {
+      createFromIm: (p) => imSelfServeIdentityService.createFromIm(p),
+      getMeForIm: (p) => imSelfServeIdentityService.getMeForIm(p),
+    };
+
     const webhookHandler = new WebhookHandler(
       commandParser,
       commandRouter,
@@ -530,6 +555,7 @@ export class TopicHub {
       bridge ?? undefined,
       webhookIdentityOps,
       webhookHeartbeatOps,
+      webhookImSelfServeOps,
       publishedSkillCatalog,
     );
 
@@ -549,6 +575,17 @@ export class TopicHub {
 
     // Init dispatch
     dispatchService.init();
+
+    const hubHolder: { current?: TopicHub } = {};
+    const nativeIntegrationGateway = new NativeIntegrationGateway(() => {
+      const h = hubHolder.current;
+      if (!h) {
+        throw new TopicHubError('Topic Hub not initialized');
+      }
+      return h;
+    });
+
+    const skillCenterHttpAdapter = new SkillCenterHttpAdapter(skillCenterService, authServiceNew);
 
     const hub = new TopicHub(
       connection,
@@ -574,7 +611,11 @@ export class TopicHub {
       authServiceNew,
       publishedSkillCatalog,
       skillCenterService,
+      nativeIntegrationGateway,
+      skillCenterHttpAdapter,
     );
+
+    hubHolder.current = hub;
 
     hub.startReminderTimer();
 
@@ -619,6 +660,15 @@ export class TopicHub {
         );
         if (sessionLive) {
           // Heartbeat says the executor is up — skip noisy group pings while the queue catches up.
+          continue;
+        }
+
+        // Unclaimed rows may still reference an older `targetExecutorToken` after the user
+        // re-ran `serve` or re-registered; `isBoundExecutorSessionLive` is then false even though
+        // `serve` is healthy. Do not DM "no heartbeat" in that case.
+        const anyFreshHeartbeat = await this.heartbeatService.isAvailable(topichubUserId);
+        if (anyFreshHeartbeat) {
+          await this.dispatchService.markReminderSent(dispatch._id.toString());
           continue;
         }
 
@@ -815,6 +865,14 @@ export class TopicHub {
         headers?: Record<string, string | string[] | undefined>,
       ) => this.webhookHandler.handleOpenClaw(payload, rawBody, headers),
     };
+  }
+
+  get nativeGateway(): NativeGatewayOperations {
+    return this.nativeIntegrationGateway;
+  }
+
+  get skillCenterHttp(): SkillCenterHttpAdapter {
+    return this.skillCenterHttpAdapter;
   }
 
   get messaging(): MessagingOperations {
