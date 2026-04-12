@@ -28,13 +28,85 @@ function tokenHash(token: string): string {
   return crypto.createHash('sha256').update(token, 'utf8').digest('hex').slice(0, 24);
 }
 
+function getDefaultAgentRosterBaseDir(homeDir = os.homedir()): string {
+  return path.join(homeDir, '.config', 'topic-hub', 'agent-roster');
+}
+
+function getServeFallbackAgentRosterBaseDir(homeDir = os.homedir()): string {
+  return path.join(homeDir, '.topic-hub', 'agent-roster');
+}
+
+function isPermissionError(err: unknown): err is NodeJS.ErrnoException {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const code = (err as NodeJS.ErrnoException).code;
+  return code === 'EACCES' || code === 'EPERM';
+}
+
 /** Override with a writable directory if `~/.config/...` is not creatable (e.g. root-owned `~/.config`). */
 export function getAgentRosterBaseDir(): string {
   const fromEnv = process.env.TOPIC_HUB_AGENT_ROSTER_DIR?.trim();
   if (fromEnv) {
     return path.resolve(fromEnv);
   }
-  return path.join(os.homedir(), '.config', 'topic-hub', 'agent-roster');
+  return getDefaultAgentRosterBaseDir();
+}
+
+export interface ServeRosterBootstrapResult {
+  dir: string;
+  usedFallback: boolean;
+}
+
+export interface ServeRosterBootstrapOptions {
+  homeDir?: string;
+}
+
+/**
+ * Preflight roster storage at `serve` startup:
+ * - prefer `TOPIC_HUB_AGENT_ROSTER_DIR` (if set)
+ * - otherwise use default `~/.config/topic-hub/agent-roster`
+ * - if default is not writable, auto-fallback to `~/.topic-hub/agent-roster`
+ */
+export function bootstrapAgentRosterDirForServe(
+  options: ServeRosterBootstrapOptions = {},
+): ServeRosterBootstrapResult {
+  const configured = process.env.TOPIC_HUB_AGENT_ROSTER_DIR?.trim();
+  if (configured) {
+    const configuredDir = path.resolve(configured);
+    ensureAgentRosterDir(configuredDir);
+    return { dir: configuredDir, usedFallback: false };
+  }
+
+  const homeDir =
+    typeof options.homeDir === 'string' && options.homeDir.trim().length > 0
+      ? path.resolve(options.homeDir)
+      : os.homedir();
+  const defaultDir = getDefaultAgentRosterBaseDir(homeDir);
+  try {
+    ensureAgentRosterDir(defaultDir);
+    return { dir: defaultDir, usedFallback: false };
+  } catch (e) {
+    if (!isPermissionError(e)) {
+      throw e;
+    }
+  }
+
+  const fallbackDir = getServeFallbackAgentRosterBaseDir(homeDir);
+  try {
+    ensureAgentRosterDir(fallbackDir);
+  } catch (fallbackErr) {
+    if (isPermissionError(fallbackErr)) {
+      throw new Error(
+        `Cannot create default agent roster directory "${defaultDir}" and fallback "${fallbackDir}": ${fallbackErr.message}. ` +
+          'Set TOPIC_HUB_AGENT_ROSTER_DIR to a writable path.',
+      );
+    }
+    throw fallbackErr;
+  }
+
+  process.env.TOPIC_HUB_AGENT_ROSTER_DIR = fallbackDir;
+  return { dir: fallbackDir, usedFallback: true };
 }
 
 function ensureAgentRosterDir(dir: string): void {
@@ -43,9 +115,11 @@ function ensureAgentRosterDir(dir: string): void {
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
     if (err.code === 'EACCES' || err.code === 'EPERM') {
-      throw new Error(
+      const wrapped = new Error(
         `Cannot create agent roster directory "${dir}": ${err.message}. On macOS/Linux, fix ownership of ~/.config (e.g. sudo chown -R "$(whoami)" ~/.config) or set TOPIC_HUB_AGENT_ROSTER_DIR to a writable path.`,
-      );
+      ) as NodeJS.ErrnoException;
+      wrapped.code = err.code;
+      throw wrapped;
     }
     throw e;
   }

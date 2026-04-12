@@ -89,7 +89,9 @@ function buildOpenClawJson(
     };
     if (d.guildId) {
       discordEntry.guilds = {
-        [d.guildId]: { requireMention: true },
+        // TopicHub expects plain text and slash-style commands in group channels;
+        // requiring mentions drops valid messages (e.g. "/agent list").
+        [d.guildId]: { requireMention: false },
       };
     }
     channels.discord = discordEntry;

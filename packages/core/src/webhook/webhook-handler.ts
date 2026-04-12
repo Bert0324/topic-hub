@@ -38,6 +38,7 @@ export interface WebhookImSelfServeOps {
     displayName: string;
   }): Promise<ImSelfServeIdentitySnapshot>;
   getMeForIm(params: { platform: string; platformUserId: string }): Promise<ImSelfServeIdentitySnapshot | null>;
+  getByIdentityId(identityId: string): Promise<ImSelfServeIdentitySnapshot | null>;
 }
 
 export interface WebhookResult {
@@ -113,7 +114,7 @@ export class WebhookHandler {
 
     // /register <code> — DM only to protect pairing codes; group + valid code invalidates and rotates
     if (cmd.startsWith('/register ') || cmd === '/register') {
-      const code = cmd.startsWith('/register ') ? cmd.slice('/register '.length).trim() : '';
+      const code = this.extractPairingCodeFromRegisterCommand(cmd);
       if (!result.isDm) {
         return this.handleRegisterInGroup(result, code);
       }
@@ -501,14 +502,21 @@ export class WebhookHandler {
         );
         return { success: true, response: { status: 'id_me_usage' } };
       }
-      const snap = await this.imSelfServeOps.getMeForIm({
-        platform: result.platform,
-        platformUserId: result.userId,
-      });
+      let snap: ImSelfServeIdentitySnapshot | null = null;
+      const bound = await this.identityOps?.resolveUserByPlatform(result.platform, result.userId);
+      if (bound) {
+        snap = await this.imSelfServeOps.getByIdentityId(bound.topichubUserId);
+      }
+      if (!snap) {
+        snap = await this.imSelfServeOps.getMeForIm({
+          platform: result.platform,
+          platformUserId: result.userId,
+        });
+      }
       if (!snap) {
         this.sendThreadReply(
           result,
-          'No `/id create` registration for this IM account yet. Run `/id create` first (or ask a superadmin to provision you).',
+          'No identity found for this IM account yet. Run `/register <code>` to view your paired identity, or run `/id create` first.',
         ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
         return { success: true, response: { status: 'id_not_registered' } };
       }
@@ -634,6 +642,18 @@ export class WebhookHandler {
       );
       return { success: false, error: 'Failed to claim pairing code' };
     }
+  }
+
+  /**
+   * Pairing commands can arrive with extra text/newlines from some IM clients.
+   * We only treat the first non-whitespace token as the code.
+   */
+  private extractPairingCodeFromRegisterCommand(cmd: string): string {
+    if (cmd === '/register') return '';
+    const raw = cmd.slice('/register'.length).trim();
+    if (!raw) return '';
+    const [firstToken] = raw.split(/\s+/);
+    return firstToken?.trim() ?? '';
   }
 
   private async handleUnregister(result: OpenClawInboundResult): Promise<WebhookResult> {

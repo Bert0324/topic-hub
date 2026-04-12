@@ -13,6 +13,7 @@ import { TaskProcessor } from './task-processor.js';
 import { renderStatus, type ServeStatus, type EventLogEntry } from './status-display.js';
 import { resolveServeExecutorArgs } from './resolve-executor-args.js';
 import { normalizeAgentCwd, resolveServeInvocationDirectory } from './resolve-agent-cwd.js';
+import { bootstrapAgentRosterDirForServe } from './agent-roster.js';
 
 export async function handleServeCommand(args: string[]): Promise<void> {
   const config = loadConfig();
@@ -44,6 +45,13 @@ export async function handleServeCommand(args: string[]): Promise<void> {
   if (activeExecutor !== 'none' && !isAgentAvailable(activeExecutor as any)) {
     console.warn(
       `⚠ Executor "${activeExecutor}" not found on PATH. Agent execution may fail.`,
+    );
+  }
+
+  const rosterBootstrap = bootstrapAgentRosterDirForServe();
+  if (rosterBootstrap.usedFallback) {
+    console.warn(
+      `⚠ Agent roster storage under ~/.config is not writable; switched to "${rosterBootstrap.dir}" for this serve session.`,
     );
   }
 

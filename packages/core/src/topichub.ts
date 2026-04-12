@@ -543,6 +543,7 @@ export class TopicHub {
     const webhookImSelfServeOps: WebhookImSelfServeOps = {
       createFromIm: (p) => imSelfServeIdentityService.createFromIm(p),
       getMeForIm: (p) => imSelfServeIdentityService.getMeForIm(p),
+      getByIdentityId: (identityId) => imSelfServeIdentityService.getByIdentityId(identityId),
     };
 
     const webhookHandler = new WebhookHandler(

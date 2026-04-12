@@ -105,6 +105,23 @@ export class ImSelfServeIdentityService {
       return null;
     }
 
+    return this.toSnapshot(identity);
+  }
+
+  async getByIdentityId(identityId: string): Promise<ImSelfServeIdentitySnapshot | null> {
+    const id = identityId.trim();
+    if (!id) return null;
+
+    const identity = await this.identityModel.findById(id).exec();
+    if (!identity) {
+      this.logger.warn(`Identity not found for /id me snapshot lookup: identityId=${id}`);
+      return null;
+    }
+
+    return this.toSnapshot(identity);
+  }
+
+  private toSnapshot(identity: any): ImSelfServeIdentitySnapshot {
     return {
       id: identity._id.toString(),
       uniqueId: identity.uniqueId,

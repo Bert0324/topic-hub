@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   addAgent,
+  bootstrapAgentRosterDirForServe,
   ensureAtLeastOneAgent,
   getAgentRosterFilePath,
   listAgentSlots,
@@ -17,15 +18,25 @@ import type { AgentEntry } from '../src/commands/serve/agent-roster';
 
 describe('agent-roster', () => {
   const token = `test-token-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  let defaultTestRosterDir = '';
+  let prevRosterDir: string | undefined;
+
+  beforeEach(() => {
+    prevRosterDir = process.env.TOPIC_HUB_AGENT_ROSTER_DIR;
+    defaultTestRosterDir = fs.mkdtempSync(path.join(os.tmpdir(), 'topic-hub-roster-test-'));
+    process.env.TOPIC_HUB_AGENT_ROSTER_DIR = defaultTestRosterDir;
+  });
 
   afterEach(() => {
-    const f = getAgentRosterFilePath(token);
     try {
-      if (fs.existsSync(f)) {
-        fs.unlinkSync(f);
-      }
+      fs.rmSync(defaultTestRosterDir, { recursive: true, force: true });
     } catch {
       /* ignore */
+    }
+    if (prevRosterDir === undefined) {
+      delete process.env.TOPIC_HUB_AGENT_ROSTER_DIR;
+    } else {
+      process.env.TOPIC_HUB_AGENT_ROSTER_DIR = prevRosterDir;
     }
   });
 
@@ -68,10 +79,9 @@ describe('agent-roster', () => {
     expect(removeAgentAtSlot(token, 99).ok).toBe(false);
   });
 
-  it('writes roster file under home .config with safe permissions when possible', () => {
+  it('writes roster file with safe permissions', () => {
     ensureAtLeastOneAgent(token);
     const f = getAgentRosterFilePath(token);
-    expect(f).toContain(path.join('.config', 'topic-hub', 'agent-roster'));
     expect(fs.existsSync(f)).toBe(true);
     const st = fs.statSync(f);
     expect((st.mode & 0o777) & 0o077).toBe(0);
@@ -97,6 +107,26 @@ describe('agent-roster', () => {
       } catch {
         /* ignore */
       }
+    }
+  });
+
+  it('bootstrapAgentRosterDirForServe falls back when default roster directory is not writable', () => {
+    delete process.env.TOPIC_HUB_AGENT_ROSTER_DIR;
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'topic-hub-home-test-'));
+    const configRoot = path.join(tempHome, '.config');
+    fs.mkdirSync(configRoot, { recursive: true, mode: 0o755 });
+    fs.chmodSync(configRoot, 0o555);
+    const fallbackDir = path.join(tempHome, '.topic-hub', 'agent-roster');
+
+    try {
+      const result = bootstrapAgentRosterDirForServe({ homeDir: tempHome });
+      expect(result.usedFallback).toBe(true);
+      expect(result.dir).toBe(fallbackDir);
+      expect(process.env.TOPIC_HUB_AGENT_ROSTER_DIR).toBe(fallbackDir);
+      expect(fs.existsSync(fallbackDir)).toBe(true);
+    } finally {
+      fs.chmodSync(configRoot, 0o755);
+      fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
 });
