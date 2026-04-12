@@ -91,14 +91,14 @@ export async function handleServeCommand(args: string[]): Promise<void> {
 
   // Generate pairing code for IM binding (shown in renderStatus — avoid console.log here: console.clear wipes it)
   try {
-    const pairingData = await postNativeGateway<{ code: string; expiresAt: string }>(
+    const pairingData = await postNativeGateway<{ code: string; expiresAt?: string }>(
       baseUrl,
       'executors.pairing_code',
       {},
       { authorization: executorToken },
     );
     pairingCode = pairingData.code;
-    pairingExpiresAt = pairingData.expiresAt;
+    pairingExpiresAt = pairingData.expiresAt ?? null;
   } catch (err) {
     pairingWarning = err instanceof Error ? err.message : 'Could not reach pairing-code gateway op';
   }
@@ -236,7 +236,7 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     },
     onPairingRotated: (payload) => {
       status.pairingCode = payload.code;
-      status.pairingExpiresAt = payload.expiresAt;
+      status.pairingExpiresAt = payload.expiresAt ?? null;
       status.pairingWarning = null;
       status.pairingRotatedNotice =
         'Pairing code was rotated (previous code was exposed). Copy the new code below; use /register in DM only.';

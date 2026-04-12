@@ -17,7 +17,7 @@ export interface DispatchEvent {
 
 export interface PairingRotatedPayload {
   code: string;
-  expiresAt: string;
+  expiresAt?: string;
 }
 
 export interface EventConsumerOptions {
@@ -127,7 +127,7 @@ export class EventConsumer {
       es.addEventListener('pairing_rotated', ((evt: MessageEvent) => {
         try {
           const data = JSON.parse(String(evt.data)) as PairingRotatedPayload;
-          if (data?.code && data?.expiresAt) {
+          if (data?.code) {
             cb(data);
           }
         } catch {

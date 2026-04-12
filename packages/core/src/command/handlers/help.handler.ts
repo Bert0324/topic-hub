@@ -1,7 +1,11 @@
 export class HelpHandler {
   async execute() {
     const commands = [
-      { command: '/create <type>', description: 'Start a topic in this chat (one open topic per group until closed)' },
+      {
+        command: '/create <type>',
+        description:
+          'Server or group channel only: start a topic in **this** channel (not in DM; one open topic per channel until closed)',
+      },
       { command: '/update --status <status>', description: 'Move lifecycle: open → in_progress → resolved → closed (valid transitions only)' },
       { command: '/assign --user <userId>', description: 'Assign the active topic (when your role allows)' },
       { command: '/reopen', description: 'Reopen a closed topic in this group when none is active' },

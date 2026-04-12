@@ -3,7 +3,6 @@ import crypto from 'node:crypto';
 
 export const HEARTBEAT_INTERVAL_MS = 30_000;
 export const HEARTBEAT_STALE_THRESHOLD_MS = 60_000;
-export const PAIRING_CODE_TTL_MS = 600_000;
 export const PAIRING_CODE_LENGTH = 6;
 export const DISPATCH_UNCLAIMED_REMINDER_MS = 120_000;
 export const QA_REMINDER_MS = 300_000;

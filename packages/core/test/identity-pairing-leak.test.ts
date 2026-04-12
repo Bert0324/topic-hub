@@ -34,7 +34,7 @@ describe('IdentityService group leak pairing rotation', () => {
     const userId = 'usr_leak_test';
     const first = await identityService.generateExecutorPairingCode(userId, execToken);
 
-    const payloads: { code: string; expiresAt: Date }[] = [];
+    const payloads: { code: string; expiresAt?: Date }[] = [];
     const unsub = identityService.subscribePairingRotations(execToken, (p) => {
       payloads.push(p);
     });
@@ -69,25 +69,25 @@ describe('IdentityService group leak pairing rotation', () => {
     expect(r.rotated).toBe(false);
   });
 
-  it('invalidateLeakedPairingCodeAndRotate returns rotated false for expired code', async () => {
+  it('invalidateLeakedPairingCodeAndRotate returns rotated false for already invalidated code', async () => {
     const PairingModel = getModelForClass(PairingCode, { existingConnection: connection });
     await PairingModel.create({
-      code: 'EXPIRED',
+      code: 'BURNED',
       topichubUserId: 'u1',
       executorClaimToken: 'tok1',
-      claimed: false,
-      expiresAt: new Date(Date.now() - 1000),
+      claimed: true,
+      claimedByUserId: 'leaked_group:p:c',
     });
-    const r = await identityService.invalidateLeakedPairingCodeAndRotate('EXPIRED', {
+    const r = await identityService.invalidateLeakedPairingCodeAndRotate('BURNED', {
       platform: 'p',
       channel: 'c',
     });
     expect(r.rotated).toBe(false);
   });
 
-  it('invalidateLeakedPairingCodeAndRotate returns rotated false for already claimed code', async () => {
-    const execToken = 'exec_claimed_once';
-    const userId = 'usr_claimed_once';
+  it('invalidateLeakedPairingCodeAndRotate still rotates after code was used for normal binding', async () => {
+    const execToken = 'exec_after_bind';
+    const userId = 'usr_after_bind';
     const { code } = await identityService.generateExecutorPairingCode(userId, execToken);
     await identityService.claimPairingCode('plat', 'uid1', code);
 
@@ -95,6 +95,24 @@ describe('IdentityService group leak pairing rotation', () => {
       platform: 'p',
       channel: 'c',
     });
-    expect(r.rotated).toBe(false);
+    expect(r.rotated).toBe(true);
+    expect(r.newCode).toBeDefined();
+    expect(r.newCode).not.toBe(code);
+  });
+
+  it('same pairing code can bind multiple platform accounts', async () => {
+    const { code } = await identityService.generateExecutorPairingCode('u_multi', 'tok_multi');
+    await identityService.claimPairingCode('slack', 'a', code);
+    await identityService.claimPairingCode('discord', 'b', code);
+    const r1 = await identityService.resolveUserByPlatform('slack', 'a');
+    const r2 = await identityService.resolveUserByPlatform('discord', 'b');
+    expect(r1?.topichubUserId).toBe('u_multi');
+    expect(r2?.topichubUserId).toBe('u_multi');
+  });
+
+  it('generateExecutorPairingCode returns same code while prior is unclaimed', async () => {
+    const a = await identityService.generateExecutorPairingCode('u_reuse', 'tok_reuse');
+    const b = await identityService.generateExecutorPairingCode('u_reuse', 'tok_reuse');
+    expect(a.code).toBe(b.code);
   });
 });
