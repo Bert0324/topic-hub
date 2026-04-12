@@ -446,7 +446,10 @@ export class NativeIntegrationGateway {
         case 'executors.pairing_code': {
           const { executorToken, identityId } = await hub().identityAuth.requireExecutor(headers);
           const result = await hub().identity.generateExecutorPairingCode(identityId, executorToken);
-          return ok(v, op, { code: result.code, expiresAt: result.expiresAt });
+          return ok(v, op, {
+            code: result.code,
+            ...(result.expiresAt != null ? { expiresAt: result.expiresAt } : {}),
+          });
         }
 
         default:

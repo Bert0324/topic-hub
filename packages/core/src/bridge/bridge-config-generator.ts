@@ -89,7 +89,9 @@ function buildOpenClawJson(
     };
     if (d.guildId) {
       discordEntry.guilds = {
-        [d.guildId]: { requireMention: true },
+        // TopicHub expects plain text and slash-style commands in group channels;
+        // requiring mentions drops valid messages (e.g. "/agent list").
+        [d.guildId]: { requireMention: false },
       };
     }
     channels.discord = discordEntry;
@@ -349,10 +351,16 @@ const handler = async (event) => {
   }
 
   // DM detection: OpenClaw sets ctx.scope or we infer from session key structure.
-  // Group sessions: agent:main:<provider>:group:<chatId>
-  // DM sessions:   agent:main:main  or  agent:main:<provider>:dm:<userId>
-  const isDm = ctx.scope === "dm"
-    || (ctx.scope !== "group" && !sk.includes(":group:"));
+  // Group / guild text: agent:...:group:<id> or agent:...:channel:<id> (Discord uses :channel:).
+  // DM: agent:...:dm:<userId> or ctx.scope === "dm"
+  const isDm =
+    ctx.scope === "dm"
+    || (
+      ctx.scope !== "group"
+      && ctx.scope !== "channel"
+      && !sk.includes(":group:")
+      && !sk.includes(":channel:")
+    );
 
   const imChannel = replyTarget || (senderId ? "user:" + senderId : "");
 

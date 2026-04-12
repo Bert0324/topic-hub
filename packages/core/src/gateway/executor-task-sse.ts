@@ -71,10 +71,14 @@ export async function connectExecutorTaskSse(
         type: 'pairing_rotated',
         data: JSON.stringify({
           code: payload.code,
-          expiresAt:
-            payload.expiresAt instanceof Date
-              ? payload.expiresAt.toISOString()
-              : String(payload.expiresAt),
+          ...(payload.expiresAt != null
+            ? {
+                expiresAt:
+                  payload.expiresAt instanceof Date
+                    ? payload.expiresAt.toISOString()
+                    : String(payload.expiresAt),
+              }
+            : {}),
         }),
       });
     }),

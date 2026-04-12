@@ -245,7 +245,7 @@ export interface DispatchOperations {
 }
 
 export interface IdentityOperations {
-  generateExecutorPairingCode(topichubUserId: string, executorClaimToken: string): Promise<{ code: string; expiresAt: Date }>;
+  generateExecutorPairingCode(topichubUserId: string, executorClaimToken: string): Promise<{ code: string; expiresAt?: Date }>;
   claimPairingCode(platform: string, platformUserId: string, code: string): Promise<ClaimResult>;
   resolveUserByPlatform(platform: string, platformUserId: string): Promise<ResolvedPlatformUser | undefined>;
   resolveUserByClaimToken(claimToken: string): Promise<ResolvedClaimTokenUser | undefined>;
@@ -543,6 +543,7 @@ export class TopicHub {
     const webhookImSelfServeOps: WebhookImSelfServeOps = {
       createFromIm: (p) => imSelfServeIdentityService.createFromIm(p),
       getMeForIm: (p) => imSelfServeIdentityService.getMeForIm(p),
+      getByIdentityId: (identityId) => imSelfServeIdentityService.getByIdentityId(identityId),
     };
 
     const webhookHandler = new WebhookHandler(
@@ -687,7 +688,7 @@ export class TopicHub {
         await this.bridge.sendMessage(
           platform,
           dmTarget,
-          'Your task is still waiting, but your local executor has no active heartbeat (disconnected or session out of date). Start `topichub-admin serve`; if the terminal shows a new pairing code, DM the bot with `/register <code>`.',
+          'Your task is still waiting, but your local executor has no active heartbeat (disconnected or session out of date). Start `topichub-admin serve`, then DM the bot with `/register <code>` using the pairing code shown in the terminal.',
         );
         await this.dispatchService.markReminderSent(dispatch._id.toString());
       } catch (err) {

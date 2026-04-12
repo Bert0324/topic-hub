@@ -11,7 +11,6 @@ import {
   },
 })
 @index({ code: 1 }, { unique: true })
-@index({ expiresAt: 1 }, { expireAfterSeconds: 0 })
 export class PairingCode {
   @prop({ required: true })
   code!: string;
@@ -37,8 +36,9 @@ export class PairingCode {
   @prop()
   claimedByUserId?: string;
 
-  @prop({ required: true })
-  expiresAt!: Date;
+  /** Legacy field from TTL pairing; no longer written. */
+  @prop()
+  expiresAt?: Date;
 
   createdAt!: Date;
 }
