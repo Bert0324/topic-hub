@@ -113,11 +113,13 @@ export function renderStatus(status: ServeStatus): void {
     `  Topic Hub Serve — ${connHi} to ${status.serverUrl}`,
   );
   console.log(
-    `  Executor: ${status.executor} | Skills: ${status.skillsDir} | Agents: ${status.counters.running}/${status.maxConcurrentAgents}`,
+    `  Executor: ${status.executor} | Skills: ${status.skillsDir} | In flight: ${status.counters.running}/${status.maxConcurrentAgents}`,
   );
   console.log(`  Identity: ${status.identityUniqueId}`);
   if (status.agentCliLine) {
-    console.log(`  Agent: ${status.agentCliLine} (started per task when work arrives)`);
+    console.log(
+      `  Agent: ${status.agentCliLine} (subprocess per IM dispatch — roster slots: \`/agent list\`)`,
+    );
   } else if (status.executor !== 'none') {
     console.log(
       `  Agent: not found on PATH — install the CLI or fix PATH before accepting dispatches`,

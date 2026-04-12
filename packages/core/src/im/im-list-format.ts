@@ -28,7 +28,7 @@ export function formatQaSlotSummary(qa: {
 
 export function formatQaListMarkdown(allPending: unknown[]): string {
   const lines = [
-    '**Open agent questions** (oldest = `#1`). If several are open, use `/answer #N <text>` with the number from this list:',
+    '**Open agent questions** (oldest = `#1`). Address the right run with `/agent #M <text>` using the **agent #M** from that task’s executor claim line:',
   ];
   (allPending as any[]).forEach((qa, i) => {
     lines.push(`• **#${i + 1}** — ${formatQaSlotSummary(qa)}`);
@@ -44,7 +44,7 @@ export type ClaimedDispatchListRow = {
 
 export function formatClaimedQueueListMarkdown(rows: ClaimedDispatchListRow[]): string {
   const lines = [
-    '**Running tasks** in this topic (oldest = `#1`). If several are running, use `/queue #N <message or slash>` with the number from this list:',
+    '**Running tasks** in this topic (oldest = `#1`). Target a run with `/agent #M <message or slash>` using **agent #M** from the executor claim line:',
   ];
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i]!;
@@ -71,15 +71,18 @@ export function formatQueueAck(
     : `after **#${slot}** in this topic`;
   return (
     `✅ **Queued** — will run ${detail}. No extra reply until the follow-up **starts**; ` +
-    `then you get the usual "Your local agent is running this task."`
+    `then you get the executor claim line naming **agent #N**.`
   );
 }
 
-/** How to reply with `#N`, plus the same summary as lists/acks (not prefixed as a reminder). */
-export function formatQaHowToReplyLine(answerRef: number, qa: unknown): string {
+/**
+ * How to reply in IM (Hub does not parse `/answer`); user targets the roster slot from the claim line.
+ * `answerRef` is kept for callers that still number pending rows; it is not an agent slot.
+ */
+export function formatQaHowToReplyLine(_answerRef: number, qa: unknown): string {
   return (
-    `Reply with \`/answer #${answerRef} <your response>\` — ` +
-    `**#${answerRef}** is: ${formatQaSlotSummary(qa as any)}`
+    `Reply with \`/agent #M <your response>\` using the **agent #M** from that task’s executor claim line — ` +
+    `pending item: ${formatQaSlotSummary(qa as any)}`
   );
 }
 

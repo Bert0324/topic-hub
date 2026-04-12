@@ -71,6 +71,12 @@ export class DispatchService {
     this.emitter.off('newDispatch', listener);
   }
 
+  /**
+   * Persists a dispatch. **`targetExecutorToken`**, **`targetUserId`**, **`sourcePlatform`**, and
+   * **`sourceChannel`** MUST be supplied only from trusted server context (webhook `dispatchMeta` /
+   * admin pipelines) — never copy them from end-user message bodies. User content lives under
+   * `enrichedPayload.event.payload` only.
+   */
   async create(dto: CreateDispatchDto): Promise<any> {
     const dispatch = await this.dispatchModel.create({
       topicId: new mongoose.Types.ObjectId(dto.topicId),
@@ -97,9 +103,7 @@ export class DispatchService {
     return this.dispatchModel.findById(dispatchId).exec();
   }
 
-  /**
-   * Running (claimed) dispatches for a topic and executor, oldest first — used for IM `/queue #N` anchor resolution.
-   */
+  /** Running (claimed) dispatches for a topic and executor, oldest first. */
   async findClaimedByTopicExecutor(
     topicId: string,
     executorToken: string,

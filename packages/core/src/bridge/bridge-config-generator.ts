@@ -257,15 +257,25 @@ function normalizeImCommandMessage(raw) {
       ) {
         const words = prefix.split(/\\s+/).filter(Boolean);
         if (words.length >= 1 && words.length <= 3) {
-          s = tail;
+          const last = words[words.length - 1];
+          if (last && /^#\\d+$/.test(last)) {
+            s = last + " " + tail;
+          } else {
+            s = tail;
+          }
         }
       }
     }
   }
-  // Plain @mention text before a slash command
+  // Plain @-mention before slash: keep agent slot #N (e.g. @Bot #2 /skill args)
   if (s.startsWith("@")) {
-    const idx = s.indexOf("/");
-    if (idx > 0) s = s.slice(idx);
+    const atAgentSlash = s.match(/^@(.+?)\\s+(#\\d+)\\s+(\\/.*)$/s);
+    if (atAgentSlash) {
+      s = atAgentSlash[2] + " " + atAgentSlash[3].trimStart();
+    } else {
+      const idx = s.indexOf("/");
+      if (idx > 0) s = s.slice(idx);
+    }
   }
   return s;
 }

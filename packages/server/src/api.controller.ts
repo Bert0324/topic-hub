@@ -425,6 +425,17 @@ export class ApiController {
     }
   }
 
+  /** Local `serve` per-slot queue: IM hint before claim while another task holds the same roster slot. */
+  @Post('api/v1/dispatches/:id/notify-queued-local')
+  async notifyQueuedLocal(@Req() req: Request, @Param('id') id: string) {
+    try {
+      const { executorToken } = await this.requireExecutor(req);
+      return await this.hub.getHub().dispatch.notifyExecutorQueuedIm(id, executorToken);
+    } catch (err) {
+      toHttpError(err);
+    }
+  }
+
   @Post('api/v1/dispatches/:id/complete')
   async complete(
     @Req() req: Request,
@@ -502,8 +513,7 @@ export class ApiController {
 
       const imMessage =
         `${header}\n\n${parsed.questionText}\n\n` +
-        `${formatQaHowToReplyLine(answerRef, qa)}\n` +
-        `(Send \`/answer\` alone to list every open question with **#N**.)`;
+        `${formatQaHowToReplyLine(answerRef, qa)}`;
 
       hub.messaging.send(sourcePlatform, {
         groupId: sourceChannel,

@@ -22,10 +22,13 @@ export interface CommandContext {
   imCommandUsedSlash?: boolean;
   /** Set by router when routing `/RegisteredSkillName` to {@link SkillInvokeHandler}. */
   skillInvocationName?: string;
+  /**
+   * When the IM line used optional prefix `/agent #N …`, Hub forces this roster slot on the inner relay
+   * or slash invoke (overrides inner `#M` / default).
+   */
+  imTargetAgentSlot?: number;
   /** Relay hint: how the first slash token matched the Skill Center catalog (see IM dispatch contract). */
   publishedSkillRouting?: PublishedSkillRoutingPayload;
-  /** When set (from `/queue #N …`), the new dispatch must wait until this anchor dispatch is no longer claimed. */
-  queueAfterDispatchId?: string;
 }
 
 export interface RouteResult {
@@ -40,7 +43,7 @@ export interface RouteResult {
   publishedSkillMissToken?: string;
 }
 
-const GLOBAL_COMMANDS = ['create', 'search', 'help', 'use', 'skills'];
+const GLOBAL_COMMANDS = ['create', 'search', 'help', 'use', 'skills', 'agent'];
 const TOPIC_COMMANDS = [
   'update',
   'assign',
@@ -92,6 +95,23 @@ export class CommandRouter {
   }
 
   private routeGlobal(parsed: ParsedCommand, context: CommandContext): RouteResult {
+    if (parsed.action === 'agent') {
+      if (!context.hasActiveTopic) {
+        return {
+          handler: 'agent',
+          error: 'No active topic in this group. Create one first with /create <type>.',
+        };
+      }
+      const sub = parsed.type?.toLowerCase();
+      if (!sub || !['list', 'create', 'delete'].includes(sub)) {
+        return {
+          handler: 'agent',
+          error: 'Usage: `/agent list`, `/agent create`, or `/agent delete #N`.',
+        };
+      }
+      return { handler: 'agent' };
+    }
+
     if (parsed.action === 'create' && context.hasActiveTopic) {
       return {
         handler: 'create',

@@ -5,6 +5,8 @@ import type { CommandContext } from '../command-router';
 import type { SkillPipelinePort } from './create.handler';
 import { DispatchEventType } from '../../common/enums';
 import { denyReasonIfCannotMutateTopic } from '../topic-mutation-access';
+import { IM_PAYLOAD_AGENT_SLOT_KEY } from '../../im/agent-slot-constants.js';
+import { stripAgentSlotFromSlashInvocationLine } from '../../im/agent-slot-parse.js';
 
 /**
  * IM slash `/RegisteredSkillName …` — dispatches to the local executor for that skill directory.
@@ -39,14 +41,18 @@ export class SkillInvokeHandler {
     }
 
     try {
+      const rawLine = context.imChatLine ?? context.relayText ?? '';
+      const { agentSlot, imText } = stripAgentSlotFromSlashInvocationLine(rawLine);
       const payload: Record<string, unknown> = {
         skillName,
         slashArgs: parsed.args,
         slashTypeArg: parsed.type,
-        imText: context.imChatLine ?? context.relayText,
+        imText,
       };
-      if (context.queueAfterDispatchId) {
-        payload.queueAfterDispatchId = context.queueAfterDispatchId;
+      if (context.imTargetAgentSlot != null) {
+        payload[IM_PAYLOAD_AGENT_SLOT_KEY] = context.imTargetAgentSlot;
+      } else if (agentSlot != null) {
+        payload[IM_PAYLOAD_AGENT_SLOT_KEY] = agentSlot;
       }
       await this.skillPipeline.execute(
         DispatchEventType.SKILL_INVOCATION,

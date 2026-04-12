@@ -10,6 +10,22 @@ describe('normalizeImCommandMessage', () => {
     expect(normalizeImCommandMessage('@Topic Hub /help')).toBe('/help');
   });
 
+  it('preserves agent #N before slash when @mention precedes it', () => {
+    expect(normalizeImCommandMessage('@Topic Hub #2 /speckit-specify hello')).toBe(
+      '#2 /speckit-specify hello',
+    );
+  });
+
+  it('preserves agent #N in Feishu-style short label before slash', () => {
+    expect(normalizeImCommandMessage('Topic Hub #2 /speckit-specify hello')).toBe(
+      '#2 /speckit-specify hello',
+    );
+  });
+
+  it('preserves lone #N before slash (no display label)', () => {
+    expect(normalizeImCommandMessage('#2 /my-skill tail')).toBe('#2 /my-skill tail');
+  });
+
   it('strips Feishu <at> then label is not needed', () => {
     const at = '<at user_id="x">Topic Hub</at> /help';
     expect(normalizeImCommandMessage(at)).toBe('/help');

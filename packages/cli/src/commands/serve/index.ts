@@ -1,16 +1,17 @@
 import os from 'node:os';
-import { HEARTBEAT_INTERVAL_MS, DEFAULT_MAX_CONCURRENT_AGENTS } from '@topichub/core';
+import {
+  HEARTBEAT_INTERVAL_MS,
+  DEFAULT_MAX_CONCURRENT_AGENTS,
+  parseImAgentControlOpFromEnrichedPayload,
+} from '@topichub/core';
 import { loadConfig } from '../../config/config.js';
 import { loadAdminToken } from '../../auth/auth.js';
 import { detectAgents, isAgentAvailable } from '../../executors/detector.js';
-import { ApiClient } from '../../api-client/api-client.js';
 import { EventConsumer, type DispatchEvent } from './event-consumer.js';
 import { TaskProcessor } from './task-processor.js';
-import { QaRelay } from './qa-relay.js';
 import { renderStatus, type ServeStatus, type EventLogEntry } from './status-display.js';
 import { resolveServeExecutorArgs } from './resolve-executor-args.js';
 import { normalizeAgentCwd, resolveServeInvocationDirectory } from './resolve-agent-cwd.js';
-import { anchorStatusAllowsQueuedWork, getQueueAfterDispatchId } from './queue-after.js';
 
 export async function handleServeCommand(args: string[]): Promise<void> {
   const config = loadConfig();
@@ -178,66 +179,16 @@ export async function handleServeCommand(args: string[]): Promise<void> {
   let pairingRotatedNoticeTimer: ReturnType<typeof setTimeout> | undefined;
 
   const taskQueue: DispatchEvent[] = [];
-  const blockedByAnchor = new Map<string, DispatchEvent[]>();
-  let blockedPollTimer: ReturnType<typeof setInterval> | undefined;
-
-  const qaApiClient = new ApiClient(config.serverUrl, executorToken);
-  const qaRelay = new QaRelay(qaApiClient);
 
   let drainQueue: () => void = () => {};
 
-  const flushBlockedForAnchor = (anchorId: string): boolean => {
-    const batch = blockedByAnchor.get(anchorId);
-    if (!batch?.length) return false;
-    blockedByAnchor.delete(anchorId);
-    for (const ev of batch) {
-      taskQueue.push(ev);
-    }
-    return true;
-  };
-
-  const flushBlockedReadyFromApi = async () => {
-    for (const anchorId of [...blockedByAnchor.keys()]) {
-      try {
-        const row = await qaApiClient.getDispatchForExecutor(anchorId);
-        if (anchorStatusAllowsQueuedWork(row.status)) {
-          if (flushBlockedForAnchor(anchorId)) {
-            drainQueue();
-          }
-        }
-      } catch {
-        if (flushBlockedForAnchor(anchorId)) {
-          drainQueue();
-        }
-      }
-    }
-    if (blockedByAnchor.size === 0 && blockedPollTimer) {
-      clearInterval(blockedPollTimer);
-      blockedPollTimer = undefined;
-    }
-  };
-
-  const ensureBlockedPoll = () => {
-    if (blockedPollTimer || blockedByAnchor.size === 0) return;
-    blockedPollTimer = setInterval(() => {
-      void flushBlockedReadyFromApi();
-    }, 4000);
-    (blockedPollTimer as NodeJS.Timeout).unref();
-  };
-
   const onEventUpdate = (entry: EventLogEntry) => {
-    let idx =
+    // Only merge by stable dispatch id. A fuzzy (skill + topic + running) match would collapse
+    // parallel runs (e.g. two `chat` dispatches on different agent slots) into one row and undercount RUN.
+    const idx =
       entry.dispatchId != null
         ? status.events.findIndex((e) => e.dispatchId === entry.dispatchId)
         : -1;
-    if (idx < 0) {
-      idx = status.events.findIndex(
-        (e) =>
-          e.skillName === entry.skillName &&
-          e.topicTitle === entry.topicTitle &&
-          e.status === 'running',
-      );
-    }
     if (idx >= 0) {
       status.events[idx] = entry;
     } else {
@@ -264,28 +215,6 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     maxConcurrentAgents,
     sessionAgentCwd,
     onEventUpdate,
-    onAgentQuestion: async (dispatchId, question, context) => {
-      try {
-        const { qaId } = await qaRelay.postQuestion(dispatchId, question, context);
-        console.log(`[QA]       Question posted (qaId=${qaId}), waiting for answer...`);
-        const answer = await qaRelay.waitForAnswer(dispatchId, qaId);
-        if (answer) {
-          console.log(`[QA]       Answer received for qaId=${qaId}`);
-        } else {
-          console.log(`[QA]       Timed out waiting for answer (qaId=${qaId})`);
-        }
-        return answer;
-      } catch (err) {
-        console.error(`[QA]       Failed to relay question: ${err instanceof Error ? err.message : String(err)}`);
-        return null;
-      }
-    },
-    onDispatchServerTerminal: (finishedId) => {
-      if (flushBlockedForAnchor(finishedId)) {
-        drainQueue();
-      }
-      void flushBlockedReadyFromApi();
-    },
   });
 
   drainQueue = () => {
@@ -296,33 +225,14 @@ export async function handleServeCommand(args: string[]): Promise<void> {
   };
 
   const enqueueIncomingDispatch = async (event: DispatchEvent) => {
-    const anchorId = getQueueAfterDispatchId(event);
-    if (!anchorId) {
-      taskQueue.push(event);
-      drainQueue();
-      await flushBlockedReadyFromApi();
-      return;
-    }
-    try {
-      const row = await qaApiClient.getDispatchForExecutor(anchorId);
-      if (anchorStatusAllowsQueuedWork(row.status)) {
-        taskQueue.push(event);
+    if (parseImAgentControlOpFromEnrichedPayload(event.enrichedPayload) != null) {
+      void processor.process(event).finally(() => {
         drainQueue();
-        await flushBlockedReadyFromApi();
-        return;
-      }
-    } catch {
-      taskQueue.push(event);
-      drainQueue();
-      await flushBlockedReadyFromApi();
+      });
       return;
     }
-
-    if (!blockedByAnchor.has(anchorId)) {
-      blockedByAnchor.set(anchorId, []);
-    }
-    blockedByAnchor.get(anchorId)!.push(event);
-    ensureBlockedPoll();
+    taskQueue.push(event);
+    drainQueue();
   };
 
   const consumer = new EventConsumer({
@@ -365,10 +275,6 @@ export async function handleServeCommand(args: string[]): Promise<void> {
   const shutdown = async () => {
     console.log('\n  Shutting down...');
     clearInterval(heartbeatTimer);
-    if (blockedPollTimer) {
-      clearInterval(blockedPollTimer);
-      blockedPollTimer = undefined;
-    }
     if (pairingRotatedNoticeTimer) {
       clearTimeout(pairingRotatedNoticeTimer);
     }

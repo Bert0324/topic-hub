@@ -25,7 +25,7 @@ describe('im-list-format', () => {
     const md = formatQaListMarkdown([sampleQa, { ...sampleQa, questionText: 'Second' }]);
     expect(md).toContain('#1');
     expect(md).toContain('#2');
-    expect(md).toContain('/answer #N');
+    expect(md).toContain('/agent #M');
   });
 
   it('formatClaimedQueueListMarkdown includes skillName and since line', () => {
@@ -38,6 +38,7 @@ describe('im-list-format', () => {
     expect(md).toContain('since 13:20');
     expect(md).toContain('#2');
     expect(md).toContain('other');
+    expect(md).toContain('/agent #M');
   });
 
   it('formatQaAnsweredAck echoes slot and skill summary', () => {
@@ -57,8 +58,7 @@ describe('im-list-format', () => {
 
   it('formatQaHowToReplyLine matches reminder suffix and lists same summary', () => {
     const line = formatQaHowToReplyLine(3, sampleQa);
-    expect(line).toContain('/answer #3');
-    expect(line).toContain('#3** is:');
+    expect(line).toContain('/agent #M');
     expect(line).toContain('speckit-plan');
     const reminder = formatQaReminderMessage(3, sampleQa);
     expect(reminder.startsWith('Reminder:')).toBe(true);

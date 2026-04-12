@@ -6,7 +6,7 @@ import {
   resolveExecutorType,
   createExecutor,
 } from '../../executors/executor-factory.js';
-import { maybeSummarizeForIm, clipForSummaryPrompt } from '../../executors/summarize-for-im.js';
+import { maybeSummarizeForIm } from '../../executors/summarize-for-im.js';
 import type { ExecutionResult, ExecutorOptions } from '../../executors/executor.interface.js';
 import { writeMcpConfig, cleanupMcpConfig } from '../../mcp/mcp-config-writer.js';
 import type { ExecutorType } from '../../config/config.schema.js';
@@ -14,15 +14,31 @@ import type { DispatchEvent } from './event-consumer.js';
 import type { EventLogEntry } from './status-display.js';
 import {
   DEFAULT_MAX_CONCURRENT_AGENTS,
+  MAX_LOCAL_AGENTS,
   getImTaskCompletionBodyBudgetChars,
   purifyImRelayText,
+  IM_PAYLOAD_AGENT_DELETE_SLOT_KEY,
+  IM_PAYLOAD_AGENT_OP_KEY,
+  IM_PAYLOAD_AGENT_SLOT_KEY,
+  formatAgentCreateAck,
+  formatAgentDeleteAck,
+  formatAgentRosterListMarkdown,
+  parseImAgentControlOpFromEnrichedPayload,
 } from '@topichub/core';
 import { resolveAgentWorkingDir } from './resolve-agent-cwd.js';
 import {
   extractLeadingSlashToken,
   findClaudeProjectSkillMd,
 } from './claude-project-skill.js';
-import { agentOutputSeeksImAnswer } from './agent-seeks-user-input.js';
+import {
+  addAgent,
+  ensureAtLeastOneAgent,
+  listAgentSlots,
+  loadAgents,
+  markClaudeHeadlessSessionReady,
+  removeAgentAtSlot,
+  setAgentSlotBusy,
+} from './agent-roster.js';
 
 export interface TaskProcessorOptions {
   serverUrl: string;
@@ -38,9 +54,6 @@ export interface TaskProcessorOptions {
    */
   sessionAgentCwd?: string;
   onEventUpdate: (entry: EventLogEntry) => void;
-  onAgentQuestion?: (dispatchId: string, question: string, context?: { skillName: string; topicTitle: string }) => Promise<string | null>;
-  /** Fired after this dispatch was claimed and then marked completed or failed on the server (for `/queue` unblock). */
-  onDispatchServerTerminal?: (dispatchId: string) => void;
 }
 
 interface SkillFrontmatter {
@@ -66,6 +79,29 @@ function resolveDispatchAgentTimeoutMs(): number {
   const n = parseInt(raw, 10);
   if (!Number.isFinite(n) || n < 0) return DEFAULT_TIMEOUT_MS;
   return n;
+}
+
+function claudeHeadlessSessionOpts(
+  executorType: string,
+  token: string,
+  slot1Based: number,
+): Pick<ExecutorOptions, 'claudeSessionId' | 'claudeResumeSession'> {
+  if (executorType !== 'claude-code' || process.env.TOPICHUB_CLAUDE_IM_SESSION === '0') {
+    return {};
+  }
+  const agents = loadAgents(token);
+  const e = agents[slot1Based - 1];
+  if (!e?.id) {
+    return {};
+  }
+  const sid = e.id.trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sid)) {
+    return {};
+  }
+  return {
+    claudeSessionId: sid,
+    claudeResumeSession: e.claudeHeadlessResume === true,
+  };
 }
 
 function truncateOneLine(s: string, max: number): string {
@@ -117,11 +153,30 @@ function extractUserFacingInput(event: { payload?: unknown } | undefined): strin
   return chunks.join('\n\n').trim();
 }
 
+/** 1-based roster slot from SSE / pre-claim `enrichedPayload` (defaults to **#1**). */
+function readImAgentSlotFromEnrichedDispatch(dispatch: DispatchEvent): number {
+  const ep = (dispatch as { enrichedPayload?: { event?: { payload?: unknown } } }).enrichedPayload;
+  const pRaw = ep?.event?.payload;
+  if (pRaw == null || typeof pRaw !== 'object' || Array.isArray(pRaw)) {
+    return 1;
+  }
+  const raw = (pRaw as Record<string, unknown>)[IM_PAYLOAD_AGENT_SLOT_KEY];
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 1) {
+    return Math.min(MAX_LOCAL_AGENTS, Math.max(1, Math.floor(raw)));
+  }
+  return 1;
+}
+
 export class TaskProcessor {
   private readonly api: ApiClient;
   private readonly claimId: string;
   private activeCount = 0;
   private readonly activeDispatches = new Set<string>();
+  /**
+   * One async chain per roster slot so two dispatches for the same headless Claude session never run
+   * concurrently (avoids “session id already in use”).
+   */
+  private readonly slotSerializationTails = new Map<number, Promise<void>>();
 
   constructor(private readonly options: TaskProcessorOptions) {
     this.api = new ApiClient(options.serverUrl);
@@ -151,8 +206,63 @@ export class TaskProcessor {
       console.log(`[DISPATCH] Skip duplicate in-flight ${dispatchId}`);
       return;
     }
-    this.activeCount++;
+
+    const imControlFromSse = parseImAgentControlOpFromEnrichedPayload(
+      (dispatch as { enrichedPayload?: unknown }).enrichedPayload,
+    );
+
     this.activeDispatches.add(dispatchId);
+    try {
+      if (imControlFromSse != null) {
+        await this.runDispatchPipeline(dispatch, dispatchId);
+        return;
+      }
+      const slot = readImAgentSlotFromEnrichedDispatch(dispatch);
+      const hadPriorOnSlot = this.slotSerializationTails.has(slot);
+      if (hadPriorOnSlot) {
+        void this.api
+          .post<{ ok: boolean }>(`/api/v1/dispatches/${dispatchId}/notify-queued-local`, {})
+          .then((r) => {
+            if (r?.ok) {
+              console.log(
+                `[QUEUE]    **Agent #${slot}** — posted "queued" notice to the topic group (dispatch ${dispatchId.slice(0, 8)}…).`,
+              );
+            }
+          })
+          .catch((err) => {
+            console.warn(
+              `[QUEUE]    Could not post "queued" notice to IM: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+      }
+      const prevTail = this.slotSerializationTails.get(slot) ?? Promise.resolve();
+      const runAfterPrior = async () => {
+        if (hadPriorOnSlot) {
+          console.log(
+            `[QUEUE]    **Agent #${slot}** — starting this dispatch after the prior task on this slot finished.`,
+          );
+        }
+        await this.runDispatchPipeline(dispatch, dispatchId);
+      };
+      const nextTail = prevTail.then(runAfterPrior, runAfterPrior);
+      this.slotSerializationTails.set(slot, nextTail);
+      await nextTail;
+      if (this.slotSerializationTails.get(slot) === nextTail) {
+        this.slotSerializationTails.delete(slot);
+      }
+    } finally {
+      this.activeDispatches.delete(dispatchId);
+    }
+  }
+
+  private async runDispatchPipeline(dispatch: DispatchEvent, dispatchId: string): Promise<void> {
+    const imControlFromSse = parseImAgentControlOpFromEnrichedPayload(
+      (dispatch as { enrichedPayload?: unknown }).enrichedPayload,
+    );
+    const reservesConcurrency = imControlFromSse == null;
+    if (reservesConcurrency) {
+      this.activeCount++;
+    }
     const topicIdStr = mongoIdToString(dispatch.topicId) || String(dispatch.topicId);
     const topicTitle =
       (dispatch as any).enrichedPayload?.topic?.title ??
@@ -172,7 +282,7 @@ export class TaskProcessor {
     this.options.onEventUpdate(logEntry);
 
     let claimRenewTimer: ReturnType<typeof setInterval> | undefined;
-    let settledOnServer = false;
+    let slotMarkedBusy: number | null = null;
     try {
       const claimed = await this.claimDispatch(dispatchId);
       if (!claimed) {
@@ -183,6 +293,72 @@ export class TaskProcessor {
       }
 
       console.log(`[CLAIM]    Claimed dispatch ${dispatchId}`);
+
+      const promptPayloadEarly = {
+        ...(typeof claimed === 'object' && claimed !== null ? claimed : {}),
+        enrichedPayload:
+          (claimed as any)?.enrichedPayload ??
+          (dispatch as any).enrichedPayload,
+      };
+      const mergedEp = (promptPayloadEarly as { enrichedPayload?: unknown }).enrichedPayload;
+      const evEarly = (promptPayloadEarly as { enrichedPayload?: { event?: { payload?: unknown } } })
+        .enrichedPayload?.event;
+      const pRaw = evEarly?.payload;
+      const plEarly =
+        pRaw != null && typeof pRaw === 'object' && !Array.isArray(pRaw)
+          ? (pRaw as Record<string, unknown>)
+          : {};
+      const agentCtlOp = parseImAgentControlOpFromEnrichedPayload(mergedEp);
+      if (agentCtlOp != null) {
+        const token = this.options.token;
+        /** Same body as `/agent list` (bootstrap **#1** when needed). */
+        const rosterListMarkdown = (): string => {
+          ensureAtLeastOneAgent(token);
+          const rows = listAgentSlots(token).map((r) => ({
+            slot: r.slot,
+            label: r.label,
+            state: r.state,
+          }));
+          return formatAgentRosterListMarkdown(rows);
+        };
+        let out = '';
+        if (agentCtlOp === 'list') {
+          out = rosterListMarkdown();
+        } else if (agentCtlOp === 'create') {
+          const { newSlot } = addAgent(token);
+          out = `${formatAgentCreateAck(newSlot)}\n\n${rosterListMarkdown()}`;
+        } else {
+          const n = plEarly[IM_PAYLOAD_AGENT_DELETE_SLOT_KEY];
+          const slot = typeof n === 'number' ? n : parseInt(String(n), 10);
+          const r = removeAgentAtSlot(token, slot);
+          if (!r.ok) {
+            const hintRows = listAgentSlots(token).map((row) => ({
+              slot: row.slot,
+              label: row.label,
+              state: row.state,
+            }));
+            const errMsg =
+              r.error.includes('busy') && hintRows.length > 0
+                ? `${r.error}\n\n${formatAgentRosterListMarkdown(hintRows)}`
+                : r.error;
+            await this.failDispatch(dispatchId, errMsg, false);
+            logEntry.status = 'failed';
+            logEntry.error = truncateOneLine(errMsg, 200);
+            return;
+          }
+          out = `${formatAgentDeleteAck(slot)}\n\n${rosterListMarkdown()}`;
+        }
+        await this.completeDispatch(dispatchId, {
+          text: out,
+          executorType: 'topichub-im-agent',
+          durationMs: 0,
+          exitCode: 0,
+        });
+        logEntry.status = 'completed';
+        logEntry.durationMs = 0;
+        console.log(`[RESULT]   IM agent control (${agentCtlOp}) completed`);
+        return;
+      }
 
       const renew = () => {
         void this.touchClaim(dispatchId).catch((err) => {
@@ -201,6 +377,22 @@ export class TaskProcessor {
           (claimed as any)?.enrichedPayload ??
           (dispatch as any).enrichedPayload,
       };
+
+      ensureAtLeastOneAgent(this.options.token);
+      const evForSlot = (promptPayload as { enrichedPayload?: { event?: { payload?: unknown } } })
+        .enrichedPayload?.event;
+      const pSlot = evForSlot?.payload;
+      const plSlot =
+        pSlot != null && typeof pSlot === 'object' && !Array.isArray(pSlot)
+          ? (pSlot as Record<string, unknown>)
+          : {};
+      const rawAgentSlot = plSlot[IM_PAYLOAD_AGENT_SLOT_KEY];
+      const agentSlot1Based =
+        typeof rawAgentSlot === 'number' && Number.isFinite(rawAgentSlot) && rawAgentSlot >= 1
+          ? Math.floor(rawAgentSlot)
+          : 1;
+      slotMarkedBusy = agentSlot1Based;
+      setAgentSlotBusy(this.options.token, agentSlot1Based, true);
 
       const topicMeta = (promptPayload as { enrichedPayload?: { topic?: { metadata?: Record<string, unknown> } } })
         .enrichedPayload?.topic?.metadata;
@@ -276,7 +468,7 @@ export class TaskProcessor {
 
       console.log(`[AGENT]    Running ${executorType} with ${dispatch.skillName} (headless)…`);
 
-      const execOptions: ExecutorOptions = {
+      const baseExecOptions: ExecutorOptions = {
         timeoutMs: resolveDispatchAgentTimeoutMs(),
         maxTurns: frontmatter?.maxTurns,
         allowedTools: frontmatter?.allowedTools,
@@ -286,70 +478,17 @@ export class TaskProcessor {
         ...(agentCwd ? { cwd: agentCwd } : {}),
       };
 
+      const buildExecOptions = (): ExecutorOptions => ({
+        ...baseExecOptions,
+        ...claudeHeadlessSessionOpts(executorType, this.options.token, agentSlot1Based),
+      });
+
       const startMs = Date.now();
       let result: ExecutionResult;
       try {
-        result = await executor.execute(prompt, systemPromptPath, execOptions);
-
-        if (result.exitCode === 0 && this.options.onAgentQuestion) {
-          const maxRoundsRaw = process.env.TOPICHUB_INTERACTIVE_QA_MAX_ROUNDS?.trim();
-          const maxInteractiveRounds = Math.min(
-            30,
-            Math.max(1, parseInt(maxRoundsRaw ?? '20', 10) || 20),
-          );
-          /** Only the latest agent turn is checked — merged transcript would keep matching old "Question 1 of 5". */
-          let lastAgentOutput = result.text;
-          let round = 0;
-          while (round < maxInteractiveRounds && agentOutputSeeksImAnswer(lastAgentOutput)) {
-            round += 1;
-            console.log(
-              `[AGENT]    Interactive round ${round}/${maxInteractiveRounds}: posting Q&A to IM, awaiting \`/answer\` (send \`/answer\` alone in the group to list open #N lines)…`,
-            );
-            const answer = await this.options.onAgentQuestion(dispatchId, lastAgentOutput, {
-              skillName: dispatch.skillName,
-              topicTitle,
-            });
-            if (!answer?.trim()) {
-              console.warn(
-                '[AGENT]    No IM answer (timeout or empty); stopping interactive chain.',
-              );
-              break;
-            }
-            const prior = clipForSummaryPrompt(result.text, 28_000);
-            const followUp = [
-              '# Same Topic Hub dispatch — user replied in IM',
-              'Your prior cumulative output is below (may be truncated). The user replied via `/answer`. Continue per your skill instructions; produce the next step or final result.',
-              '',
-              '## Prior cumulative output',
-              '```',
-              prior,
-              '```',
-              '',
-              '## User reply (from IM)',
-              answer.trim(),
-            ].join('\n');
-            // Claude Code may remove the temp MCP JSON when the first subprocess exits; recreate before each follow-up run.
-            writeMcpConfig({
-              serverUrl: this.options.serverUrl,
-              token: this.options.token,
-              allowedTools: frontmatter?.allowedTools,
-            });
-            const next = await executor.execute(followUp, systemPromptPath, execOptions);
-            const dPrev = result.durationMs ?? 0;
-            const dNext = next.durationMs ?? 0;
-            result = {
-              ...next,
-              text: `${result.text}\n\n---\n**User (IM)**\n${answer.trim()}\n\n---\n**Agent (continued)**\n${next.text}`,
-              durationMs: dPrev + dNext,
-              exitCode: next.exitCode,
-              executorType: next.executorType,
-              tokenUsage: next.tokenUsage,
-            };
-            if (next.exitCode !== 0) {
-              break;
-            }
-            lastAgentOutput = next.text;
-          }
+        result = await executor.execute(prompt, systemPromptPath, buildExecOptions());
+        if (result.exitCode === 0 && executorType === 'claude-code') {
+          markClaudeHeadlessSessionReady(this.options.token, agentSlot1Based);
         }
       } finally {
         cleanupMcpConfig(mcpConfigPath);
@@ -357,6 +496,7 @@ export class TaskProcessor {
 
       const elapsed = result.durationMs ?? Date.now() - startMs;
 
+      let timelineResult: ExecutionResult = result;
       if (result.exitCode === 0) {
         const sourcePlatform =
           (dispatch as { sourcePlatform?: string }).sourcePlatform ??
@@ -364,8 +504,11 @@ export class TaskProcessor {
             ? (claimed as { sourcePlatform?: string }).sourcePlatform
             : undefined);
         const imBodyBudget = getImTaskCompletionBodyBudgetChars(sourcePlatform);
+        let completionText = result.text ?? '';
+        completionText = `*(agent #${agentSlot1Based})*\n\n${completionText}`;
+        const resultForIm: ExecutionResult = { ...result, text: completionText };
         const imSummary = await maybeSummarizeForIm(
-          result.text,
+          completionText,
           executorType,
           this.options.executorArgs,
           {
@@ -374,19 +517,16 @@ export class TaskProcessor {
             ...(agentCwd ? { agentCwd } : {}),
           },
         );
-        const payload =
-          imSummary != null
-            ? { ...result, imSummary }
-            : result;
+        const payload: ExecutionResult & { imSummary?: string } =
+          imSummary != null ? { ...resultForIm, imSummary } : resultForIm;
         await this.completeDispatch(dispatchId, payload);
-        settledOnServer = true;
+        timelineResult = payload;
         logEntry.status = 'completed';
         logEntry.durationMs = elapsed;
         console.log(`[RESULT]   Completed in ${elapsed}ms`);
       } else {
         const failText = result.text?.trim() || `exit code ${result.exitCode}`;
         await this.failDispatch(dispatchId, failText, true);
-        settledOnServer = true;
         logEntry.status = 'failed';
         logEntry.durationMs = elapsed;
         logEntry.error = truncateOneLine(
@@ -398,7 +538,7 @@ export class TaskProcessor {
         );
       }
 
-      await this.writeTimelineEntry(dispatch, topicIdStr, result);
+      await this.writeTimelineEntry(dispatch, topicIdStr, timelineResult);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
@@ -418,20 +558,20 @@ export class TaskProcessor {
       }
       try {
         await this.failDispatch(dispatchId, msg, true);
-        settledOnServer = true;
       } catch {
         // Best-effort
       }
     } finally {
+      if (slotMarkedBusy != null) {
+        setAgentSlotBusy(this.options.token, slotMarkedBusy, false);
+      }
       if (claimRenewTimer) {
         clearInterval(claimRenewTimer);
       }
-      this.activeCount--;
-      this.activeDispatches.delete(dispatchId);
-      this.options.onEventUpdate(logEntry);
-      if (settledOnServer) {
-        this.options.onDispatchServerTerminal?.(dispatchId);
+      if (reservesConcurrency) {
+        this.activeCount--;
       }
+      this.options.onEventUpdate(logEntry);
     }
   }
 
@@ -529,6 +669,9 @@ export class TaskProcessor {
             payload: (() => {
               const p = { ...(rawPayload as Record<string, unknown>) };
               delete p.queueAfterDispatchId;
+              delete p[IM_PAYLOAD_AGENT_SLOT_KEY];
+              delete p[IM_PAYLOAD_AGENT_OP_KEY];
+              delete p[IM_PAYLOAD_AGENT_DELETE_SLOT_KEY];
               return p;
             })(),
           }
@@ -550,6 +693,14 @@ export class TaskProcessor {
         : '';
 
     const userLine = extractUserFacingInput(event);
+    let agentSlotBanner = '';
+    if (rawPayload != null && typeof rawPayload === 'object' && !Array.isArray(rawPayload)) {
+      const as = (rawPayload as Record<string, unknown>)[IM_PAYLOAD_AGENT_SLOT_KEY];
+      if (typeof as === 'number' && Number.isFinite(as) && as >= 1) {
+        agentSlotBanner =
+          `# Local agent slot\n\nThis run is bound to **agent #${Math.floor(as)}** on your local executor (the user may run several in parallel).\n\n`;
+      }
+    }
     const topicJson = JSON.stringify(payload.topic ?? {}, null, 2);
     const eventJson = JSON.stringify(eventForDisplay ?? {}, null, 2);
 
@@ -562,6 +713,7 @@ export class TaskProcessor {
       '# Role',
       'You are the **topic assistant** in a group chat. Write for **end users** (teammates), not for engineers.',
       '',
+      ...(agentSlotBanner ? [agentSlotBanner] : []),
       ...(missHint
         ? ['# Skill Center routing', missHint, '']
         : []),

@@ -17,6 +17,15 @@ export interface ExecutorOptions {
    * When set, local project conventions such as `.claude/skills` resolve from this path.
    */
   cwd?: string;
+  /**
+   * **Claude Code only** (`-p`): stable UUID for this local **agent slot** roster row (`AgentEntry.id`).
+   * First headless run uses `claude --session-id`; after a successful run, `serve` marks the slot and
+   * subsequent runs use `claude --resume` so IM lines share one Claude session per slot (see
+   * `TOPICHUB_CLAUDE_IM_SESSION` to disable).
+   */
+  claudeSessionId?: string;
+  /** When true with `claudeSessionId`, pass `--resume` instead of bootstrapping `--session-id`. */
+  claudeResumeSession?: boolean;
 }
 
 export interface ExecutionResult {

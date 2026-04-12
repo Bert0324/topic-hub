@@ -6,15 +6,8 @@ import { IngestionService } from '../ingestion/ingestion.service';
 import { OpenClawBridge } from '../bridge/openclaw-bridge';
 import type { OpenClawInboundResult } from '../bridge/openclaw-types';
 import type { TopicHubLogger } from '../common/logger';
-import { AnswerTextSchema } from '../identity/identity-types';
 import { purifyImRelayText } from '../im/im-relay-text.js';
-import {
-  type ClaimedDispatchListRow,
-  formatClaimedQueueListMarkdown,
-  formatQaAnsweredAck,
-  formatQaListMarkdown,
-  formatQueueAck,
-} from '../im/im-list-format.js';
+import { stripOptionalImAgentTargetPrefix } from '../im/im-agent-target-prefix.js';
 
 export interface WebhookIdentityOps {
   claimPairingCode(platform: string, platformUserId: string, code: string): Promise<{ topichubUserId: string }>;
@@ -33,20 +26,6 @@ export interface WebhookHeartbeatOps {
     topichubUserId: string,
     boundExecutorToken: string,
   ): Promise<boolean>;
-}
-
-export interface WebhookQaOps {
-  findPendingByUser(topichubUserId: string): Promise<any | null>;
-  findAllPendingByUser(topichubUserId: string): Promise<any[]>;
-  submitAnswer(qaId: string, answerText: string): Promise<any | null>;
-}
-
-/** Resolves `/queue #N` anchors — claimed dispatches in this topic + executor (oldest first). */
-export interface WebhookDispatchQueueOps {
-  listClaimedDispatchesForTopic(
-    topicId: string,
-    executorToken: string,
-  ): Promise<Array<{ id: string; skillName: string; createdAt?: string | null }>>;
 }
 
 export interface WebhookResult {
@@ -72,12 +51,13 @@ export class WebhookHandler {
     private readonly bridge?: OpenClawBridge,
     private readonly identityOps?: WebhookIdentityOps,
     private readonly heartbeatOps?: WebhookHeartbeatOps,
-    private readonly qaOps?: WebhookQaOps,
     private readonly publishedSkillCatalog?: PublishedSkillCatalog,
-    private readonly dispatchQueueOps?: WebhookDispatchQueueOps,
-  ) {}
+  ) { }
 
-  /** Route IM replies on the same OpenClaw session as the inbound message. */
+  /**
+   * Route IM replies on the same OpenClaw session as the inbound message.
+   * Always pass `sessionKey` so thread/DM routing cannot drift from the triggering envelope.
+   */
   private sendThreadReply(result: OpenClawInboundResult, text: string) {
     return this.bridge!.sendMessage(result.platform, result.channel, text, {
       sessionKey: result.sessionId,
@@ -99,6 +79,14 @@ export class WebhookHandler {
     }
 
     let cmd = result.rawCommand;
+    let imTargetAgentSlot: number | undefined;
+    {
+      const ap = stripOptionalImAgentTargetPrefix(cmd);
+      if (ap.imTargetAgentSlot != null) {
+        imTargetAgentSlot = ap.imTargetAgentSlot;
+        cmd = ap.line;
+      }
+    }
 
     // /help works without binding (FR-028) — also match 'help' without slash
     if (cmd === '/help' || cmd === 'help' || cmd.startsWith('/help ') || cmd.startsWith('help ')) {
@@ -114,10 +102,11 @@ export class WebhookHandler {
       return this.handleRegister(result, code);
     }
 
-    if (result.isDm && /^\s*\/answer\b/i.test(cmd.trim())) {
-      this.sendThreadReply(result, 'Please use `/answer` in the topic group chat.').catch((err) =>
-        this.logger.error('Failed to send OpenClaw reply', String(err)),
-      );
+    if (result.isDm && /^\s*\/(?:answer|queue)\b/i.test(cmd.trim())) {
+      this.sendThreadReply(
+        result,
+        'Hub does not handle `/answer` or `/queue`. In the **topic group**, use `/agent #M <line>` with the **agent #M** from the executor claim line (or plain text / `/SkillName` for the default slot).',
+      ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
       return { success: true, response: { status: 'rejected_dm_not_allowed' } };
     }
 
@@ -130,6 +119,72 @@ export class WebhookHandler {
         return { success: true, response: { status: 'rejected_not_dm' } };
       }
       return this.handleUnregister(result);
+    }
+
+    // /skills — DM only. List is public (no pairing). Star needs identity (+ live serve below).
+    const cmdTrimSkills = cmd.trim();
+    if (/^\s*\/skills\b/i.test(cmdTrimSkills)) {
+      if (!result.isDm) {
+        this.sendThreadReply(
+          result,
+          '`/skills list` and `/skills star` only work in a **direct message** with the bot. Open a DM with the bot and try again.',
+        ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+        return { success: true, response: { status: 'skills_dm_only' } };
+      }
+      const parsedSkills = this.parser.parse(cmdTrimSkills);
+      if (parsedSkills.action === 'skills') {
+        const skSub = parsedSkills.type?.toLowerCase();
+        if (skSub === 'list') {
+          if (this.publishedSkillCatalog) {
+            await this.publishedSkillCatalog.refreshIfNeeded();
+          }
+          const listCtx: CommandContext = {
+            platform: result.platform,
+            groupId: result.channel,
+            userId: result.userId,
+            hasActiveTopic: false,
+            imChatLine: cmdTrimSkills,
+            imCommandUsedSlash: cmdTrimSkills.startsWith('/'),
+          };
+          const listExec = await this.commandDispatcher('skills', parsedSkills, listCtx);
+          const listMsg = this.formatOpenClawCommandReply(listExec);
+          if (listMsg.trim()) {
+            this.sendThreadReply(result, listMsg).catch((err) =>
+              this.logger.error('Failed to send OpenClaw reply', String(err)),
+            );
+          }
+          return { success: true, response: listExec };
+        }
+        if (skSub === 'star') {
+          const boundForStar = await this.identityOps?.resolveUserByPlatform(
+            result.platform,
+            result.userId,
+          );
+          if (!boundForStar) {
+            this.sendThreadReply(
+              result,
+              '`/skills star` needs a linked identity. Run `/register <code>` in this DM first (pairing code from `topichub-admin serve`).',
+            ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+            return { success: true, response: { status: 'skills_star_unregistered' } };
+          }
+          // Fall through: enforce heartbeat and run star via normal command path.
+        } else {
+          const routeSkills = this.router.route(parsedSkills, {
+            platform: result.platform,
+            groupId: result.channel,
+            userId: result.userId,
+            hasActiveTopic: false,
+            imChatLine: cmdTrimSkills,
+            imCommandUsedSlash: cmdTrimSkills.startsWith('/'),
+          });
+          if (routeSkills.error) {
+            this.sendThreadReply(result, routeSkills.error).catch((err) =>
+              this.logger.error('Failed to send OpenClaw reply', String(err)),
+            );
+            return { success: true, response: { status: 'skills_usage' } };
+          }
+        }
+      }
     }
 
     // All other commands require an active executor binding
@@ -150,9 +205,9 @@ export class WebhookHandler {
 
     const sessionLive = this.heartbeatOps
       ? await this.heartbeatOps.isBoundExecutorSessionLive(
-          topichubUserId,
-          identity.claimToken,
-        )
+        topichubUserId,
+        identity.claimToken,
+      )
       : false;
     if (sessionLive !== true) {
       this.sendThreadReply(
@@ -162,15 +217,12 @@ export class WebhookHandler {
       return { success: true, response: { status: 'executor_unavailable' } };
     }
 
-    if (!result.isDm && /^\s*\/answer\b/i.test(cmd.trim())) {
-      const trimmedAns = cmd.trim();
-      if (/^\/answer\s*$/i.test(trimmedAns)) {
-        return this.handleAnswerList(result, topichubUserId);
-      }
-      const st = cmd.trimStart();
-      if (st.startsWith('/answer ')) {
-        return this.handleAnswer(result, st.slice('/answer '.length), topichubUserId);
-      }
+    if (result.isDm && /^\s*\/agent\b/i.test(cmd.trim())) {
+      this.sendThreadReply(
+        result,
+        '`/agent` runs in a **topic group** with an active topic. Open your team topic chat, then try `/agent list` or `/agent create`.',
+      ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+      return { success: true, response: { status: 'agent_dm_only' } };
     }
 
     const activeTopic = await this.topicService.findActiveTopicByGroup(
@@ -178,127 +230,7 @@ export class WebhookHandler {
       result.channel,
     );
 
-    if (result.isDm && /^\s*\/queue\b/i.test(cmd)) {
-      this.sendThreadReply(
-        result,
-        '`/queue` can only be used in a topic group chat (not in DM).',
-      ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
-      return { success: true, response: { status: 'rejected_queue_dm' } };
-    }
-
-    let workingCmd = cmd;
-    let queueAfterDispatchId: string | undefined;
-    let queueAckSlot: number | undefined;
-    let queueAckRow: ClaimedDispatchListRow | null = null;
-
-    if (/^\s*\/queue\b/i.test(cmd.trim())) {
-      if (!activeTopic) {
-        this.sendThreadReply(
-          result,
-          'No active topic in this group. Create one first with `/create <type>`, then use `/queue`.',
-        ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
-        return { success: true, response: { status: 'queue_no_topic' } };
-      }
-      if (!this.dispatchQueueOps) {
-        this.sendThreadReply(
-          result,
-          'Queue routing is not available on this server.',
-        ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
-        return { success: true, response: { status: 'queue_not_configured' } };
-      }
-      const topicId = String((activeTopic as { _id?: unknown })._id ?? '');
-      const claimedRows = await this.dispatchQueueOps.listClaimedDispatchesForTopic(
-        topicId,
-        identity.claimToken,
-      );
-
-      const queueTrim = cmd.trim();
-      if (/^\/queue\s*$/i.test(queueTrim)) {
-        if (claimedRows.length === 0) {
-          this.sendThreadReply(
-            result,
-            'No **claimed (running)** tasks in this topic right now — nothing to list. Start a task first (you should see "Your local agent is running this task").',
-          ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
-        } else {
-          this.sendThreadReply(result, formatClaimedQueueListMarkdown(claimedRows)).catch((err) =>
-            this.logger.error('Failed to send OpenClaw reply', String(err)),
-          );
-        }
-        return { success: true, response: { status: 'queue_list' } };
-      }
-
-      const queueHash = cmd.match(/^\/queue\s+#(\d+)\s+(\S[\s\S]*)$/i);
-      if (queueHash) {
-        const slot = parseInt(queueHash[1], 10);
-        const tail = queueHash[2].trim();
-        if (!tail) {
-          this.sendThreadReply(
-            result,
-            'Usage: `/queue #N <message or slash>` — the part after `#N` cannot be empty.',
-          ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
-          return { success: true, response: { status: 'invalid_queue_empty_tail' } };
-        }
-        if (claimedRows.length === 0) {
-          this.sendThreadReply(
-            result,
-            'Nothing to queue after: there are **no claimed (running)** tasks in this topic. Send `/queue` alone to confirm; start a task first.',
-          ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
-          return { success: true, response: { status: 'queue_no_anchor' } };
-        }
-        if (slot < 1 || slot > claimedRows.length) {
-          this.sendThreadReply(
-            result,
-            `Invalid queue index #${slot}. Valid range is #1–#${claimedRows.length}.\n\n${formatClaimedQueueListMarkdown(claimedRows)}`,
-          ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
-          return { success: true, response: { status: 'queue_anchor_range' } };
-        }
-        queueAckRow = claimedRows[slot - 1]!;
-        queueAfterDispatchId = queueAckRow.id;
-        queueAckSlot = slot;
-        workingCmd = tail;
-      } else {
-        const queuePlain = cmd.match(/^\/queue\s+(\S[\s\S]*)$/i);
-        if (!queuePlain) {
-          const hint =
-            claimedRows.length > 0
-              ? `\n\n${formatClaimedQueueListMarkdown(claimedRows)}`
-              : '';
-          this.sendThreadReply(
-            result,
-              'Usage: `/queue` (list running tasks), `/queue #N <message or slash>` when several are running, or `/queue <message or slash>` when **exactly one** is running.' +
-                hint,
-          ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
-          return { success: true, response: { status: 'invalid_queue_syntax' } };
-        }
-        const tail = queuePlain[1].trim();
-        if (!tail) {
-          this.sendThreadReply(
-            result,
-            'Usage: `/queue <message or slash>` — the part after `/queue` cannot be empty.',
-          ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
-          return { success: true, response: { status: 'invalid_queue_empty_tail' } };
-        }
-        if (claimedRows.length === 0) {
-          this.sendThreadReply(
-            result,
-            'Nothing to queue after: there are **no claimed (running)** tasks in this topic.',
-          ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
-          return { success: true, response: { status: 'queue_no_anchor' } };
-        }
-        if (claimedRows.length > 1) {
-          this.sendThreadReply(
-            result,
-            'Several tasks are running — include **`#N`** before your line (see `/queue` for the list).\n\n' +
-              formatClaimedQueueListMarkdown(claimedRows),
-          ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
-          return { success: true, response: { status: 'queue_need_slot' } };
-        }
-        queueAckRow = claimedRows[0]!;
-        queueAfterDispatchId = queueAckRow.id;
-        queueAckSlot = 1;
-        workingCmd = tail;
-      }
-    }
+    const workingCmd = cmd;
 
     const context: CommandContext = {
       platform: result.platform,
@@ -314,18 +246,63 @@ export class WebhookHandler {
         sourceChannel: result.channel,
         sourcePlatform: result.platform,
       },
-      ...(queueAfterDispatchId ? { queueAfterDispatchId } : {}),
+      ...(imTargetAgentSlot != null ? { imTargetAgentSlot } : {}),
     };
 
+    const trimmedCmdForAgent = cmd.trim();
+    const trimmedWorkingForAgent = workingCmd.trim();
+    const agentLineForDispatch =
+      /^\s*\/agent\b/i.test(trimmedCmdForAgent)
+        ? trimmedCmdForAgent
+        : /^\s*\/agent\b/i.test(trimmedWorkingForAgent)
+          ? trimmedWorkingForAgent
+          : '';
+    if (!result.isDm && agentLineForDispatch) {
+      if (!activeTopic) {
+        this.sendThreadReply(
+          result,
+          'No active topic in this group. Create one first with `/create <type>`, then use `/agent`.',
+        ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+        return { success: true, response: { status: 'agent_no_topic' } };
+      }
+      const parsedAgent = this.parser.parse(agentLineForDispatch);
+      const agentCtx: CommandContext = {
+        ...context,
+        imChatLine: agentLineForDispatch,
+        imCommandUsedSlash: true,
+      };
+      const execAgent = await this.commandDispatcher('agent', parsedAgent, agentCtx);
+      const agentMsg = this.formatOpenClawCommandReply(execAgent);
+      if (agentMsg.trim()) {
+        this.sendThreadReply(result, agentMsg).catch((err) =>
+          this.logger.error('Failed to send OpenClaw reply', String(err)),
+        );
+      } else if (execAgent?.success && execAgent?.deferOpenClawThreadReply) {
+        this.sendThreadReply(
+          result,
+          'Forwarded to your linked **`serve`** session — watch for **Task completed** with the roster (and a short “running this task” line when the executor claims it).',
+        ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+      }
+      return { success: true, response: execAgent };
+    }
+
     const parsed = this.parser.parse(workingCmd);
+
+    if (!result.isDm && parsed.action === 'skills') {
+      this.sendThreadReply(
+        result,
+        '`/skills list` and `/skills star` only work in a **direct message** with the bot. Open a DM with the bot and try again.',
+      ).catch((err) => this.logger.error('Failed to send OpenClaw reply', String(err)));
+      return { success: true, response: { status: 'skills_dm_only' } };
+    }
 
     if (this.publishedSkillCatalog) {
       await this.publishedSkillCatalog.refreshIfNeeded();
     }
 
-    /** Catalog commands (list / star / usage errors); still require binding + live serve above. */
-    const skillsAllowedInDm = parsed.action === 'skills';
-    if (result.isDm && parsed.action !== 'create' && !skillsAllowedInDm) {
+    /** `/skills list` may be satisfied earlier without binding; DM also allows `list`/`star` here. */
+    const skillsCommandsInDm = parsed.action === 'skills';
+    if (result.isDm && parsed.action !== 'create' && !skillsCommandsInDm) {
       this.sendThreadReply(
         result,
         'This command can only be used in a topic group chat. Use `/create` to start a new topic.',
@@ -347,12 +324,12 @@ export class WebhookHandler {
         ? { ...context, skillInvocationName: route.skillInvocationName }
         : route.publishedSkillMissToken != null
           ? {
-              ...context,
-              publishedSkillRouting: {
-                status: 'miss',
-                token: route.publishedSkillMissToken,
-              },
-            }
+            ...context,
+            publishedSkillRouting: {
+              status: 'miss',
+              token: route.publishedSkillMissToken,
+            },
+          }
           : context;
 
     const execResult = await this.commandDispatcher(route.handler, parsed, dispatchContext);
@@ -362,17 +339,6 @@ export class WebhookHandler {
     if (replyMessage.trim()) {
       this.sendThreadReply(result, replyMessage).catch((err) =>
         this.logger.error('Failed to send OpenClaw reply', String(err)),
-      );
-    }
-
-    if (
-      queueAfterDispatchId &&
-      execResult?.success &&
-      execResult?.deferOpenClawThreadReply &&
-      queueAckSlot != null
-    ) {
-      this.sendThreadReply(result, formatQueueAck(queueAckSlot, queueAckRow)).catch((err) =>
-        this.logger.error('Failed to send OpenClaw queue ack', String(err)),
       );
     }
 
@@ -394,21 +360,20 @@ export class WebhookHandler {
         '**Topic lifecycle**',
         '1. **Bind** — DM the bot: `/register <code>` (code from `topic-hub serve` on your machine). Keep serve running.',
         '2. **Open a topic** — In the group channel: `/create <type>` (optional `--title "…"`). Each group may have **one** non-`closed` topic at a time; set status to `closed` (or reopen an old one) before creating another.',
-        '3. **Work** — Plain text in that group is relayed to your local executor while a topic is active. **`/answer`** alone lists open agent questions; use **`/answer #N <text>`** when several are open (`#1` = oldest). **`/queue`** alone lists **claimed** tasks in this topic; use **`/queue #N <…>`** when several are running, or **`/queue <…>`** when exactly one is running. Confirmations repeat **#N** plus the skill/topic line. `/use <skill>` or `/SkillName …` to run a loaded skill.',
-        '4. **Track** — `/show` current topic · `/timeline` events · `/history` past topics in this group.',
+        '3. **Work** — Plain text in that group is relayed to your local executor while a topic is active. Optional **agent `#N`** prefix on plain lines or `/SkillName #N …` targets a **local agent slot** (see **`/agent list`**); default is **agent `#1`**. Use **`/agent #M <line>`** to force roster slot **M** for that line (plain text or **`/Skill …`**). There is **no** Hub-side `/queue` or `/answer` — ordering and follow-ups are handled by your **local executor** (e.g. per-slot session). `/use <skill>` or `/SkillName …` to run a loaded skill.',
+        '4. **Track** — `/show`, `/timeline`, and `/history` are answered **in this chat** from Topic Hub (no local executor).',
         '5. **Status** — `/update --status <s>` moves the topic. Valid values: `open`, `in_progress`, `resolved`, `closed` (only **allowed** transitions apply; the bot explains if a jump is invalid).',
         '6. **Handoff** — `/assign --user <id>` sets assignee (when permitted).',
         '7. **Done or restart** — `/update --status closed` (or `resolved` then `closed`) finishes the topic; `/reopen` revives a closed topic in this group when there is no other active topic (check `/history` if you have many).',
         '',
         '**DM only** (direct message with bot):',
-        '`/register <code>` bind executor · `/unregister` unbind · `/skills list` / `/skills star <name>` browse or like the catalog',
+        '`/register <code>` bind executor · `/unregister` unbind · `/skills list` browse published skills (no link required) · `/skills star <name>` like/unlike (after `/register`, with serve running)',
         '',
         '**Group only** (topic group chat):',
         '`/show` details · `/timeline` history · `/update --status <s>`',
         '`/assign --user <id>` · `/reopen` · `/history`',
-        '`/search --type <t>` · `/use <skill>` invoke skill · `/skills list` · `/skills star <name>`',
-        '`/answer` list questions · `/answer #N <text>` when several are open',
-        '`/queue` list running tasks · `/queue #N <…>` or `/queue <…>` when one is running',
+        '`/search --type <t>` · `/use <skill>` invoke skill',
+        '`/agent list` · `/agent create` · `/agent delete #N` · `/agent #M <anything>` → slot M',
         'Plain text (with an active topic) is sent to your local executor.',
         '`/RegisteredSkillName …` runs that skill via the local executor when the name matches a loaded skill.',
         '',
@@ -557,104 +522,6 @@ export class WebhookHandler {
     } catch (err) {
       this.logger.error('Unregister command failed', String(err));
       return { success: false, error: 'Failed to unregister identity' };
-    }
-  }
-
-  private async handleAnswerList(
-    result: OpenClawInboundResult,
-    topichubUserId: string,
-  ): Promise<WebhookResult> {
-    if (!this.bridge || !this.qaOps) {
-      return { success: false, error: 'Q&A operations not configured' };
-    }
-    try {
-      const allPending = await this.qaOps.findAllPendingByUser(topichubUserId);
-      if (allPending.length === 0) {
-        await this.sendThreadReply(result, 'No pending agent questions.');
-        return { success: true, response: { status: 'no_pending' } };
-      }
-      await this.sendThreadReply(result, formatQaListMarkdown(allPending));
-      return { success: true, response: { status: 'answer_list' } };
-    } catch (err) {
-      this.logger.error('Answer list failed', String(err));
-      return { success: false, error: 'Failed to list answers' };
-    }
-  }
-
-  private async handleAnswer(
-    result: OpenClawInboundResult,
-    answerBody: string,
-    topichubUserId: string,
-  ): Promise<WebhookResult> {
-    if (!this.bridge || !this.qaOps) {
-      return { success: false, error: 'Q&A operations not configured' };
-    }
-
-    try {
-      let answerText = answerBody;
-      let targetQa: any = null;
-
-      const allPending = await this.qaOps.findAllPendingByUser(topichubUserId);
-      const refMatch = answerBody.match(/^#(\d+)\s+([\s\S]*)$/);
-      if (refMatch) {
-        const refIndex = parseInt(refMatch[1], 10);
-        answerText = refMatch[2];
-        if (refIndex >= 1 && refIndex <= allPending.length) {
-          targetQa = allPending[refIndex - 1];
-        } else {
-          targetQa = null;
-        }
-        if (!targetQa) {
-          const hint =
-            allPending.length > 0
-              ? `\n\n${formatQaListMarkdown(allPending)}`
-              : '';
-          await this.sendThreadReply(
-            result,
-            `Invalid answer index #${refIndex}. Use a number from the list below.${hint}`,
-          );
-          return { success: true, response: { status: 'invalid_answer_index' } };
-        }
-      } else {
-        if (allPending.length > 1) {
-          await this.sendThreadReply(
-            result,
-            'Several agent questions are open — use `/answer #N <text>` with **#N** from the list. Send `/answer` alone to see the list.\n\n' +
-              formatQaListMarkdown(allPending),
-          );
-          return { success: true, response: { status: 'answer_need_slot' } };
-        }
-        if (allPending.length === 1) {
-          targetQa = allPending[0];
-        } else {
-          targetQa = null;
-        }
-      }
-
-      if (!targetQa) {
-        await this.sendThreadReply(result, 'No pending questions to answer.');
-        return { success: true, response: { status: 'no_pending' } };
-      }
-
-      const answerParsed = AnswerTextSchema.safeParse(answerText.trim());
-      if (!answerParsed.success) {
-        await this.sendThreadReply(result, 'Answer is empty or too long (max 5000 characters).');
-        return { success: true, response: { status: 'invalid_answer' } };
-      }
-
-      await this.qaOps.submitAnswer(String(targetQa._id), answerParsed.data);
-
-      const slot =
-        Math.max(
-          1,
-          allPending.findIndex((x: any) => String(x._id) === String(targetQa._id)) + 1,
-        );
-      await this.sendThreadReply(result, formatQaAnsweredAck(slot, targetQa));
-
-      return { success: true, response: { status: 'answered' } };
-    } catch (err) {
-      this.logger.error('Answer command failed', String(err));
-      return { success: false, error: 'Failed to process answer' };
     }
   }
 

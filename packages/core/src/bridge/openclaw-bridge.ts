@@ -67,17 +67,28 @@ export function normalizeImCommandMessage(raw: string): string {
       ) {
         const words = prefix.split(/\s+/).filter(Boolean);
         if (words.length >= 1 && words.length <= 3) {
-          s = tail;
+          const last = words[words.length - 1]!;
+          // Keep `agent #N` when the label is "Bot #2 /skill …" or even "#2 /skill …" (slot before slash).
+          if (/^#\d+$/.test(last)) {
+            s = `${last} ${tail}`;
+          } else {
+            s = tail;
+          }
         }
       }
     }
   }
 
-  // Plain @mention text before a slash command
+  // Plain @mention text before a slash command — preserve leading `#N` for `@Bot #2 /Skill …`
   if (s.startsWith('@')) {
-    const slashIdx = s.indexOf('/');
-    if (slashIdx > 0) {
-      s = s.slice(slashIdx);
+    const atAgentSlash = s.match(/^@(.+?)\s+(#\d+)\s+(\/.*)$/s);
+    if (atAgentSlash) {
+      s = `${atAgentSlash[2]} ${atAgentSlash[3].trimStart()}`;
+    } else {
+      const slashIdx = s.indexOf('/');
+      if (slashIdx > 0) {
+        s = s.slice(slashIdx);
+      }
     }
   }
 

@@ -3,6 +3,7 @@ import { getModelForClass } from '@typegoose/typegoose';
 import { TopicHubConfigSchema, TopicHubConfig } from './config';
 import { defaultLoggerFactory, LoggerFactory, TopicHubLogger } from './common/logger';
 import { ConflictError, NotFoundError, TopicHubError } from './common/errors';
+import { DispatchStatus } from './common/enums';
 import { getBuiltinSkills } from './builtin-skills';
 
 import { Topic } from './entities/topic.entity';
@@ -42,6 +43,7 @@ import { Identity } from './entities/identity.entity';
 import { ExecutorRegistration } from './entities/executor-registration.entity';
 import { ImBinding } from './entities/im-binding.entity';
 import { formatQaReminderMessage } from './im/im-list-format.js';
+import { formatImClaimQueuedMessage, formatImClaimRunningMessage } from './im/im-claim-message.js';
 import { SkillLike } from './entities/skill-like.entity';
 import { SkillUsage } from './entities/skill-usage.entity';
 
@@ -65,6 +67,7 @@ import { HelpHandler } from './command/handlers/help.handler';
 import { RelayHandler } from './command/handlers/relay.handler';
 import { SkillInvokeHandler } from './command/handlers/skill-invoke.handler';
 import { SkillsHandler } from './command/handlers/skills.handler';
+import { AgentHandler } from './command/handlers/agent.handler';
 
 import { IngestionService } from './ingestion/ingestion.service';
 import {
@@ -72,7 +75,6 @@ import {
   WebhookResult,
   WebhookIdentityOps,
   WebhookHeartbeatOps,
-  WebhookQaOps,
 } from './webhook/webhook-handler';
 import { OpenClawBridge } from './bridge/openclaw-bridge';
 import { BridgeManager } from './bridge/bridge-manager';
@@ -221,6 +223,11 @@ export interface DispatchOperations {
   claim(taskId: string, claimedBy: string, executorToken: string): Promise<any | null>;
   /** Keeps an active claim from expiring while the executor is still working. */
   renewClaim(taskId: string, executorToken: string): Promise<boolean>;
+  /**
+   * Post a short IM line when `serve` serializes this unclaimed dispatch behind another task on the
+   * same local roster slot (before {@link claim}).
+   */
+  notifyExecutorQueuedIm(taskId: string, executorToken: string): Promise<{ ok: boolean }>;
   complete(taskId: string, result: unknown, executorToken: string): Promise<void>;
   fail(taskId: string, error: string, executorToken: string, retryable?: boolean): Promise<void>;
 }
@@ -459,6 +466,7 @@ export class TopicHub {
     const relayHandler = new RelayHandler(topicService, skillPipeline, loggerFactory('RelayHandler'));
     const skillInvokeHandler = new SkillInvokeHandler(topicService, skillPipeline, loggerFactory('SkillInvokeHandler'));
     const skillsHandler = new SkillsHandler(skillCenterService, loggerFactory('SkillsHandler'));
+    const agentHandler = new AgentHandler(topicService, skillPipeline, loggerFactory('AgentHandler'));
 
     const handlers = new Map<string, any>([
       ['create', createHandler],
@@ -472,6 +480,7 @@ export class TopicHub {
       ['relay', relayHandler],
       ['skill_invoke', skillInvokeHandler],
       ['skills', skillsHandler],
+      ['agent', agentHandler],
     ]);
 
     // Ingestion
@@ -511,28 +520,6 @@ export class TopicHub {
         heartbeatService.isBoundExecutorSessionLive(topichubUserId, boundExecutorToken),
     };
 
-    const webhookQaOps: WebhookQaOps = {
-      findPendingByUser: (topichubUserId) => qaService.findPendingByUser(topichubUserId),
-      findAllPendingByUser: (topichubUserId) => qaService.findAllPendingByUser(topichubUserId),
-      submitAnswer: (qaId, answerText) => qaService.submitAnswer(qaId, answerText),
-    };
-
-    const webhookDispatchQueueOps = {
-      listClaimedDispatchesForTopic: async (topicId: string, executorToken: string) => {
-        const rows = await dispatchService.findClaimedByTopicExecutor(topicId, executorToken);
-        return (rows as any[]).map((r) => ({
-          id: String(r._id),
-          skillName: String(r.skillName ?? 'unknown'),
-          createdAt:
-            r.createdAt instanceof Date
-              ? r.createdAt.toISOString()
-              : r.createdAt != null
-                ? String(r.createdAt)
-                : null,
-        }));
-      },
-    };
-
     const webhookHandler = new WebhookHandler(
       commandParser,
       commandRouter,
@@ -543,9 +530,7 @@ export class TopicHub {
       bridge ?? undefined,
       webhookIdentityOps,
       webhookHeartbeatOps,
-      webhookQaOps,
       publishedSkillCatalog,
-      webhookDispatchQueueOps,
     );
 
     // Stage 1: Load built-in md-only skills (unless builtins: false)
@@ -903,14 +888,37 @@ export class TopicHub {
       claim: async (taskId, claimedBy, executorToken) => {
         const result = await this.dispatchService.claim(taskId, claimedBy, executorToken);
         if (result && result.sourceChannel && result.sourcePlatform && this.bridge) {
+          const claimLine = formatImClaimRunningMessage(result.enrichedPayload);
           this.bridge
-            .sendMessage(result.sourcePlatform, result.sourceChannel, 'Your local agent is running this task.')
+            .sendMessage(result.sourcePlatform, result.sourceChannel, claimLine)
             .catch((err) => this.logger.error('IM claim notification failed', String(err)));
         }
         return result;
       },
       renewClaim: (taskId, executorToken) =>
         this.dispatchService.renewClaim(taskId, executorToken),
+      notifyExecutorQueuedIm: async (taskId, executorToken) => {
+        try {
+          const doc = await this.dispatchService.findById(taskId);
+          if (!doc || doc.targetExecutorToken !== executorToken) {
+            return { ok: false };
+          }
+          if (doc.status !== DispatchStatus.UNCLAIMED) {
+            return { ok: false };
+          }
+          const platform = doc.sourcePlatform as string | undefined;
+          const channel = doc.sourceChannel as string | undefined;
+          if (!platform || !channel || !this.bridge) {
+            return { ok: false };
+          }
+          const line = formatImClaimQueuedMessage(doc.enrichedPayload);
+          const sent = await this.bridge.sendMessage(platform, channel, line);
+          return { ok: sent };
+        } catch (err) {
+          this.logger.error('notifyExecutorQueuedIm failed', String(err));
+          return { ok: false };
+        }
+      },
       complete: async (taskId, result, executorToken) => {
         const dispatch = await this.dispatchService.complete(taskId, result as any, executorToken);
         if (!dispatch) {
