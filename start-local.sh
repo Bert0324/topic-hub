@@ -13,12 +13,12 @@ export PORT="3000"
 export TOPICHUB_BRIDGE_WEBHOOK_URL="http://127.0.0.1:${PORT}/webhooks/openclaw"
 
 # Discord
-export TOPICHUB_BRIDGE_DISCORD_BOT_TOKEN="MTQ5MjA3ODQ4NDQwMTQyMjM5OQ.GIKUHm.1p0BiwRHMQWYYsJOp7fENuHR9aDcpFR1dZ6fXE"
+export TOPICHUB_BRIDGE_DISCORD_BOT_TOKEN=""
 
 # Feishu
 export TOPICHUB_BRIDGE_FEISHU_APP_ID=""
 export TOPICHUB_BRIDGE_FEISHU_APP_SECRET=""
-export TOPICHUB_BRIDGE_FEISHU_DOMAIN=""
+export TOPICHUB_BRIDGE_FEISHU_DOMAIN="feishu"
 
 pnpm --filter @topichub/core run build
 pnpm --filter @topichub/server run dev
