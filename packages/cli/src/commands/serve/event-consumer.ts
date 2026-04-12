@@ -1,6 +1,9 @@
 import { EventSource } from 'eventsource';
 import { NATIVE_INTEGRATION_SEGMENT } from '@topichub/core';
-import { postNativeGateway } from '../../api-client/native-gateway.js';
+import {
+  normalizeTopicHubServerRoot,
+  postNativeGateway,
+} from '../../api-client/native-gateway.js';
 
 /** Server sends Mongo `_id`; normalize with `getDispatchId` before claim/complete APIs. */
 export interface DispatchEvent {
@@ -87,7 +90,8 @@ export class EventConsumer {
       this.es = null;
     }
 
-    const url = `${this.options.serverUrl.replace(/\/+$/, '')}/${NATIVE_INTEGRATION_SEGMENT}/stream`;
+    const root = normalizeTopicHubServerRoot(this.options.serverUrl.replace(/\/+$/, ''));
+    const url = `${root}/${NATIVE_INTEGRATION_SEGMENT}/stream`;
     const es = new EventSource(url, {
       fetch: (input: any, init?: any) =>
         fetch(input, {

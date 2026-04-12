@@ -1,5 +1,8 @@
 import { input } from '@inquirer/prompts';
-import { postNativeGateway } from '../../../api-client/native-gateway.js';
+import {
+  normalizeTopicHubServerRoot,
+  postNativeGateway,
+} from '../../../api-client/native-gateway.js';
 
 export async function promptServerUrl(currentValue?: string): Promise<string> {
   const serverUrl = await input({
@@ -18,7 +21,7 @@ export async function promptServerUrl(currentValue?: string): Promise<string> {
     },
   });
 
-  const baseUrl = serverUrl.replace(/\/+$/, '');
+  const baseUrl = normalizeTopicHubServerRoot(serverUrl.replace(/\/+$/, ''));
 
   // Validate connection: native integration gateway only (`POST …/topic-hub`, op `health`)
   process.stdout.write('  Connecting... ');

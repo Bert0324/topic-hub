@@ -1,5 +1,21 @@
 import { NATIVE_INTEGRATION_SEGMENT } from '@topichub/core';
 
+/**
+ * Collapse `…/topic-hub` to deployment root so `POST {root}/topic-hub` is never doubled.
+ * Accepts users who paste the gateway path as the "server URL".
+ */
+export function normalizeTopicHubServerRoot(raw: string): string {
+  let s = raw.trim().replace(/\/+$/, '');
+  const tail = `/${NATIVE_INTEGRATION_SEGMENT}`;
+  const tailLo = tail.toLowerCase();
+  while (s.length > 0) {
+    const lo = s.toLowerCase();
+    if (!lo.endsWith(tailLo)) break;
+    s = s.slice(0, -tail.length).replace(/\/+$/, '');
+  }
+  return s;
+}
+
 export type PostNativeGatewayOptions = {
   /** `Bearer …` value or full `Bearer …` string — if value has no "Bearer " prefix it is added. */
   authorization?: string;
@@ -20,7 +36,7 @@ export async function postNativeGateway<T = unknown>(
   payload: Record<string, unknown> = {},
   options?: PostNativeGatewayOptions,
 ): Promise<T> {
-  const root = baseUrl.replace(/\/+$/, '');
+  const root = normalizeTopicHubServerRoot(baseUrl);
   const url = `${root}/${NATIVE_INTEGRATION_SEGMENT}`;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (options?.authorization) {
