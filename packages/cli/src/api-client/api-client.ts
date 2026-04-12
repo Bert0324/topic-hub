@@ -88,4 +88,9 @@ export class ApiClient {
   async createGroup(payload: { name: string; platform: string; memberIds: string[]; topicType?: string }): Promise<unknown> {
     return this.post('/admin/groups', payload);
   }
+
+  /** Executor-only: returns dispatch id/status/topic when the bearer matches `targetExecutorToken`. */
+  getDispatchForExecutor(id: string): Promise<{ id: string; status: string; topicId: string }> {
+    return this.get(`/api/v1/dispatches/${encodeURIComponent(id)}`);
+  }
 }

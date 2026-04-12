@@ -9,6 +9,8 @@ export interface DispatchEvent {
   eventType: string;
   skillName: string;
   createdAt: string;
+  /** IM bridge channel (e.g. discord, feishu); used for per-platform completion limits. */
+  sourcePlatform?: string;
   enrichedPayload?: unknown;
 }
 
@@ -29,8 +31,12 @@ export interface EventConsumerOptions {
   onPairingRotated?: (payload: PairingRotatedPayload) => void;
 }
 
+/** When `eventsource` fails the handshake (non-200, wrong content-type, …) it sets `readyState` to CLOSED and does not retry; we reconnect so `serve` keeps running. */
+const SSE_RECONNECT_MS = 3_000;
+
 export class EventConsumer {
   private es: EventSource | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly api: ApiClient;
   private closed = false;
 
@@ -46,6 +52,10 @@ export class EventConsumer {
 
   stop(): void {
     this.closed = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
     if (this.es) {
       this.es.close();
       this.es = null;
@@ -66,6 +76,15 @@ export class EventConsumer {
 
   private connectSse(): void {
     if (this.closed) return;
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
+    if (this.es) {
+      this.es.close();
+      this.es = null;
+    }
 
     const url = `${this.options.serverUrl}/api/v1/dispatches/stream`;
     const es = new EventSource(url, {
@@ -120,6 +139,17 @@ export class EventConsumer {
       this.options.onDisconnected(
         new Error('SSE connection error'),
       );
+      if (this.closed) return;
+      // Transient errors use the library's internal CONNECTING + timer; permanent handshake failures leave CLOSED.
+      queueMicrotask(() => {
+        if (this.closed) return;
+        if (this.es !== es || es.readyState !== EventSource.CLOSED) return;
+        this.es = null;
+        this.reconnectTimer = setTimeout(() => {
+          this.reconnectTimer = undefined;
+          this.connectSse();
+        }, SSE_RECONNECT_MS);
+      });
     });
   }
 }

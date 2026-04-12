@@ -33,6 +33,7 @@ import {
   ConflictError,
   UnauthorizedError,
   ForbiddenError,
+  formatQaHowToReplyLine,
 } from '@topichub/core';
 import { TopicHubService } from './topichub.provider';
 
@@ -330,6 +331,60 @@ export class ApiController {
     }
   }
 
+  /** Must be registered before `dispatches/:id` so `stream` is not captured as an ObjectId. */
+  @Sse('api/v1/dispatches/stream')
+  stream(@Req() req: Request): Observable<{ data: string; type?: string }> {
+    const hub = this.hub.getHub();
+
+    return defer(() => from(this.requireExecutor(req))).pipe(
+      mergeMap(({ executorToken }) => {
+        const dispatches$ = new Observable<{ data: string; type?: string }>((sub) => {
+          const unsub = hub.dispatch.onTask((task: any) => {
+            if (task.targetExecutorToken !== executorToken) return;
+            sub.next({ type: 'dispatch', data: JSON.stringify(task) });
+          });
+          return () => unsub();
+        });
+
+        const heartbeat$ = interval(30_000).pipe(
+          map(() => ({ type: 'heartbeat', data: JSON.stringify({ ts: new Date().toISOString() }) })),
+        );
+
+        const pairingRotated$ = new Observable<{ data: string; type?: string }>((sub) => {
+          const unsub = hub.identity.subscribePairingRotations(executorToken, (payload) => {
+            sub.next({
+              type: 'pairing_rotated',
+              data: JSON.stringify({
+                code: payload.code,
+                expiresAt:
+                  payload.expiresAt instanceof Date
+                    ? payload.expiresAt.toISOString()
+                    : String(payload.expiresAt),
+              }),
+            });
+          });
+          return () => unsub();
+        });
+
+        return merge(dispatches$, heartbeat$, pairingRotated$);
+      }),
+    );
+  }
+
+  @Get('api/v1/dispatches/:id')
+  async getDispatchById(@Req() req: Request, @Param('id') id: string) {
+    try {
+      const { executorToken } = await this.requireExecutor(req);
+      const row = await this.hub.getHub().dispatch.findByIdForExecutor(id, executorToken);
+      if (!row) {
+        throw new NotFoundException('Dispatch not found for this executor');
+      }
+      return row;
+    } catch (err) {
+      toHttpError(err);
+    }
+  }
+
   @Post('api/v1/dispatches/:id/claim')
   async claim(
     @Req() req: Request,
@@ -349,7 +404,22 @@ export class ApiController {
         skillName: plain.skillName,
         eventType: plain.eventType,
         topicId: plain.topicId != null ? String(plain.topicId) : undefined,
+        sourcePlatform: plain.sourcePlatform ?? undefined,
       };
+    } catch (err) {
+      toHttpError(err);
+    }
+  }
+
+  @Post('api/v1/dispatches/:id/touch-claim')
+  async touchClaim(@Req() req: Request, @Param('id') id: string) {
+    try {
+      const { executorToken } = await this.requireExecutor(req);
+      const ok = await this.hub.getHub().dispatch.renewClaim(id, executorToken);
+      if (!ok) {
+        throw new ConflictException('Dispatch is not claimed by this executor (or claim expired).');
+      }
+      return { id, status: 'claim_renewed' };
     } catch (err) {
       toHttpError(err);
     }
@@ -420,13 +490,20 @@ export class ApiController {
       sourcePlatform,
     );
 
+    const allPending = await hub.qa.findAllPendingByUser(topichubUserId);
+    const refIdx = allPending.findIndex((x) => String(x._id) === String(qa._id));
+    const answerRef = refIdx >= 0 ? refIdx + 1 : Math.max(1, allPending.length);
+
     if (sourceChannel && sourcePlatform) {
       const ctx = parsed.questionContext;
       const header = ctx
         ? `🔔 **Agent Question** (${ctx.skillName} / ${ctx.topicTitle})`
         : '🔔 **Agent Question**';
 
-      const imMessage = `${header}\n\n${parsed.questionText}\n\nReply with: \`/answer <your response>\``;
+      const imMessage =
+        `${header}\n\n${parsed.questionText}\n\n` +
+        `${formatQaHowToReplyLine(answerRef, qa)}\n` +
+        `(Send \`/answer\` alone to list every open question with **#N**.)`;
 
       hub.messaging.send(sourcePlatform, {
         groupId: sourceChannel,
@@ -446,45 +523,6 @@ export class ApiController {
     const hub = this.hub.getHub();
     const exchanges = await hub.qa.findByDispatchAndStatus(id, status);
     return { exchanges };
-  }
-
-  @Sse('api/v1/dispatches/stream')
-  stream(@Req() req: Request): Observable<{ data: string; type?: string }> {
-    const hub = this.hub.getHub();
-
-    return defer(() => from(this.requireExecutor(req))).pipe(
-      mergeMap(({ executorToken }) => {
-        const dispatches$ = new Observable<{ data: string; type?: string }>((sub) => {
-          const unsub = hub.dispatch.onTask((task: any) => {
-            if (task.targetExecutorToken !== executorToken) return;
-            sub.next({ type: 'dispatch', data: JSON.stringify(task) });
-          });
-          return () => unsub();
-        });
-
-        const heartbeat$ = interval(30_000).pipe(
-          map(() => ({ type: 'heartbeat', data: JSON.stringify({ ts: new Date().toISOString() }) })),
-        );
-
-        const pairingRotated$ = new Observable<{ data: string; type?: string }>((sub) => {
-          const unsub = hub.identity.subscribePairingRotations(executorToken, (payload) => {
-            sub.next({
-              type: 'pairing_rotated',
-              data: JSON.stringify({
-                code: payload.code,
-                expiresAt:
-                  payload.expiresAt instanceof Date
-                    ? payload.expiresAt.toISOString()
-                    : String(payload.expiresAt),
-              }),
-            });
-          });
-          return () => unsub();
-        });
-
-        return merge(dispatches$, heartbeat$, pairingRotated$);
-      }),
-    );
   }
 }
 

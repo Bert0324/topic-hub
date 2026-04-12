@@ -1,8 +1,14 @@
 import { z } from 'zod';
+import { DEFAULT_MAX_CONCURRENT_AGENTS } from './identity-types';
 
 export const ExecutorMetaSchema = z.object({
   agentType: z.string().min(1).max(64),
-  maxConcurrentAgents: z.number().int().positive().max(10).default(1),
+  maxConcurrentAgents: z
+    .number()
+    .int()
+    .positive()
+    .max(10)
+    .default(DEFAULT_MAX_CONCURRENT_AGENTS),
   hostname: z.string().min(1).max(253),
   pid: z.number().int().nonnegative().max(2_147_483_647),
 });

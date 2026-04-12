@@ -9,12 +9,22 @@ import { TaskProcessor } from './task-processor.js';
 import { QaRelay } from './qa-relay.js';
 import { renderStatus, type ServeStatus, type EventLogEntry } from './status-display.js';
 import { resolveServeExecutorArgs } from './resolve-executor-args.js';
+import { normalizeAgentCwd, resolveServeInvocationDirectory } from './resolve-agent-cwd.js';
+import { anchorStatusAllowsQueuedWork, getQueueAfterDispatchId } from './queue-after.js';
 
 export async function handleServeCommand(args: string[]): Promise<void> {
   const config = loadConfig();
 
   const executorFlag = extractFlag(args, '--executor');
   const maxAgentsFlag = extractFlag(args, '--max-agents');
+  const agentCwdFlag = extractFlag(args, '--agent-cwd');
+  const sessionAgentCwdRaw = (agentCwdFlag ?? process.env.TOPICHUB_AGENT_CWD)?.trim();
+  const sessionAgentCwd = normalizeAgentCwd(sessionAgentCwdRaw || undefined);
+  if (sessionAgentCwdRaw && !sessionAgentCwd) {
+    console.warn(
+      '⚠ --agent-cwd / TOPICHUB_AGENT_CWD is not an existing directory; agent cwd falls back to INIT_CWD or process.cwd().',
+    );
+  }
   const forceFlag = args.includes('--force');
   const skipExecutorPrompts = args.includes('--yes');
 
@@ -151,6 +161,7 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     skillsDir: config.skillsDir,
     maxConcurrentAgents,
     identityUniqueId: regData.identityUniqueId,
+    defaultAgentCwd: sessionAgentCwd ?? resolveServeInvocationDirectory() ?? process.cwd(),
     agentCliLine,
     executorLaunchArgsLine,
     pairingCode,
@@ -167,6 +178,52 @@ export async function handleServeCommand(args: string[]): Promise<void> {
   let pairingRotatedNoticeTimer: ReturnType<typeof setTimeout> | undefined;
 
   const taskQueue: DispatchEvent[] = [];
+  const blockedByAnchor = new Map<string, DispatchEvent[]>();
+  let blockedPollTimer: ReturnType<typeof setInterval> | undefined;
+
+  const qaApiClient = new ApiClient(config.serverUrl, executorToken);
+  const qaRelay = new QaRelay(qaApiClient);
+
+  let drainQueue: () => void = () => {};
+
+  const flushBlockedForAnchor = (anchorId: string): boolean => {
+    const batch = blockedByAnchor.get(anchorId);
+    if (!batch?.length) return false;
+    blockedByAnchor.delete(anchorId);
+    for (const ev of batch) {
+      taskQueue.push(ev);
+    }
+    return true;
+  };
+
+  const flushBlockedReadyFromApi = async () => {
+    for (const anchorId of [...blockedByAnchor.keys()]) {
+      try {
+        const row = await qaApiClient.getDispatchForExecutor(anchorId);
+        if (anchorStatusAllowsQueuedWork(row.status)) {
+          if (flushBlockedForAnchor(anchorId)) {
+            drainQueue();
+          }
+        }
+      } catch {
+        if (flushBlockedForAnchor(anchorId)) {
+          drainQueue();
+        }
+      }
+    }
+    if (blockedByAnchor.size === 0 && blockedPollTimer) {
+      clearInterval(blockedPollTimer);
+      blockedPollTimer = undefined;
+    }
+  };
+
+  const ensureBlockedPoll = () => {
+    if (blockedPollTimer || blockedByAnchor.size === 0) return;
+    blockedPollTimer = setInterval(() => {
+      void flushBlockedReadyFromApi();
+    }, 4000);
+    (blockedPollTimer as NodeJS.Timeout).unref();
+  };
 
   const onEventUpdate = (entry: EventLogEntry) => {
     let idx =
@@ -197,9 +254,6 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     updateDisplay();
   };
 
-  const qaApiClient = new ApiClient(config.serverUrl, executorToken);
-  const qaRelay = new QaRelay(qaApiClient);
-
   const processor = new TaskProcessor({
     serverUrl: config.serverUrl,
     token: executorToken,
@@ -208,6 +262,7 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     cliExecutorFlag: executorFlag,
     executorArgs: resolvedExecutorArgs,
     maxConcurrentAgents,
+    sessionAgentCwd,
     onEventUpdate,
     onAgentQuestion: async (dispatchId, question, context) => {
       try {
@@ -225,21 +280,56 @@ export async function handleServeCommand(args: string[]): Promise<void> {
         return null;
       }
     },
+    onDispatchServerTerminal: (finishedId) => {
+      if (flushBlockedForAnchor(finishedId)) {
+        drainQueue();
+      }
+      void flushBlockedReadyFromApi();
+    },
   });
 
-  const drainQueue = () => {
+  drainQueue = () => {
     while (taskQueue.length > 0 && processor.canAcceptMore()) {
       const dispatch = taskQueue.shift()!;
       processor.process(dispatch).finally(drainQueue);
     }
   };
 
+  const enqueueIncomingDispatch = async (event: DispatchEvent) => {
+    const anchorId = getQueueAfterDispatchId(event);
+    if (!anchorId) {
+      taskQueue.push(event);
+      drainQueue();
+      await flushBlockedReadyFromApi();
+      return;
+    }
+    try {
+      const row = await qaApiClient.getDispatchForExecutor(anchorId);
+      if (anchorStatusAllowsQueuedWork(row.status)) {
+        taskQueue.push(event);
+        drainQueue();
+        await flushBlockedReadyFromApi();
+        return;
+      }
+    } catch {
+      taskQueue.push(event);
+      drainQueue();
+      await flushBlockedReadyFromApi();
+      return;
+    }
+
+    if (!blockedByAnchor.has(anchorId)) {
+      blockedByAnchor.set(anchorId, []);
+    }
+    blockedByAnchor.get(anchorId)!.push(event);
+    ensureBlockedPoll();
+  };
+
   const consumer = new EventConsumer({
     serverUrl: config.serverUrl,
     token: executorToken,
     onDispatch: (event) => {
-      taskQueue.push(event);
-      drainQueue();
+      void enqueueIncomingDispatch(event);
     },
     onConnected: () => {
       status.connected = true;
@@ -275,6 +365,10 @@ export async function handleServeCommand(args: string[]): Promise<void> {
   const shutdown = async () => {
     console.log('\n  Shutting down...');
     clearInterval(heartbeatTimer);
+    if (blockedPollTimer) {
+      clearInterval(blockedPollTimer);
+      blockedPollTimer = undefined;
+    }
     if (pairingRotatedNoticeTimer) {
       clearTimeout(pairingRotatedNoticeTimer);
     }

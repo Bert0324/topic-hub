@@ -39,14 +39,21 @@ export class RelayHandler {
     }
 
     try {
+      const payload: Record<string, unknown> = { text: relayText };
+      if (context.publishedSkillRouting) {
+        payload.publishedSkillRouting = context.publishedSkillRouting;
+      }
+      if (context.queueAfterDispatchId) {
+        payload.queueAfterDispatchId = context.queueAfterDispatchId;
+      }
       await this.skillPipeline.execute(
         DispatchEventType.USER_MESSAGE,
         topic,
         context.userId,
-        { text: relayText },
+        payload,
         context.dispatchMeta,
       );
-      return { success: true, message: '' };
+      return { success: true, message: '', deferOpenClawThreadReply: true };
     } catch (err) {
       this.logger.error('Relay to executor failed', String(err));
       return { success: false, error: `Relay failed: ${(err as Error).message}` };

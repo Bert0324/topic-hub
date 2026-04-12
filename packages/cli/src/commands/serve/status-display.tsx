@@ -17,7 +17,9 @@ export interface ServeStatus {
   maxConcurrentAgents: number;
   /** Executor identity from registration (for IM binding). */
   identityUniqueId: string;
-  /** Resolved agent binary when executor is claude-code or codex (spawned per task). */
+  /** Effective default cwd: `serve --agent-cwd` / `TOPICHUB_AGENT_CWD` if set, else `INIT_CWD` / `process.cwd()`. Topic `metadata.executorCwd` overrides per dispatch. */
+  defaultAgentCwd?: string;
+  /** Resolved agent binary when a local executor is active (spawned per task). */
   agentCliLine?: string;
   /** Extra argv passed to the agent CLI after `serve` resolved prompts / defaults. */
   executorLaunchArgsLine?: string;
@@ -40,6 +42,7 @@ const STATUS_LABEL: Record<EventLogEntry['status'], string> = {
 
 const ANSI = {
   reset: '\x1b[0m',
+  bold: '\x1b[1m',
   dim: '\x1b[2m',
   red: '\x1b[31m',
   green: '\x1b[32m',
@@ -98,10 +101,16 @@ export function renderStatus(status: ServeStatus): void {
   const rst = useColor ? ANSI.reset : '';
   const warn = useColor ? ANSI.yellow : '';
   const cyan = useColor ? ANSI.cyan : '';
+  const b = useColor ? ANSI.bold : '';
 
   const connStr = status.connected ? 'connected' : 'disconnected';
+  const connHi = useColor
+    ? status.connected
+      ? `${b}${ANSI.green}${connStr}${rst}`
+      : `${b}${ANSI.yellow}${connStr}${rst}`
+    : connStr.toUpperCase();
   console.log(
-    `  Topic Hub Serve — ${connStr} to ${status.serverUrl}`,
+    `  Topic Hub Serve — ${connHi} to ${status.serverUrl}`,
   );
   console.log(
     `  Executor: ${status.executor} | Skills: ${status.skillsDir} | Agents: ${status.counters.running}/${status.maxConcurrentAgents}`,
@@ -117,6 +126,11 @@ export function renderStatus(status: ServeStatus): void {
   if (status.executorLaunchArgsLine && status.executor !== 'none') {
     console.log(
       `${dim}  Launch args:${rst} ${truncate(status.executorLaunchArgsLine, 140)}`,
+    );
+  }
+  if (status.defaultAgentCwd && status.executor !== 'none') {
+    console.log(
+      `${dim}  Agent cwd (default, topic may override):${rst} ${truncate(status.defaultAgentCwd, 100)}`,
     );
   }
   if (status.pairingRotatedNotice) {

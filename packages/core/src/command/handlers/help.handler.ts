@@ -10,9 +10,23 @@ export class HelpHandler {
       { command: '/show', description: 'Details of the active topic' },
       { command: '/history', description: 'Past topics in this group' },
       { command: '/use <skill-name>', description: 'Invoke a skill by name' },
+      {
+        command: '/skills list [--page N] [--limit N] [--sort popular|recent|usage]',
+        description: 'Browse published Skill Center catalog (group or DM)',
+      },
+      { command: '/skills star <skill-name>', description: 'Like or unlike a published skill (same as CLI `skills star`)' },
       { command: '/register <code>', description: 'DM: bind this IM user to your local executor (code from serve)' },
       { command: '/unregister', description: 'DM: remove executor binding' },
-      { command: '/answer [#N] <text>', description: 'Reply to a pending agent question in the group' },
+      {
+        command: '/answer  or  /answer #N <text>',
+        description:
+          '`/answer` lists open questions; with several open, use `#N` from that list (`#1` = oldest). Replies echo which `#N` you answered.',
+      },
+      {
+        command: '/queue  or  /queue #N <message or slash>',
+        description:
+          '`/queue` lists running (claimed) tasks; with several running, use `#N` from that list, or omit `#N` when only one runs. Same routing as plain text or `/SkillName` / `/use`.',
+      },
       { command: '/help', description: 'This help (includes topic lifecycle overview in IM)' },
     ];
 

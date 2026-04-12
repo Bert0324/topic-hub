@@ -1,5 +1,7 @@
 import { spawn } from 'child_process';
+import matter from 'gray-matter';
 import type { AgentExecutor, ExecutionResult, ExecutorOptions } from './executor.interface.js';
+import { spawnOptionsWithExecutorCwd } from './spawn-agent-options.js';
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -18,7 +20,12 @@ export class CodexExecutor implements AgentExecutor {
     let fullPrompt = prompt;
     if (systemPromptPath) {
       const fs = await import('fs');
-      const systemPrompt = fs.readFileSync(systemPromptPath, 'utf-8');
+      const raw = fs.readFileSync(systemPromptPath, 'utf-8');
+      // Same SKILL.md files as Claude (`--append-system-prompt-file`); Codex has no file flag — inline
+      // body only so YAML frontmatter does not pollute the exec prompt.
+      const parsed = matter(raw);
+      const body = typeof parsed.content === 'string' ? parsed.content.trim() : '';
+      const systemPrompt = body.length > 0 ? body : raw.trim();
       fullPrompt = `${systemPrompt}\n\n---\n\n${prompt}`;
     }
 
@@ -30,9 +37,10 @@ export class CodexExecutor implements AgentExecutor {
     }
 
     return new Promise<ExecutionResult>((resolve, reject) => {
-      const spawnOpts: import('child_process').SpawnOptions = {
+      const baseSpawnOpts: import('child_process').SpawnOptions = {
         stdio: ['pipe', 'pipe', 'pipe'],
       };
+      const spawnOpts = spawnOptionsWithExecutorCwd(baseSpawnOpts, options);
       if (timeoutMs > 0) {
         spawnOpts.timeout = timeoutMs;
       }
@@ -41,11 +49,11 @@ export class CodexExecutor implements AgentExecutor {
       let stdout = '';
       let stderr = '';
 
-      child.stdout.on('data', (data: Buffer) => {
+      child.stdout?.on('data', (data: Buffer) => {
         stdout += data.toString();
       });
 
-      child.stderr.on('data', (data: Buffer) => {
+      child.stderr?.on('data', (data: Buffer) => {
         stderr += data.toString();
       });
 

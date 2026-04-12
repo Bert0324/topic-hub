@@ -6,13 +6,23 @@ import {
   resolveExecutorType,
   createExecutor,
 } from '../../executors/executor-factory.js';
-import { maybeSummarizeForIm } from '../../executors/summarize-for-im.js';
+import { maybeSummarizeForIm, clipForSummaryPrompt } from '../../executors/summarize-for-im.js';
 import type { ExecutionResult, ExecutorOptions } from '../../executors/executor.interface.js';
 import { writeMcpConfig, cleanupMcpConfig } from '../../mcp/mcp-config-writer.js';
 import type { ExecutorType } from '../../config/config.schema.js';
 import type { DispatchEvent } from './event-consumer.js';
 import type { EventLogEntry } from './status-display.js';
-import { purifyImRelayText } from '@topichub/core';
+import {
+  DEFAULT_MAX_CONCURRENT_AGENTS,
+  getImTaskCompletionBodyBudgetChars,
+  purifyImRelayText,
+} from '@topichub/core';
+import { resolveAgentWorkingDir } from './resolve-agent-cwd.js';
+import {
+  extractLeadingSlashToken,
+  findClaudeProjectSkillMd,
+} from './claude-project-skill.js';
+import { agentOutputSeeksImAnswer } from './agent-seeks-user-input.js';
 
 export interface TaskProcessorOptions {
   serverUrl: string;
@@ -22,8 +32,15 @@ export interface TaskProcessorOptions {
   cliExecutorFlag?: string;
   executorArgs?: string[];
   maxConcurrentAgents?: number;
+  /**
+   * Optional cwd override (`serve --agent-cwd` or `TOPICHUB_AGENT_CWD`). If unset, agent cwd defaults
+   * to `INIT_CWD` (shell directory when `pnpm`/`npm` started the script) or `process.cwd()`. Per-topic `metadata.executorCwd` still wins when valid.
+   */
+  sessionAgentCwd?: string;
   onEventUpdate: (entry: EventLogEntry) => void;
   onAgentQuestion?: (dispatchId: string, question: string, context?: { skillName: string; topicTitle: string }) => Promise<string | null>;
+  /** Fired after this dispatch was claimed and then marked completed or failed on the server (for `/queue` unblock). */
+  onDispatchServerTerminal?: (dispatchId: string) => void;
 }
 
 interface SkillFrontmatter {
@@ -36,8 +53,11 @@ interface SkillFrontmatter {
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 
+/** Ask the server to extend the dispatch claim while an agent is still running. */
+const CLAIM_RENEW_INTERVAL_MS = 120_000;
+
 /**
- * Hard cap for each `claude` / `codex` subprocess under `serve`.
+ * Hard cap for each local agent subprocess under `serve`.
  * Set `TOPICHUB_AGENT_TIMEOUT_MS=0` to disable (no Node spawn timeout — can hang indefinitely).
  */
 function resolveDispatchAgentTimeoutMs(): number {
@@ -118,7 +138,7 @@ export class TaskProcessor {
   }
 
   get concurrencyLimit(): number {
-    return this.options.maxConcurrentAgents ?? 1;
+    return this.options.maxConcurrentAgents ?? DEFAULT_MAX_CONCURRENT_AGENTS;
   }
 
   canAcceptMore(): boolean {
@@ -151,6 +171,8 @@ export class TaskProcessor {
     );
     this.options.onEventUpdate(logEntry);
 
+    let claimRenewTimer: ReturnType<typeof setInterval> | undefined;
+    let settledOnServer = false;
     try {
       const claimed = await this.claimDispatch(dispatchId);
       if (!claimed) {
@@ -162,7 +184,15 @@ export class TaskProcessor {
 
       console.log(`[CLAIM]    Claimed dispatch ${dispatchId}`);
 
-      const { systemPromptPath, frontmatter } = this.loadSkill(dispatch.skillName);
+      const renew = () => {
+        void this.touchClaim(dispatchId).catch((err) => {
+          console.warn(
+            `[DISPATCH] touch-claim failed for ${dispatchId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+      };
+      renew();
+      claimRenewTimer = setInterval(renew, CLAIM_RENEW_INTERVAL_MS);
 
       // Claim API historically omitted `enrichedPayload`; SSE payload may still carry it — merge so the agent always sees topic + event.
       const promptPayload = {
@@ -171,6 +201,62 @@ export class TaskProcessor {
           (claimed as any)?.enrichedPayload ??
           (dispatch as any).enrichedPayload,
       };
+
+      const topicMeta = (promptPayload as { enrichedPayload?: { topic?: { metadata?: Record<string, unknown> } } })
+        .enrichedPayload?.topic?.metadata;
+      const { cwd: agentCwd, source: agentCwdSource, topicExecutorCwdInvalid } = resolveAgentWorkingDir({
+        topicMetadata: topicMeta,
+        sessionDefaultCwd: this.options.sessionAgentCwd,
+      });
+      if (topicExecutorCwdInvalid) {
+        console.warn(
+          '[AGENT]    topic.metadata.executorCwd is not a valid directory; using session override or INIT_CWD / process.cwd().',
+        );
+      }
+      if (agentCwd && agentCwdSource !== 'pwd') {
+        console.log(`[AGENT]    subprocess cwd (${agentCwdSource}): ${agentCwd}`);
+      }
+
+      const eventForSkill = (promptPayload as { enrichedPayload?: { event?: { payload?: unknown } } })
+        .enrichedPayload?.event;
+      const userLineForProjectSkill = extractUserFacingInput(eventForSkill);
+      const slashToken = extractLeadingSlashToken(userLineForProjectSkill);
+      const projectSkillMatch = findClaudeProjectSkillMd(agentCwd, slashToken);
+
+      const instr = (promptPayload as { enrichedPayload?: { skillInstructions?: Record<string, unknown> } })
+        .enrichedPayload?.skillInstructions;
+      const useServerSkill =
+        instr &&
+        typeof (instr as { primaryInstruction?: string }).primaryInstruction === 'string' &&
+        ((instr as { primaryInstruction: string }).primaryInstruction as string).trim().length > 0;
+
+      let systemPromptPath: string | null;
+      let frontmatter: SkillFrontmatter;
+
+      if (useServerSkill) {
+        systemPromptPath = null;
+        frontmatter = {
+          name: (instr as { frontmatter?: { name?: string } }).frontmatter?.name,
+          description: (instr as { frontmatter?: { description?: string } }).frontmatter?.description,
+          executor: (instr as { frontmatter?: { executor?: string } }).frontmatter?.executor,
+          maxTurns: (instr as { frontmatter?: { maxTurns?: number } }).frontmatter?.maxTurns,
+          allowedTools: (instr as { frontmatter?: { allowedTools?: string[] } }).frontmatter?.allowedTools,
+        } as SkillFrontmatter;
+      } else {
+        const base = this.loadSkill(dispatch.skillName);
+        if (projectSkillMatch) {
+          const raw = fs.readFileSync(projectSkillMatch.path, 'utf-8');
+          const parsed = matter(raw);
+          systemPromptPath = projectSkillMatch.path;
+          frontmatter = { ...base.frontmatter, ...(parsed.data ?? {}) } as SkillFrontmatter;
+          console.log(
+            `[AGENT]    Project local skill (${projectSkillMatch.localBundle}): ${projectSkillMatch.skillDirName} → ${projectSkillMatch.path}`,
+          );
+        } else {
+          systemPromptPath = base.systemPromptPath;
+          frontmatter = base.frontmatter;
+        }
+      }
 
       const prompt = this.buildPrompt(promptPayload, !!systemPromptPath);
 
@@ -197,12 +283,74 @@ export class TaskProcessor {
         mcpConfigPath,
         extraArgs: this.options.executorArgs,
         headless: true,
+        ...(agentCwd ? { cwd: agentCwd } : {}),
       };
 
       const startMs = Date.now();
       let result: ExecutionResult;
       try {
         result = await executor.execute(prompt, systemPromptPath, execOptions);
+
+        if (result.exitCode === 0 && this.options.onAgentQuestion) {
+          const maxRoundsRaw = process.env.TOPICHUB_INTERACTIVE_QA_MAX_ROUNDS?.trim();
+          const maxInteractiveRounds = Math.min(
+            30,
+            Math.max(1, parseInt(maxRoundsRaw ?? '20', 10) || 20),
+          );
+          /** Only the latest agent turn is checked — merged transcript would keep matching old "Question 1 of 5". */
+          let lastAgentOutput = result.text;
+          let round = 0;
+          while (round < maxInteractiveRounds && agentOutputSeeksImAnswer(lastAgentOutput)) {
+            round += 1;
+            console.log(
+              `[AGENT]    Interactive round ${round}/${maxInteractiveRounds}: posting Q&A to IM, awaiting \`/answer\` (send \`/answer\` alone in the group to list open #N lines)…`,
+            );
+            const answer = await this.options.onAgentQuestion(dispatchId, lastAgentOutput, {
+              skillName: dispatch.skillName,
+              topicTitle,
+            });
+            if (!answer?.trim()) {
+              console.warn(
+                '[AGENT]    No IM answer (timeout or empty); stopping interactive chain.',
+              );
+              break;
+            }
+            const prior = clipForSummaryPrompt(result.text, 28_000);
+            const followUp = [
+              '# Same Topic Hub dispatch — user replied in IM',
+              'Your prior cumulative output is below (may be truncated). The user replied via `/answer`. Continue per your skill instructions; produce the next step or final result.',
+              '',
+              '## Prior cumulative output',
+              '```',
+              prior,
+              '```',
+              '',
+              '## User reply (from IM)',
+              answer.trim(),
+            ].join('\n');
+            // Claude Code may remove the temp MCP JSON when the first subprocess exits; recreate before each follow-up run.
+            writeMcpConfig({
+              serverUrl: this.options.serverUrl,
+              token: this.options.token,
+              allowedTools: frontmatter?.allowedTools,
+            });
+            const next = await executor.execute(followUp, systemPromptPath, execOptions);
+            const dPrev = result.durationMs ?? 0;
+            const dNext = next.durationMs ?? 0;
+            result = {
+              ...next,
+              text: `${result.text}\n\n---\n**User (IM)**\n${answer.trim()}\n\n---\n**Agent (continued)**\n${next.text}`,
+              durationMs: dPrev + dNext,
+              exitCode: next.exitCode,
+              executorType: next.executorType,
+              tokenUsage: next.tokenUsage,
+            };
+            if (next.exitCode !== 0) {
+              break;
+            }
+            lastAgentOutput = next.text;
+          }
+        }
       } finally {
         cleanupMcpConfig(mcpConfigPath);
       }
@@ -210,22 +358,35 @@ export class TaskProcessor {
       const elapsed = result.durationMs ?? Date.now() - startMs;
 
       if (result.exitCode === 0) {
+        const sourcePlatform =
+          (dispatch as { sourcePlatform?: string }).sourcePlatform ??
+          (typeof claimed === 'object' && claimed !== null
+            ? (claimed as { sourcePlatform?: string }).sourcePlatform
+            : undefined);
+        const imBodyBudget = getImTaskCompletionBodyBudgetChars(sourcePlatform);
         const imSummary = await maybeSummarizeForIm(
           result.text,
           executorType,
           this.options.executorArgs,
+          {
+            imBodyBudgetChars: imBodyBudget,
+            sourcePlatform,
+            ...(agentCwd ? { agentCwd } : {}),
+          },
         );
         const payload =
           imSummary != null
             ? { ...result, imSummary }
             : result;
         await this.completeDispatch(dispatchId, payload);
+        settledOnServer = true;
         logEntry.status = 'completed';
         logEntry.durationMs = elapsed;
         console.log(`[RESULT]   Completed in ${elapsed}ms`);
       } else {
         const failText = result.text?.trim() || `exit code ${result.exitCode}`;
         await this.failDispatch(dispatchId, failText, true);
+        settledOnServer = true;
         logEntry.status = 'failed';
         logEntry.durationMs = elapsed;
         logEntry.error = truncateOneLine(
@@ -257,14 +418,25 @@ export class TaskProcessor {
       }
       try {
         await this.failDispatch(dispatchId, msg, true);
+        settledOnServer = true;
       } catch {
         // Best-effort
       }
     } finally {
+      if (claimRenewTimer) {
+        clearInterval(claimRenewTimer);
+      }
       this.activeCount--;
       this.activeDispatches.delete(dispatchId);
       this.options.onEventUpdate(logEntry);
+      if (settledOnServer) {
+        this.options.onDispatchServerTerminal?.(dispatchId);
+      }
     }
+  }
+
+  private async touchClaim(dispatchId: string): Promise<void> {
+    await this.api.post(`/api/v1/dispatches/${dispatchId}/touch-claim`, {});
   }
 
   private async claimDispatch(dispatchId: string): Promise<any | null> {
@@ -349,9 +521,37 @@ export class TaskProcessor {
   private buildPrompt(claimedDispatch: any, hasSkillMdOnDisk: boolean): string {
     const payload = claimedDispatch.enrichedPayload ?? claimedDispatch;
     const event = payload.event ?? {};
+    const rawPayload = event.payload;
+    const eventForDisplay =
+      rawPayload != null && typeof rawPayload === 'object' && !Array.isArray(rawPayload)
+        ? {
+            ...event,
+            payload: (() => {
+              const p = { ...(rawPayload as Record<string, unknown>) };
+              delete p.queueAfterDispatchId;
+              return p;
+            })(),
+          }
+        : event;
+    const publishedMiss =
+      rawPayload != null &&
+      typeof rawPayload === 'object' &&
+      !Array.isArray(rawPayload) &&
+      (rawPayload as Record<string, unknown>).publishedSkillRouting;
+    const missHint =
+      publishedMiss &&
+        typeof publishedMiss === 'object' &&
+        (publishedMiss as { status?: string }).status === 'miss' &&
+        typeof (publishedMiss as { token?: string }).token === 'string'
+        ? truncateOneLine(
+          `No published Skill Center skill matched "${(publishedMiss as { token: string }).token}"; proceed using local skills / general instructions.`,
+          240,
+        )
+        : '';
+
     const userLine = extractUserFacingInput(event);
     const topicJson = JSON.stringify(payload.topic ?? {}, null, 2);
-    const eventJson = JSON.stringify(event ?? {}, null, 2);
+    const eventJson = JSON.stringify(eventForDisplay ?? {}, null, 2);
 
     const looksLikePureGreeting =
       userLine.length > 0 &&
@@ -362,6 +562,9 @@ export class TaskProcessor {
       '# Role',
       'You are the **topic assistant** in a group chat. Write for **end users** (teammates), not for engineers.',
       '',
+      ...(missHint
+        ? ['# Skill Center routing', missHint, '']
+        : []),
       '# How to answer (strict)',
       '- Your final reply must be **natural language** suitable to post back into the chat.',
       '- Do **not** discuss JSON, HTTP, "dispatch", "claim", "executor", "Topic Hub internals", or empty `{}` fields.',
@@ -414,7 +617,7 @@ export class TaskProcessor {
       sections.push('# Skill playbook (default — no SKILL.md for this topic type on disk)');
       sections.push(
         'There is no dedicated SKILL.md for this skill name. Still: treat **What the user said** as the real task. ' +
-          'When the user names absolute paths or asks for directory trees, architecture, or code exploration, use every tool you are allowed to run (e.g. Bash for `tree`/`find`/`ls`, Read for files) on the **host where you run** (often the machine running the executor), then answer with concrete structure and summaries—not a generic welcome.',
+        'When the user names absolute paths or asks for directory trees, architecture, or code exploration, use every tool you are allowed to run (e.g. Bash for `tree`/`find`/`ls`, Read for files) on the **host where you run** (often the machine running the executor), then answer with concrete structure and summaries—not a generic welcome.',
       );
       sections.push('');
     }

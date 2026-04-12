@@ -12,6 +12,11 @@ export interface ExecutorOptions {
    * `TOPICHUB_CLAUDE_PERMISSION_MODE` or `executorArgs --permission-mode`).
    */
   headless?: boolean;
+  /**
+   * Working directory for the agent subprocess (any {@link AgentExecutor}).
+   * When set, local project conventions such as `.claude/skills` resolve from this path.
+   */
+  cwd?: string;
 }
 
 export interface ExecutionResult {
@@ -22,6 +27,11 @@ export interface ExecutionResult {
   exitCode: number;
 }
 
+/**
+ * Local agent CLI backend. Implementations spawn a subprocess (or equivalent) and MUST honor
+ * {@link ExecutorOptions.cwd} when set so project roots and tool-specific dirs (e.g. `.claude/skills`)
+ * resolve consistently — including any executor added in the future.
+ */
 export interface AgentExecutor {
   readonly type: string;
   execute(

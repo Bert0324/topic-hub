@@ -1,16 +1,18 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import matter from 'gray-matter';
 import { loadAdminToken, loadIdToken } from '../../auth/auth.js';
 import { loadConfig } from '../../config/config.js';
 import { ApiClient } from '../../api-client/api-client.js';
 import {
   PublishPayloadSchema,
   SkillManifestSchema,
+  SkillMdOnlyPublishFrontmatterSchema,
 } from '../../validation/skill-manifest.js';
 
 const REGISTRATION_ID_HEX = /^[a-fA-F0-9]{24}$/;
 
-/** Resolve a user-supplied path to the skill root directory (contains package.json). */
+/** Resolve a user-supplied path to the skill root directory (SKILL.md and/or package.json). */
 function resolveSkillDir(rawPath: string): string {
   const abs = path.resolve(process.cwd(), rawPath);
   if (!fs.existsSync(abs)) {
@@ -34,42 +36,95 @@ function resolveSkillDir(rawPath: string): string {
   process.exit(2);
 }
 
-function buildSkillPayload(skillDir: string) {
-  const pkgPath = path.join(skillDir, 'package.json');
-  if (!fs.existsSync(pkgPath)) {
-    console.error(`Missing package.json in skill directory: ${skillDir}`);
-    process.exit(2);
-  }
-
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+function buildSkillPayloadFromPackageJson(skillDir: string, pkg: Record<string, unknown>) {
   const manifestCheck = SkillManifestSchema.safeParse(pkg);
   if (!manifestCheck.success) {
     console.error('Invalid skill manifest:', manifestCheck.error.message);
     process.exit(2);
   }
 
-  const topichub = pkg.topichub ?? {};
-  const category = topichub.category ?? 'type';
+  const topichub = (pkg.topichub as Record<string, unknown> | undefined) ?? {};
+  const category = (topichub.category as 'type' | 'platform' | 'adapter' | undefined) ?? 'type';
 
   const skillMdPath = path.join(skillDir, 'SKILL.md');
   const skillMdRaw = fs.existsSync(skillMdPath)
     ? fs.readFileSync(skillMdPath, 'utf-8')
     : '';
 
-  const mainFile = pkg.main ?? 'src/index.ts';
+  const mainFile = (pkg.main as string | undefined) ?? 'src/index.ts';
   const entryPath = path.join(skillDir, mainFile);
   const entryPoint = fs.existsSync(entryPath) ? fs.readFileSync(entryPath, 'utf-8') : '';
 
   return {
-    name: pkg.name ?? path.basename(skillDir),
+    name: (pkg.name as string | undefined) ?? path.basename(skillDir),
     category,
-    version: pkg.version ?? '0.0.0',
+    version: (pkg.version as string | undefined) ?? '0.0.0',
     metadata: topichub,
     skillMdRaw,
     entryPoint,
     files: {} as Record<string, string>,
     manifest: pkg,
   };
+}
+
+function buildSkillPayloadFromSkillMdOnly(skillDir: string, skillMdRaw: string) {
+  let parsed: matter.GrayMatterFile<string>;
+  try {
+    parsed = matter(skillMdRaw);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`Invalid SKILL.md (could not parse frontmatter): ${msg}`);
+    process.exit(2);
+  }
+
+  const fmCheck = SkillMdOnlyPublishFrontmatterSchema.safeParse(parsed.data);
+  if (!fmCheck.success) {
+    console.error('Invalid SKILL.md frontmatter for publish:', fmCheck.error.message);
+    process.exit(2);
+  }
+
+  const fm = fmCheck.data;
+  const topichub: Record<string, unknown> = { category: fm.category ?? 'type' };
+  if (fm.topicType !== undefined) topichub.topicType = fm.topicType;
+  if (fm.platform !== undefined) topichub.platform = fm.platform;
+  if (fm.sourceSystem !== undefined) topichub.sourceSystem = fm.sourceSystem;
+
+  const manifest: Record<string, unknown> = {
+    name: fm.name,
+    description: fm.description,
+    topichub,
+  };
+
+  return {
+    name: fm.name,
+    category: (fm.category ?? 'type') as 'type' | 'platform' | 'adapter',
+    metadata: topichub,
+    skillMdRaw,
+    entryPoint: '',
+    files: {} as Record<string, string>,
+    manifest,
+  };
+}
+
+function buildSkillPayload(skillDir: string) {
+  const pkgPath = path.join(skillDir, 'package.json');
+  const skillMdPath = path.join(skillDir, 'SKILL.md');
+
+  if (fs.existsSync(pkgPath)) {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as Record<string, unknown>;
+    return buildSkillPayloadFromPackageJson(skillDir, pkg);
+  }
+
+  if (!fs.existsSync(skillMdPath)) {
+    console.error(
+      `Missing package.json and SKILL.md in skill directory: ${skillDir}\n` +
+        'Add package.json (code skill) or SKILL.md with name/description frontmatter (md-only skill).',
+    );
+    process.exit(2);
+  }
+
+  const skillMdRaw = fs.readFileSync(skillMdPath, 'utf-8');
+  return buildSkillPayloadFromSkillMdOnly(skillDir, skillMdRaw);
 }
 
 function stripFlags(args: string[]): { pathArg: string | undefined; registrationId?: string } {
@@ -123,8 +178,9 @@ export async function handlePublishCommand(args: string[]): Promise<void> {
   }
 
   const skillDir = resolveSkillDir(pathArg);
+  const built = buildSkillPayload(skillDir);
   const skill = {
-    ...buildSkillPayload(skillDir),
+    ...built,
     ...(registrationId ? { registrationId } : {}),
   };
 
@@ -135,7 +191,8 @@ export async function handlePublishCommand(args: string[]): Promise<void> {
   }
 
   const client = new ApiClient(serverUrl);
-  console.log(`Publishing ${skill.name}@${skill.version} to ${serverUrl}…`);
+  const versionLabel = 'version' in built && built.version !== undefined ? built.version : 'auto';
+  console.log(`Publishing ${skill.name}@${versionLabel} to ${serverUrl}…`);
 
   try {
     const result = await client.post('/admin/skills/publish', payloadParsed.data);
@@ -159,7 +216,15 @@ export async function handlePublishCommand(args: string[]): Promise<void> {
       process.exit(3);
     }
 
-    console.log(`Done. skills list shows package.json version (${skill.version}); bump it to release a new version.`);
+    if ('version' in skill && skill.version !== undefined) {
+      console.log(
+        `Done. skills list shows version ${skill.version}; change package.json version to publish a specific version.`,
+      );
+    } else {
+      console.log(
+        'Done. The server assigned the catalog version (auto patch bump on each publish without a version field).',
+      );
+    }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes('403') || msg.toLowerCase().includes('forbidden')) {

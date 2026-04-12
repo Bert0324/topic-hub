@@ -308,12 +308,13 @@ export class OpenClawBridge {
    * @param target Delivery peer id (chat id, `user:…`, etc.).
    * @param opts.sessionKey When set, must be the inbound OpenClaw session key so replies route to the same DM/group.
    */
+  /** @returns true when OpenClaw accepted the send (HTTP 2xx). */
   async sendMessage(
     channel: string,
     target: string,
     message: string,
     opts?: { sessionKey?: string },
-  ): Promise<void> {
+  ): Promise<boolean> {
     const url = `${this.config.gatewayUrl}/tools/invoke`;
     const sessionKey =
       opts?.sessionKey?.trim()
@@ -344,12 +345,15 @@ export class OpenClawBridge {
           `OpenClaw send failed: ${res.status} ${res.statusText}`,
           body,
         );
+        return false;
       }
+      return true;
     } catch (err) {
       this.logger.error(
         'OpenClaw send request failed',
         err instanceof Error ? err.message : String(err),
       );
+      return false;
     }
   }
 

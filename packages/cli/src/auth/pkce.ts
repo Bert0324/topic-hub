@@ -95,11 +95,22 @@ export async function exchangeCodeForTokens(
     throw new Error(`Token exchange failed: ${err}`);
   }
 
-  const data = await res.json();
+  const data = (await res.json()) as Record<string, unknown>;
+  const refreshToken =
+    data.refresh_token != null && data.refresh_token !== ''
+      ? String(data.refresh_token)
+      : undefined;
+  const expiresRaw = data.expires_in;
+  const expiresIn =
+    typeof expiresRaw === 'number'
+      ? expiresRaw
+      : typeof expiresRaw === 'string'
+        ? parseInt(expiresRaw, 10)
+        : undefined;
   return {
-    idToken: data.id_token,
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token,
-    expiresIn: data.expires_in,
+    idToken: String(data.id_token ?? ''),
+    accessToken: String(data.access_token ?? ''),
+    refreshToken,
+    expiresIn: Number.isFinite(expiresIn) ? expiresIn : undefined,
   };
 }

@@ -3,6 +3,7 @@ import { ForbiddenError, NotFoundError, ValidationError } from '../common/errors
 import type { TopicHubLogger } from '../common/logger';
 import { PublishPayloadSchema } from '../skill/interfaces/skill-manifest';
 import { SkillMdParser } from '../skill/registry/skill-md-parser';
+import { resolvePublishedSkillVersion } from './publish-version';
 import { SkillListQuerySchema } from '../validation/skill-center.schema';
 
 function escapeRegex(s: string): string {
@@ -16,6 +17,7 @@ export class SkillCenterService {
     private readonly identityModel: Model<any>,
     private readonly skillMdParser: SkillMdParser,
     private readonly logger: TopicHubLogger,
+    private readonly publishedSkillCatalog?: { invalidate(): void },
   ) {}
 
   async publishSkills(
@@ -91,10 +93,15 @@ export class SkillCenterService {
           const hadPublished = existingDoc.publishedContent != null;
           isNew = !hadPublished;
 
+          const resolvedVersion = resolvePublishedSkillVersion(
+            item.version,
+            typeof existingDoc.version === 'string' ? existingDoc.version : undefined,
+          );
+
           const updateBody = {
             name: item.name,
             category: item.category,
-            version: item.version ?? '0.0.0',
+            version: resolvedVersion,
             modulePath: `published://${item.name}`,
             metadata: item.metadata ?? {},
             skillMd,
@@ -112,13 +119,14 @@ export class SkillCenterService {
         } else {
           const existing = (await this.skillRegistrationModel
             .findOne({ name: item.name })
-            .select('likeCount usageCount authorIdentityId publishedContent')
+            .select('likeCount usageCount authorIdentityId publishedContent version')
             .lean()
             .exec()) as {
             likeCount?: number;
             usageCount?: number;
             authorIdentityId?: string;
             publishedContent?: unknown;
+            version?: string;
           } | null;
 
           if (
@@ -135,10 +143,15 @@ export class SkillCenterService {
           const hadPublished = existing?.publishedContent != null;
           isNew = !hadPublished;
 
+          const resolvedVersion = resolvePublishedSkillVersion(
+            item.version,
+            typeof existing?.version === 'string' ? existing.version : undefined,
+          );
+
           const updateBody = {
             name: item.name,
             category: item.category,
-            version: item.version ?? '0.0.0',
+            version: resolvedVersion,
             modulePath: `published://${item.name}`,
             metadata: item.metadata ?? {},
             skillMd,
@@ -170,6 +183,10 @@ export class SkillCenterService {
         this.logger.error(`Publish failed for ${item.name}`, msg);
         errors.push({ name: item.name, error: msg });
       }
+    }
+
+    if (published.length > 0) {
+      this.publishedSkillCatalog?.invalidate();
     }
 
     return { published, errors };
@@ -375,6 +392,8 @@ export class SkillCenterService {
         },
       )
       .exec();
+
+    this.publishedSkillCatalog?.invalidate();
 
     return { deleted: true, id: String(skillId) };
   }

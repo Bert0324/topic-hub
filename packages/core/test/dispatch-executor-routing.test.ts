@@ -33,12 +33,13 @@ describe('DispatchService executor-scoped routing', () => {
   let mongod: MongoMemoryServer;
   let connection: mongoose.Connection;
   let dispatchService: DispatchService;
+  let DispatchModel: mongoose.Model<any>;
 
   beforeAll(async () => {
     mongod = await MongoMemoryServer.create();
     connection = mongoose.createConnection(mongod.getUri());
     await connection.asPromise();
-    const DispatchModel = getModelForClass(TaskDispatch, {
+    DispatchModel = getModelForClass(TaskDispatch, {
       existingConnection: connection,
     });
     const logger = {
@@ -155,5 +156,87 @@ describe('DispatchService executor-scoped routing', () => {
     const goodFail = await dispatchService.fail(id2, 'oops', false, 'exec_fail_test');
     expect(goodFail).not.toBeNull();
     expect(goodFail!.status).toBe(DispatchStatus.FAILED);
+  });
+
+  it('isolates concurrent claim tokens for the same user id (rebinding / multi-session)', async () => {
+    const topicId = new mongoose.Types.ObjectId().toString();
+    await dispatchService.create({
+      topicId,
+      eventType: DispatchEventType.UPDATED,
+      skillName: 's-old',
+      enrichedPayload: minimalEnrichedPayload(topicId),
+      targetUserId: 'same-user',
+      targetExecutorToken: 'claim_before_reregister',
+    });
+    await dispatchService.create({
+      topicId,
+      eventType: DispatchEventType.UPDATED,
+      skillName: 's-new',
+      enrichedPayload: minimalEnrichedPayload(topicId),
+      targetUserId: 'same-user',
+      targetExecutorToken: 'claim_after_reregister',
+    });
+
+    const oldSession = await dispatchService.findUnclaimed({
+      executorToken: 'claim_before_reregister',
+      limit: 20,
+    });
+    const newSession = await dispatchService.findUnclaimed({
+      executorToken: 'claim_after_reregister',
+      limit: 20,
+    });
+
+    expect(oldSession).toHaveLength(1);
+    expect(newSession).toHaveLength(1);
+    expect(oldSession[0].skillName).toBe('s-old');
+    expect(newSession[0].skillName).toBe('s-new');
+    expect(String(oldSession[0]._id)).not.toBe(String(newSession[0]._id));
+  });
+
+  it('renewClaim extends claimExpiry for an active CLAIMED dispatch', async () => {
+    const topicId = new mongoose.Types.ObjectId().toString();
+    const d = await dispatchService.create({
+      topicId,
+      eventType: DispatchEventType.UPDATED,
+      skillName: 'renew-skill',
+      enrichedPayload: minimalEnrichedPayload(topicId),
+      targetUserId: 'identity-renew',
+      targetExecutorToken: 'exec_renew',
+    });
+    const id = d._id.toString();
+    await dispatchService.claim(id, 'cli', 'exec_renew');
+
+    await DispatchModel.updateOne(
+      { _id: d._id },
+      { $set: { claimExpiry: new Date(Date.now() - 60_000) } },
+    );
+
+    const renewed = await dispatchService.renewClaim(id, 'exec_renew');
+    expect(renewed).toBe(true);
+    const doc = await dispatchService.findById(id);
+    expect(doc?.claimExpiry?.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('renewClaim returns false when dispatch was released (expired claim)', async () => {
+    const topicId = new mongoose.Types.ObjectId().toString();
+    const d = await dispatchService.create({
+      topicId,
+      eventType: DispatchEventType.UPDATED,
+      skillName: 'release-skill',
+      enrichedPayload: minimalEnrichedPayload(topicId),
+      targetUserId: 'identity-release',
+      targetExecutorToken: 'exec_release',
+    });
+    const id = d._id.toString();
+    await dispatchService.claim(id, 'cli', 'exec_release');
+
+    await DispatchModel.updateOne(
+      { _id: d._id },
+      { $set: { claimExpiry: new Date(Date.now() - 60_000) } },
+    );
+    await dispatchService.releaseExpired();
+
+    const renewed = await dispatchService.renewClaim(id, 'exec_release');
+    expect(renewed).toBe(false);
   });
 });

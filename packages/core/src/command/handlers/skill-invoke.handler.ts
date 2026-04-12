@@ -39,20 +39,24 @@ export class SkillInvokeHandler {
     }
 
     try {
+      const payload: Record<string, unknown> = {
+        skillName,
+        slashArgs: parsed.args,
+        slashTypeArg: parsed.type,
+        imText: context.imChatLine ?? context.relayText,
+      };
+      if (context.queueAfterDispatchId) {
+        payload.queueAfterDispatchId = context.queueAfterDispatchId;
+      }
       await this.skillPipeline.execute(
         DispatchEventType.SKILL_INVOCATION,
         topic,
         context.userId,
-        {
-          skillName,
-          slashArgs: parsed.args,
-          slashTypeArg: parsed.type,
-          imText: context.imChatLine ?? context.relayText,
-        },
+        payload,
         context.dispatchMeta,
         { dispatchSkillName: skillName },
       );
-      return { success: true, message: '' };
+      return { success: true, message: '', deferOpenClawThreadReply: true };
     } catch (err) {
       this.logger.error('Skill invoke dispatch failed', String(err));
       return { success: false, error: `Skill invoke failed: ${(err as Error).message}` };

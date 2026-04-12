@@ -58,7 +58,7 @@ export { EventPayloadSchema } from './ingestion/event-payload';
 export type { EventPayload } from './ingestion/event-payload';
 
 // Webhook result
-export type { WebhookResult } from './webhook/webhook-handler';
+export type { WebhookResult, WebhookDispatchQueueOps } from './webhook/webhook-handler';
 
 // Bridge
 export {
@@ -84,6 +84,12 @@ export type {
 
 export { purifyImRelayText } from './im/im-relay-text';
 export { IM_SUMMARY_MIN_LENGTH, pickImNotifyBody } from './im/im-notify-body';
+export {
+  IM_TASK_COMPLETED_PREFIX,
+  getImPlatformTotalMessageMax,
+  getImTaskCompletionBodyBudgetChars,
+} from './im/im-platform-limits';
+export { formatQaHowToReplyLine } from './im/im-list-format';
 
 // Services
 export { IdentityService } from './identity/identity.service';

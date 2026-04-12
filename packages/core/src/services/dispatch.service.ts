@@ -4,7 +4,23 @@ import mongoose from 'mongoose';
 import { DispatchStatus } from '../common/enums';
 import type { TopicHubLogger } from '../common/logger';
 
-const CLAIM_TTL_MS = 5 * 60 * 1000;
+/** Minimum configurable claim TTL (ms). */
+const MIN_DISPATCH_CLAIM_TTL_MS = 60_000;
+/** Default 1h — previously 5m, which released long-running agent tasks before `complete`, so IM never got results. */
+const DEFAULT_DISPATCH_CLAIM_TTL_MS = 60 * 60 * 1000;
+
+export function resolveDispatchClaimTtlMs(): number {
+  const raw =
+    typeof process !== 'undefined' ? process.env.TOPICHUB_DISPATCH_CLAIM_TTL_MS : undefined;
+  if (raw != null && String(raw).trim() !== '') {
+    const n = parseInt(String(raw), 10);
+    if (!Number.isNaN(n) && n >= MIN_DISPATCH_CLAIM_TTL_MS) {
+      return n;
+    }
+  }
+  return DEFAULT_DISPATCH_CLAIM_TTL_MS;
+}
+
 const EXPIRY_CHECK_INTERVAL_MS = 60 * 1000;
 const MAX_RETRY_COUNT = 3;
 
@@ -81,6 +97,52 @@ export class DispatchService {
     return this.dispatchModel.findById(dispatchId).exec();
   }
 
+  /**
+   * Running (claimed) dispatches for a topic and executor, oldest first — used for IM `/queue #N` anchor resolution.
+   */
+  async findClaimedByTopicExecutor(
+    topicId: string,
+    executorToken: string,
+    limit = 50,
+  ): Promise<any[]> {
+    const oid = new mongoose.Types.ObjectId(topicId);
+    return this.dispatchModel
+      .find({
+        topicId: oid,
+        targetExecutorToken: executorToken,
+        status: DispatchStatus.CLAIMED,
+      })
+      .sort({ createdAt: 1 })
+      .limit(limit)
+      .select('_id skillName createdAt')
+      .lean()
+      .exec();
+  }
+
+  /** Executor-scoped status read for CLI queue / polling. */
+  async findByIdForExecutor(
+    dispatchId: string,
+    executorToken: string,
+  ): Promise<{ id: string; status: DispatchStatus; topicId: string } | null> {
+    if (!mongoose.isValidObjectId(dispatchId)) {
+      return null;
+    }
+    const doc = (await this.dispatchModel
+      .findOne({
+        _id: dispatchId,
+        targetExecutorToken: executorToken,
+      })
+      .select('_id status topicId')
+      .lean()
+      .exec()) as { _id: unknown; status: string; topicId: unknown } | null;
+    if (!doc) return null;
+    return {
+      id: String(doc._id),
+      status: doc.status as DispatchStatus,
+      topicId: String(doc.topicId),
+    };
+  }
+
   async findUnclaimed(
     options?: { limit?: number; since?: Date; executorToken?: string },
   ): Promise<any[]> {
@@ -109,7 +171,7 @@ export class DispatchService {
     claimedBy: string,
     executorToken: string,
   ): Promise<any | null> {
-    const claimExpiry = new Date(Date.now() + CLAIM_TTL_MS);
+    const claimExpiry = new Date(Date.now() + resolveDispatchClaimTtlMs());
 
     const filter: Record<string, unknown> = {
       _id: dispatchId,
@@ -130,6 +192,26 @@ export class DispatchService {
         { new: true },
       )
       .exec();
+  }
+
+  /**
+   * Extends `claimExpiry` while the dispatch is still CLAIMED for this executor.
+   * Used by `serve` so long-running agents are not released mid-flight.
+   */
+  async renewClaim(dispatchId: string, executorToken: string): Promise<boolean> {
+    const claimExpiry = new Date(Date.now() + resolveDispatchClaimTtlMs());
+    const updated = await this.dispatchModel
+      .findOneAndUpdate(
+        {
+          _id: dispatchId,
+          status: DispatchStatus.CLAIMED,
+          targetExecutorToken: executorToken,
+        },
+        { $set: { claimExpiry } },
+        { new: true },
+      )
+      .exec();
+    return updated != null;
   }
 
   async complete(
