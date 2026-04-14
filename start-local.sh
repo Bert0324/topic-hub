@@ -15,7 +15,6 @@ fi
 
 export MONGODB_URI="${MONGODB_URI:-mongodb://localhost:27017/topichub}"
 
-
 # Need at least one configured IM channel (same rules as Nest `TopicHubService`).
 has_discord=''
 [[ -n "${TOPICHUB_BRIDGE_DISCORD_BOT_TOKEN:-}" ]] && has_discord=1
