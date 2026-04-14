@@ -3,21 +3,28 @@ import {
   Global,
   Injectable,
   OnModuleInit,
+  OnApplicationBootstrap,
   OnModuleDestroy,
   Logger,
 } from '@nestjs/common';
+import { HttpAdapterHost } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
+import type { Server as HttpServer } from 'node:http';
 import mongoose from 'mongoose';
 import { TopicHub, TopicHubLogger } from '@topichub/core';
-import type { BridgeConfig } from '@topichub/core';
+import type { BridgeConfig, TopicHubBridgeConfig } from '@topichub/core';
 
 @Injectable()
-export class TopicHubService implements OnModuleInit, OnModuleDestroy {
+export class TopicHubService implements OnModuleInit, OnApplicationBootstrap, OnModuleDestroy {
   private hub: TopicHub | null = null;
   private connection: mongoose.Connection | null = null;
   private readonly logger = new Logger(TopicHubService.name);
+  private nestLogger!: (context: string) => TopicHubLogger;
 
-  constructor(private readonly config: ConfigService) { }
+  constructor(
+    private readonly config: ConfigService,
+    private readonly httpAdapterHost: HttpAdapterHost,
+  ) {}
 
   async onModuleInit() {
     const uri = this.buildMongoUri();
@@ -26,11 +33,7 @@ export class TopicHubService implements OnModuleInit, OnModuleDestroy {
     this.connection = mongoose.createConnection(uri, opts);
     await this.connection.asPromise();
 
-    const aiProvider = this.config.get<string>('AI_PROVIDER');
-    const aiApiKey = this.config.get<string>('AI_API_KEY');
-    const masterKey = this.config.get<string>('ENCRYPTION_MASTER_KEY');
-
-    const nestLogger = (context: string): TopicHubLogger => {
+    this.nestLogger = (context: string): TopicHubLogger => {
       const l = new Logger(context);
       return {
         log: (msg) => l.log(msg),
@@ -39,37 +42,25 @@ export class TopicHubService implements OnModuleInit, OnModuleDestroy {
         debug: (msg) => l.debug(msg),
       };
     };
+  }
 
-    const openclawConfig = this.config.get<string>('TOPICHUB_OPENCLAW_GATEWAY_URL') ? {
-      gatewayUrl: this.config.get<string>('TOPICHUB_OPENCLAW_GATEWAY_URL')!,
-      token: this.config.get<string>('TOPICHUB_OPENCLAW_TOKEN') ?? '',
-      webhookSecret: this.config.get<string>('TOPICHUB_OPENCLAW_WEBHOOK_SECRET') ?? '',
-    } : undefined;
-
-    const bridgeConfig = this.buildBridgeConfig();
+  async onApplicationBootstrap() {
+    const httpServer = this.httpAdapterHost.httpAdapter.getHttpServer() as HttpServer;
+    const listenPort = Number(this.config.get('PORT') ?? process.env.PORT ?? 3000);
+    const bridge = this.buildTopicHubBridge(httpServer, listenPort);
 
     this.hub = await TopicHub.create({
-      mongoConnection: this.connection,
-      logger: nestLogger,
+      mongoConnection: this.connection!,
+      logger: this.nestLogger,
       collectionPrefix: this.config.get('COLLECTION_PREFIX') ?? '',
       skillsDir: this.config.get('SKILLS_DIR') ?? './skills',
-      ...(aiProvider && aiApiKey
-        ? {
-          ai: {
-            provider: aiProvider,
-            apiKey: aiApiKey,
-            model: this.config.get('AI_MODEL'),
-            baseUrl: this.config.get('AI_API_URL'),
-          },
-        }
-        : {}),
-      ...(masterKey ? { encryption: { masterKey } } : {}),
-      ...(bridgeConfig ? { bridge: bridgeConfig }
-        : openclawConfig ? { openclaw: openclawConfig }
-        : {}),
+      ...this.aiAndEncryptionOpts(),
+      ...(bridge ? { bridge } : {}),
     });
 
-    this.logger.log('TopicHub initialized');
+    this.logger.log(
+      bridge ? 'TopicHub initialized (embedded OpenClaw bridge)' : 'TopicHub initialized',
+    );
   }
 
   async onModuleDestroy() {
@@ -85,6 +76,25 @@ export class TopicHubService implements OnModuleInit, OnModuleDestroy {
   getHub(): TopicHub {
     if (!this.hub) throw new Error('TopicHub not initialized');
     return this.hub;
+  }
+
+  private aiAndEncryptionOpts() {
+    const aiProvider = this.config.get<string>('AI_PROVIDER');
+    const aiApiKey = this.config.get<string>('AI_API_KEY');
+    const masterKey = this.config.get<string>('ENCRYPTION_MASTER_KEY');
+    return {
+      ...(aiProvider && aiApiKey
+        ? {
+            ai: {
+              provider: aiProvider,
+              apiKey: aiApiKey,
+              model: this.config.get('AI_MODEL'),
+              baseUrl: this.config.get('AI_API_URL'),
+            },
+          }
+        : {}),
+      ...(masterKey ? { encryption: { masterKey } } : {}),
+    };
   }
 
   private buildMongoUri(): string {
@@ -110,10 +120,11 @@ export class TopicHubService implements OnModuleInit, OnModuleDestroy {
     return `mongodb://${auth}${hosts}/${db}`;
   }
 
-  private buildBridgeConfig(): BridgeConfig | undefined {
-    const webhookUrl = this.config.get<string>('TOPICHUB_BRIDGE_WEBHOOK_URL');
-    if (!webhookUrl) return undefined;
-
+  /**
+   * OpenClaw runs embedded on the Nest HTTP server (no separate gateway port).
+   * The relay hook always POSTs to `{TOPICHUB_PUBLIC_GATEWAY_BASE_URL || http://127.0.0.1:PORT}/webhooks/openclaw`.
+   */
+  private buildBridgeChannels(): BridgeConfig['channels'] | undefined {
     const channels: BridgeConfig['channels'] = {};
     const feishuAppId = this.config.get<string>('TOPICHUB_BRIDGE_FEISHU_APP_ID');
     const feishuAppSecret = this.config.get<string>('TOPICHUB_BRIDGE_FEISHU_APP_SECRET');
@@ -154,12 +165,32 @@ export class TopicHubService implements OnModuleInit, OnModuleDestroy {
       return undefined;
     }
 
-    const port = this.config.get<string>('TOPICHUB_BRIDGE_PORT');
+    return channels as BridgeConfig['channels'];
+  }
+
+  private defaultEmbeddedWebhookOrigin(listenPort: number): string {
+    const pub = this.config.get<string>('TOPICHUB_PUBLIC_GATEWAY_BASE_URL')?.trim();
+    if (pub) return pub.replace(/\/+$/, '');
+    return `http://127.0.0.1:${listenPort}`;
+  }
+
+  private buildTopicHubBridge(httpServer: HttpServer, listenPort: number): TopicHubBridgeConfig | undefined {
+    const channels = this.buildBridgeChannels();
+    if (!channels) return undefined;
+
+    const webhookUrl = `${this.defaultEmbeddedWebhookOrigin(listenPort)}/webhooks/openclaw`;
+
+    const mountRaw = this.config.get<string>('TOPICHUB_BRIDGE_GATEWAY_MOUNT_PATH')?.trim() || '/openclaw';
+    const publicGatewayBaseUrl = this.config.get<string>('TOPICHUB_PUBLIC_GATEWAY_BASE_URL')?.trim();
+
+    const base: BridgeConfig = { channels, webhookUrl };
 
     return {
-      channels: channels as BridgeConfig['channels'],
-      webhookUrl,
-      ...(port ? { port: parseInt(port, 10) } : {}),
+      ...base,
+      httpServer,
+      listenPort,
+      mountPath: mountRaw,
+      ...(publicGatewayBaseUrl ? { publicGatewayBaseUrl } : {}),
     };
   }
 
@@ -196,4 +227,4 @@ export class TopicHubService implements OnModuleInit, OnModuleDestroy {
   providers: [TopicHubService],
   exports: [TopicHubService],
 })
-export class TopicHubModule { }
+export class TopicHubModule {}

@@ -96,6 +96,8 @@ export {
   OpenClawWebhookPayloadSchema,
   OpenClawWebhookUnsignedPayloadSchema,
   BridgeConfigSchema,
+  TopicHubBridgeConfigSchema,
+  toBridgeFileConfig,
 } from './bridge/openclaw-types';
 export type {
   OpenClawConfig,
@@ -103,6 +105,7 @@ export type {
   OpenClawInboundResult,
   OpenClawSendParams,
   BridgeConfig,
+  TopicHubBridgeConfig,
 } from './bridge/openclaw-types';
 
 export { purifyImRelayText } from './im/im-relay-text';

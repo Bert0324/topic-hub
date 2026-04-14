@@ -1,4 +1,5 @@
 packages:
+  - 'packages/bridge'
   - 'packages/core'
   - 'packages/server'
   - 'packages/cli'

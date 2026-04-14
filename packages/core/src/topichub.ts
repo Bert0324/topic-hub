@@ -81,7 +81,7 @@ import {
 } from './webhook/webhook-handler';
 import { OpenClawBridge } from './bridge/openclaw-bridge';
 import { BridgeManager } from './bridge/bridge-manager';
-import type { OpenClawConfig, BridgeConfig } from './bridge/openclaw-types';
+import type { TopicHubBridgeConfig } from './bridge/openclaw-types';
 import { NativeIntegrationGateway } from './gateway/native-integration-gateway';
 import { SkillCenterHttpAdapter } from './gateway/skill-center-http-adapter';
 
@@ -421,19 +421,21 @@ export class TopicHub {
     let bridgeManager: BridgeManager | null = null;
 
     if (validated.bridge) {
-      const bridgeConfig = validated.bridge as BridgeConfig;
-      bridgeManager = new BridgeManager(bridgeConfig, loggerFactory('BridgeManager'));
+      const bridgeCfg = validated.bridge as TopicHubBridgeConfig;
+      bridgeManager = new BridgeManager(bridgeCfg, loggerFactory('BridgeManager'));
       await bridgeManager.start();
-      bridge = OpenClawBridge.fromBridgeManager(
-        bridgeManager.port!,
-        bridgeManager.webhookSecret!,
-        Object.keys(bridgeConfig.channels),
-        loggerFactory('OpenClawBridge'),
-      );
-      mainLogger.log('OpenClaw bridge auto-started — IM messaging enabled');
-    } else if (validated.openclaw) {
-      bridge = new OpenClawBridge(validated.openclaw as OpenClawConfig, loggerFactory('OpenClawBridge'));
-      mainLogger.log('OpenClaw bridge configured (external) — IM messaging enabled');
+      const publicBase =
+        bridgeCfg.publicGatewayBaseUrl?.replace(/\/+$/, '') ??
+        `http://127.0.0.1:${bridgeCfg.listenPort}`;
+      const mp = bridgeCfg.mountPath.startsWith('/') ? bridgeCfg.mountPath : `/${bridgeCfg.mountPath}`;
+      const gatewayBase = `${publicBase}${mp.replace(/\/+$/, '')}`;
+      bridge = OpenClawBridge.forEmbeddedGateway({
+        gatewayBaseUrl: gatewayBase,
+        webhookSecret: bridgeManager.webhookSecret!,
+        platforms: Object.keys(bridgeCfg.channels),
+        logger: loggerFactory('OpenClawBridge'),
+      });
+      mainLogger.log('OpenClaw bridge embedded — IM messaging enabled');
     } else {
       mainLogger.log('OpenClaw bridge not configured — IM messaging disabled');
     }

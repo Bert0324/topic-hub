@@ -1,42 +1,41 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { TopicHubLogger } from '../common/logger';
-import type { BridgeConfig } from './openclaw-types';
+import type { TopicHubBridgeConfig } from './openclaw-types';
+import { toBridgeFileConfig } from './openclaw-types';
 import {
   generateBridgeConfigFiles,
   cleanupBridgeConfigFiles,
   generateWebhookSecret,
-  findAvailablePort,
   type GeneratedBridgeConfig,
 } from './bridge-config-generator';
+import { loadOpenclawGatewayEmbed } from './openclaw-embed-loader';
 
-/** Injected into the OpenClaw child so topic-hub-inbound-relay HMAC matches TopicHub's webhookSecret. */
 export const TOPICHUB_WEBHOOK_HMAC_ENV = 'TOPICHUB_WEBHOOK_HMAC_SECRET';
 
-const DEFAULT_STARTUP_TIMEOUT_MS = 30_000;
-const DEFAULT_MAX_RESTART_RETRIES = 3;
-const HEALTH_CHECK_INTERVAL_MS = 15_000;
-const RESTART_BASE_DELAY_MS = 2_000;
-const SHUTDOWN_GRACE_MS = 5_000;
+/** IM channel sources synced by `sync-bridge-vendor.mjs` (not the sparse `dist/extensions` vendor slice). */
+function resolveVendoredBundledPluginsDir(): string {
+  return resolve(__dirname, '..', '..', 'vendor', 'bridge', 'extensions');
+}
 
 export interface BridgeManagerState {
   running: boolean;
-  port: number | null;
-  pid: number | null;
+  listenPort: number | null;
+  mountPath: string | null;
   restartCount: number;
   webhookSecret: string | null;
 }
 
 export class BridgeManager {
-  private process: ChildProcess | null = null;
   private generated: GeneratedBridgeConfig | null = null;
-  private healthTimer: ReturnType<typeof setInterval> | undefined;
-  private restartCount = 0;
-  private shuttingDown = false;
   private _webhookSecret: string | null = null;
-  private _port: number | null = null;
+  private _listenPort: number | null = null;
+  private _mountPath: string | null = null;
+  private gatewayClose: ((opts?: { reason?: string }) => Promise<void>) | null = null;
+  private shuttingDown = false;
 
   constructor(
-    private readonly bridgeConfig: BridgeConfig,
+    private readonly bridge: TopicHubBridgeConfig,
     private readonly logger: TopicHubLogger,
   ) {}
 
@@ -44,50 +43,97 @@ export class BridgeManager {
     return this._webhookSecret;
   }
 
+  /** @deprecated Use listenPort; gateway shares the host listen port. */
   get port(): number | null {
-    return this._port;
+    return this._listenPort;
+  }
+
+  get mountPath(): string | null {
+    return this._mountPath;
   }
 
   get state(): BridgeManagerState {
     return {
-      running: this.process !== null && !this.shuttingDown,
-      port: this._port,
-      pid: this.process?.pid ?? null,
-      restartCount: this.restartCount,
+      running: this.gatewayClose !== null && !this.shuttingDown,
+      listenPort: this._listenPort,
+      mountPath: this._mountPath,
+      restartCount: 0,
       webhookSecret: this._webhookSecret,
     };
   }
 
+  /**
+   * Start OpenClaw embedded on `bridge.httpServer` under `bridge.mountPath`.
+   * Call while the host `http.Server` exists and before it accepts traffic
+   * (e.g. Nest `OnApplicationBootstrap` during `app.listen()`).
+   */
   async start(): Promise<void> {
     this.shuttingDown = false;
-    this.restartCount = 0;
+
+    const { httpServer, listenPort, mountPath } = this.bridge;
 
     this._webhookSecret = generateWebhookSecret();
-    this._port = this.bridgeConfig.port ?? await findAvailablePort();
+    this._listenPort = listenPort;
+    this._mountPath = mountPath;
+
+    const gatewayPort = this.bridge.port ?? listenPort;
 
     this.generated = generateBridgeConfigFiles(
-      this.bridgeConfig,
+      toBridgeFileConfig(this.bridge),
       this._webhookSecret,
-      this._port,
+      gatewayPort,
     );
 
     this.logger.log(`Bridge config generated at ${this.generated.configPath}`);
 
-    await this.spawnGateway();
-    await this.waitForHealthy();
-    this.startHealthCheck();
+    process.env.OPENCLAW_CONFIG_PATH = this.generated.configPath;
+    process.env[TOPICHUB_WEBHOOK_HMAC_ENV] = this._webhookSecret!;
+
+    const bundledPluginsDir = resolveVendoredBundledPluginsDir();
+    if (!existsSync(bundledPluginsDir)) {
+      throw new Error(
+        `Missing vendored OpenClaw bundled plugins directory: ${bundledPluginsDir}\n` +
+          'From repo root run: node packages/core/scripts/sync-bridge-vendor.mjs --bridge',
+      );
+    }
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+
+    const { startGatewayServer } = await loadOpenclawGatewayEmbed();
+    const raw = mountPath.startsWith('/') ? mountPath : `/${mountPath}`;
+    const pathPrefix = raw.replace(/\/+$/, '') || '/';
+    if (pathPrefix === '/') {
+      throw new Error('bridge mountPath must not be "/" (use e.g. /openclaw)');
+    }
+
+    const gateway = await startGatewayServer(listenPort, {
+      bind: 'loopback',
+      auth: { mode: 'token', token: this._webhookSecret! },
+      embed: {
+        httpServer,
+        pathPrefix,
+      },
+    });
+
+    this.gatewayClose = gateway.close.bind(gateway);
 
     this.logger.log(
-      `OpenClaw gateway started (pid=${this.process?.pid}, port=${this._port})`,
+      `OpenClaw gateway embedded (listenPort=${this._listenPort}, mount=${this._mountPath})`,
     );
   }
 
   async stop(): Promise<void> {
     this.shuttingDown = true;
-    this.stopHealthCheck();
 
-    if (this.process) {
-      await this.killProcess();
+    if (this.gatewayClose) {
+      try {
+        await this.gatewayClose({ reason: 'topic-hub shutdown' });
+      } catch (err) {
+        this.logger.warn(
+          'OpenClaw gateway close failed',
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+      this.gatewayClose = null;
     }
 
     if (this.generated) {
@@ -97,238 +143,4 @@ export class BridgeManager {
 
     this.logger.log('OpenClaw gateway stopped');
   }
-
-  private resolveOpenClawBin(): string {
-    const binPath = require.resolve('openclaw/cli-entry');
-    const fs = require('node:fs');
-    if (!fs.existsSync(binPath)) {
-      throw new Error(
-        `openclaw binary not found at ${binPath}. ` +
-        'The openclaw package appears installed but is missing its entry point.',
-      );
-    }
-    return binPath;
-  }
-
-  /**
-   * Remove any broken nested node_modules inside the openclaw package directory.
-   * pnpm sometimes leaves empty directories without package.json, which causes
-   * Node.js ESM resolution to find the directory but fail to load it (instead
-   * of falling back to the properly-linked copy one level up).
-   */
-  private ensureOpenClawNestedModulesClean(openClawBinPath: string): void {
-    const path = require('node:path');
-    const fs = require('node:fs');
-
-    const openClawDir = path.dirname(openClawBinPath);
-    const nestedNM = path.join(openClawDir, 'node_modules');
-    if (!fs.existsSync(nestedNM)) return;
-
-    let entries: string[];
-    try {
-      entries = fs.readdirSync(nestedNM);
-    } catch {
-      return;
-    }
-
-    for (const entry of entries) {
-      const entryPath = path.join(nestedNM, entry);
-      const stat = fs.lstatSync(entryPath);
-      if (!stat.isDirectory()) continue;
-
-      if (entry.startsWith('@')) {
-        const scopedEntries = fs.readdirSync(entryPath);
-        let allBroken = true;
-        for (const scoped of scopedEntries) {
-          const scopedDir = path.join(entryPath, scoped);
-          if (fs.lstatSync(scopedDir).isDirectory() && !fs.existsSync(path.join(scopedDir, 'package.json'))) {
-            fs.rmSync(scopedDir, { recursive: true, force: true });
-          } else {
-            allBroken = false;
-          }
-        }
-        if (allBroken) {
-          fs.rmSync(entryPath, { recursive: true, force: true });
-        }
-      } else {
-        if (!fs.existsSync(path.join(entryPath, 'package.json'))) {
-          fs.rmSync(entryPath, { recursive: true, force: true });
-        }
-      }
-    }
-
-    try {
-      const remaining = fs.readdirSync(nestedNM);
-      if (remaining.length === 0) {
-        fs.rmSync(nestedNM, { recursive: true, force: true });
-      }
-    } catch {}
-  }
-
-  private async spawnGateway(): Promise<void> {
-    if (!this.generated) {
-      throw new Error('Bridge config not generated');
-    }
-
-    const bin = this.resolveOpenClawBin();
-    this.ensureOpenClawNestedModulesClean(bin);
-    const args = [bin, 'gateway', 'run', '--port', String(this._port), '--force'];
-
-    this.process = spawn(process.execPath, args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        OPENCLAW_CONFIG_PATH: this.generated.configPath,
-        [TOPICHUB_WEBHOOK_HMAC_ENV]: this._webhookSecret!,
-      },
-      detached: false,
-    });
-
-    this.process.stdout?.on('data', (data: Buffer) => {
-      for (const line of data.toString().split('\n').filter(Boolean)) {
-        this.logger.debug(`[OpenClaw] ${line}`);
-      }
-    });
-
-    this.process.stderr?.on('data', (data: Buffer) => {
-      for (const line of data.toString().split('\n').filter(Boolean)) {
-        this.logger.warn(`[OpenClaw] ${line}`);
-      }
-    });
-
-    this.process.on('exit', (code, signal) => {
-      this.logger.warn(
-        `OpenClaw gateway exited (code=${code}, signal=${signal})`,
-      );
-      this.process = null;
-
-      if (!this.shuttingDown) {
-        this.handleCrash();
-      }
-    });
-  }
-
-  private async waitForHealthy(): Promise<void> {
-    const timeout = this.bridgeConfig.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
-    const deadline = Date.now() + timeout;
-    const pollInterval = 500;
-
-    while (Date.now() < deadline) {
-      if (await this.isHealthy()) return;
-      await sleep(pollInterval);
-    }
-
-    // If process exited, throw immediately
-    if (!this.process) {
-      throw new Error(
-        'OpenClaw gateway failed to start — process exited before becoming healthy. ' +
-        'Ensure openclaw is installed: npm install openclaw',
-      );
-    }
-
-    throw new Error(
-      `OpenClaw gateway did not become healthy within ${timeout}ms. ` +
-      `Check that port ${this._port} is available.`,
-    );
-  }
-
-  private async isHealthy(): Promise<boolean> {
-    if (!this._port) return false;
-    try {
-      const res = await fetch(`http://127.0.0.1:${this._port}/health`, {
-        signal: AbortSignal.timeout(2000),
-      });
-      return res.ok;
-    } catch {
-      return false;
-    }
-  }
-
-  private startHealthCheck(): void {
-    this.healthTimer = setInterval(async () => {
-      if (this.shuttingDown || !this.process) return;
-      const healthy = await this.isHealthy();
-      if (!healthy && this.process) {
-        this.logger.warn('OpenClaw gateway health check failed');
-      }
-    }, HEALTH_CHECK_INTERVAL_MS);
-
-    if (this.healthTimer.unref) {
-      this.healthTimer.unref();
-    }
-  }
-
-  private stopHealthCheck(): void {
-    if (this.healthTimer) {
-      clearInterval(this.healthTimer);
-      this.healthTimer = undefined;
-    }
-  }
-
-  private handleCrash(): void {
-    const maxRetries = this.bridgeConfig.maxRestartRetries ?? DEFAULT_MAX_RESTART_RETRIES;
-    if (this.restartCount >= maxRetries) {
-      this.logger.error(
-        `OpenClaw gateway crashed ${this.restartCount} times — giving up. ` +
-        'Restart the application to retry.',
-      );
-      return;
-    }
-
-    this.restartCount++;
-    const delay = RESTART_BASE_DELAY_MS * Math.pow(2, this.restartCount - 1);
-    this.logger.warn(
-      `Restarting OpenClaw gateway in ${delay}ms (attempt ${this.restartCount}/${maxRetries})`,
-    );
-
-    setTimeout(async () => {
-      if (this.shuttingDown) return;
-      try {
-        await this.spawnGateway();
-        await this.waitForHealthy();
-        this.logger.log(
-          `OpenClaw gateway restarted (pid=${this.process?.pid})`,
-        );
-      } catch (err) {
-        this.logger.error(
-          'Failed to restart OpenClaw gateway',
-          err instanceof Error ? err.message : String(err),
-        );
-      }
-    }, delay);
-  }
-
-  private async killProcess(): Promise<void> {
-    if (!this.process) return;
-
-    const proc = this.process;
-    this.process = null;
-
-    return new Promise<void>((resolve) => {
-      const forceTimer = setTimeout(() => {
-        try {
-          proc.kill('SIGKILL');
-        } catch {
-          // already dead
-        }
-        resolve();
-      }, SHUTDOWN_GRACE_MS);
-
-      proc.once('exit', () => {
-        clearTimeout(forceTimer);
-        resolve();
-      });
-
-      try {
-        proc.kill('SIGTERM');
-      } catch {
-        clearTimeout(forceTimer);
-        resolve();
-      }
-    });
-  }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
