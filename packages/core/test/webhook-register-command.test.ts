@@ -37,7 +37,7 @@ describe('WebhookHandler /register parsing', () => {
       {} as any,
       jest.fn(),
       logger as any,
-      bridge as any,
+      () => bridge as any,
       identityOps as any,
       undefined,
       undefined,

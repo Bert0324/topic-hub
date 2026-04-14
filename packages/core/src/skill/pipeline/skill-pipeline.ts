@@ -14,7 +14,7 @@ export class SkillPipeline implements SkillPipelinePort {
     private readonly registry: SkillRegistry,
     private readonly dispatchService: DispatchService | null,
     private readonly logger: TopicHubLogger,
-    private readonly bridge: OpenClawBridge | null = null,
+    private readonly getOpenClawBridge: () => OpenClawBridge | null = () => null,
     private readonly skillMdParser?: SkillMdParser,
     private readonly skillRegistrationModel?: Model<any>,
   ) {}
@@ -155,7 +155,8 @@ export class SkillPipeline implements SkillPipelinePort {
     operation: string,
     topicData: any,
   ): Promise<void> {
-    if (!this.bridge) return;
+    const bridge = this.getOpenClawBridge();
+    if (!bridge) return;
 
     const notifyOps = ['created', 'updated', 'status_changed', 'assigned', 'closed', 'reopened'];
     if (!notifyOps.includes(operation)) return;
@@ -163,7 +164,7 @@ export class SkillPipeline implements SkillPipelinePort {
     try {
       const groups = topicData?.groups ?? [];
       for (const g of groups) {
-        const ok = await this.bridge.sendMessage(g.platform, g.groupId, `Topic ${topicData.title} — ${operation}`);
+        const ok = await bridge.sendMessage(g.platform, g.groupId, `Topic ${topicData.title} — ${operation}`);
         if (!ok) {
           this.logger.warn(`Bridge topic notify failed for ${g.platform}/${g.groupId}`);
         }

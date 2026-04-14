@@ -13,7 +13,7 @@
  *
  * Run from repo root: node packages/core/scripts/sync-bridge-vendor.mjs [--bridge]
  */
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -85,6 +85,34 @@ function copyBundledExtensions(vendorBridgeRoot) {
   console.log('Copied bundled channel extensions ->', extDestRoot);
 }
 
+/**
+ * Packages/scopes that are NOT needed at runtime by the embedded IM gateway.
+ * They exist in packages/bridge/node_modules because bridge supports many
+ * channels and AI providers, but the embedded gateway only uses: server core,
+ * jiti (extension loader), zod, ws, yaml, and channel-specific SDKs like the
+ * Feishu/Lark SDK.  Excluding these keeps the published tarball under ~100 MB
+ * so pnpm doesn't OOM during integrity checks.
+ */
+const VENDOR_EXCLUDE_SCOPES = new Set([
+  '@anthropic-ai', '@aws', '@aws-sdk', '@buape', '@discordjs', '@google',
+  '@grammyjs', '@homebridge', '@lancedb', '@line', '@lydell',
+  '@mariozechner', '@matrix-org', '@typescript', '@vitest',
+]);
+const VENDOR_EXCLUDE_PACKAGES = new Set([
+  'discord-api-types', 'grammy', 'jimp', 'jscpd', 'jsdom',
+  'madge', 'matrix-js-sdk', 'mpg123-decoder', 'node-edge-tts',
+  'node-llama-cpp', 'nostr-tools', 'openai', 'opusscript', 'oxfmt',
+  'oxlint', 'oxlint-tsgolint', 'pdfjs-dist', 'playwright-core',
+  'sharp', 'signal-utils', 'silk-wasm', 'sqlite-vec',
+  'tsdown', 'tsx', 'typescript', 'vitest',
+]);
+
+function shouldExcludeVendorEntry(name) {
+  if (VENDOR_EXCLUDE_PACKAGES.has(name)) return true;
+  const scope = name.startsWith('@') ? name.split('/')[0] : null;
+  return scope != null && VENDOR_EXCLUDE_SCOPES.has(scope);
+}
+
 function copyBridgeNodeModulesBundle(vendorBridgeRoot) {
   const from = path.join(bridgeRoot, 'node_modules');
   const destRoot = path.join(vendorBridgeRoot, 'node_modules');
@@ -96,8 +124,138 @@ function copyBridgeNodeModulesBundle(vendorBridgeRoot) {
   }
   rmSync(destRoot, { recursive: true, force: true });
   mkdirSync(vendorBridgeRoot, { recursive: true });
-  cpSync(from, destRoot, { recursive: true, force: true, dereference: true });
-  console.log('Copied bridge node_modules bundle ->', destRoot);
+
+  let excluded = 0;
+  cpSync(from, destRoot, {
+    recursive: true,
+    force: true,
+    dereference: true,
+    filter: (src) => {
+      const rel = path.relative(from, src);
+      if (!rel) return true; // root dir
+      const parts = rel.split(path.sep);
+      let name;
+      if (parts[0].startsWith('@') && parts.length >= 2) {
+        name = `${parts[0]}/${parts[1]}`;
+      } else {
+        name = parts[0];
+      }
+      if (shouldExcludeVendorEntry(name)) {
+        if (parts.length <= 2) excluded++;
+        return false;
+      }
+      return true;
+    },
+  });
+  console.log(`Copied bridge node_modules bundle -> ${destRoot} (excluded ${excluded} unnecessary packages)`);
+
+  const roots = discoverDistExternalRoots(destDist, destRoot);
+  vendorTransitiveDepsFor(destRoot, roots);
+}
+
+/**
+ * Scan the dist bundle to discover which npm packages are imported as external
+ * dependencies (i.e. not bundled), then return the subset that actually exists
+ * in the vendored node_modules.  These are the roots whose transitive dep
+ * trees must also be vendored.
+ *
+ * The Feishu/Lark SDK is always included since it's loaded at runtime by jiti
+ * from the channel extension source (not via the pre-built dist).
+ */
+function discoverDistExternalRoots(distDir, destRoot) {
+  const ALWAYS_INCLUDE = ['@larksuiteoapi/node-sdk'];
+  const seen = new Set(ALWAYS_INCLUDE);
+
+  if (!existsSync(distDir)) return [...seen];
+
+  for (const file of readdirSync(distDir).filter((f) => f.endsWith('.js'))) {
+    const content = readFileSync(path.join(distDir, file), 'utf8');
+    const re = /from\s+["']([^"'./][^"']*)["']/g;
+    let m;
+    while ((m = re.exec(content)) !== null) {
+      let spec = m[1];
+      // Normalise scoped package names: @scope/pkg/sub → @scope/pkg
+      if (spec.startsWith('@')) {
+        const parts = spec.split('/');
+        spec = parts.length >= 2 ? `${parts[0]}/${parts[1]}` : spec;
+      } else {
+        spec = spec.split('/')[0];
+      }
+      seen.add(spec);
+    }
+  }
+
+  // Only keep roots that exist in the vendored node_modules
+  return [...seen].filter((s) => existsSync(path.join(destRoot, s, 'package.json')));
+}
+
+/**
+ * Starting from a specific set of root packages, walk their dependency trees
+ * and copy any missing transitive deps from the pnpm store.
+ * Unlike scanning ALL vendored packages, this only resolves deps for the
+ * listed roots — keeping the published package small.
+ */
+function vendorTransitiveDepsFor(destRoot, roots) {
+  const pnpmStore = path.join(repoRoot, 'node_modules', '.pnpm');
+  const seen = new Set();
+  const queue = [...roots];
+  let copied = 0;
+
+  while (queue.length > 0) {
+    const pkg = queue.shift();
+    if (seen.has(pkg)) continue;
+    seen.add(pkg);
+
+    const pkgDir = path.join(destRoot, pkg);
+    const pkgJsonPath = path.join(pkgDir, 'package.json');
+    if (!existsSync(pkgJsonPath)) continue;
+
+    let deps;
+    try {
+      const j = JSON.parse(readFileSync(pkgJsonPath, 'utf8'));
+      deps = Object.keys(j.dependencies || {});
+    } catch {
+      continue;
+    }
+
+    for (const dep of deps) {
+      const depDir = path.join(destRoot, dep);
+      if (existsSync(depDir)) {
+        queue.push(dep);
+        continue;
+      }
+
+      const resolved = findInPnpmStore(pnpmStore, dep, pkgDir);
+      if (resolved) {
+        mkdirSync(path.dirname(depDir), { recursive: true });
+        cpSync(resolved, depDir, { recursive: true, force: true, dereference: true });
+        copied++;
+        queue.push(dep);
+      }
+    }
+  }
+  console.log(`Vendored ${copied} transitive deps for [${roots.join(', ')}]`);
+}
+
+function findInPnpmStore(pnpmStore, depName, fromPkgDir) {
+  // Strategy 1: check the pnpm virtual store for the parent package
+  // pnpm resolves sub-deps as siblings in node_modules/.pnpm/<parent>/node_modules/<dep>
+  try {
+    const realFrom = realpathSync(fromPkgDir);
+    const sibling = path.join(path.dirname(realFrom), depName);
+    if (existsSync(path.join(sibling, 'package.json'))) {
+      return realpathSync(sibling);
+    }
+  } catch { /* not found via sibling resolution */ }
+
+  // Strategy 2: check the hoisted pnpm node_modules
+  const hoisted = path.join(pnpmStore, 'node_modules', depName);
+  if (existsSync(path.join(hoisted, 'package.json'))) {
+    try { return realpathSync(hoisted); } catch { return hoisted; }
+  }
+
+  console.warn(`  ⚠ transitive dep not found: ${depName} (needed by package at ${fromPkgDir})`);
+  return null;
 }
 
 /**

@@ -62,6 +62,10 @@ export const BridgeConfigSchema = z.object({
 
 export type BridgeConfig = z.infer<typeof BridgeConfigSchema>;
 
+/** IM platforms whose APIs may be probed before this host becomes embedded OpenClaw lease leader. */
+export const LeaderImConnectivityPlatformSchema = z.enum(['feishu', 'discord', 'telegram', 'slack']);
+export type LeaderImConnectivityPlatform = z.infer<typeof LeaderImConnectivityPlatformSchema>;
+
 const BridgeHostEmbedSchema = z.object({
   httpServer: z.custom<HttpServer>(
     (v) => v != null && typeof (v as HttpServer).listen === 'function',
@@ -69,6 +73,11 @@ const BridgeHostEmbedSchema = z.object({
   listenPort: z.number().int().min(1).max(65535),
   mountPath: z.string().min(1).default('/openclaw'),
   publicGatewayBaseUrl: z.string().url().optional(),
+  /**
+   * When non-empty, the lease leader runs connectivity checks for **each** entry before starting the gateway.
+   * On any failure the leader releases the Mongo lease. `[]` or omit = skip checks.
+   */
+  leaderImConnectivityChecks: z.array(LeaderImConnectivityPlatformSchema).optional(),
 });
 
 /** Channels + webhook + OpenClaw JSON tuning, plus the host HTTP server embed target. */
@@ -77,7 +86,14 @@ export type TopicHubBridgeConfig = z.infer<typeof TopicHubBridgeConfigSchema>;
 
 /** Strip host-only fields for `openclaw.json` generation. */
 export function toBridgeFileConfig(b: TopicHubBridgeConfig): BridgeConfig {
-  const { httpServer: _h, listenPort: _l, mountPath: _m, publicGatewayBaseUrl: _p, ...rest } = b;
+  const {
+    httpServer: _h,
+    listenPort: _l,
+    mountPath: _m,
+    publicGatewayBaseUrl: _p,
+    leaderImConnectivityChecks: _checks,
+    ...rest
+  } = b;
   return rest;
 }
 

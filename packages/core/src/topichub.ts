@@ -81,9 +81,18 @@ import {
 } from './webhook/webhook-handler';
 import { OpenClawBridge } from './bridge/openclaw-bridge';
 import { BridgeManager } from './bridge/bridge-manager';
+import { EmbeddedBridgeCluster } from './bridge/embedded-bridge-leader';
+import { assertLeaderImConnectivityChecks } from './bridge/leader-im-connectivity';
 import type { TopicHubBridgeConfig } from './bridge/openclaw-types';
 import { NativeIntegrationGateway } from './gateway/native-integration-gateway';
 import { SkillCenterHttpAdapter } from './gateway/skill-center-http-adapter';
+
+/** Mutable OpenClaw embed state so bridge can start after HTTP listen when `deferEmbeddedBridge` is set. */
+interface TopicHubBridgeSlot {
+  bridge: OpenClawBridge | null;
+  bridgeManager: BridgeManager | null;
+  embeddedBridgePostShutdown: (() => Promise<void>) | undefined;
+}
 
 // --- Operation namespace types ---
 
@@ -154,6 +163,9 @@ export interface NativeGatewayOperations {
     headers: Record<string, string | string[] | undefined>,
   ): Promise<{ status: number; body: unknown }>;
 }
+
+/** How this process participates in the cluster-wide embedded OpenClaw gateway lease. */
+export type EmbeddedBridgeClusterRole = 'leader' | 'follower' | 'none';
 
 export interface MessagingOperations {
   send(platform: string, params: {
@@ -317,6 +329,9 @@ function resolveOptionalImBodyHardCap(): number | null {
 export class TopicHub {
   private reminderTimer?: ReturnType<typeof setInterval>;
 
+  /** When set, run once from {@link TopicHub.startEmbeddedBridgeWhenDeferred} after host HTTP listen. */
+  private deferredBridgeStarter: (() => Promise<void>) | null;
+
   private constructor(
     private readonly connection: mongoose.Connection,
     private readonly ownsConnection: boolean,
@@ -332,8 +347,7 @@ export class TopicHub {
     private readonly webhookHandler: WebhookHandler,
     private readonly handlers: Map<string, any>,
     private readonly logger: TopicHubLogger,
-    private readonly bridge: OpenClawBridge | null,
-    private readonly bridgeManager: BridgeManager | null,
+    private readonly bridgeSlot: TopicHubBridgeSlot,
     private readonly identityService: IdentityService,
     private readonly heartbeatService: HeartbeatService,
     private readonly qaService: QaService,
@@ -343,7 +357,10 @@ export class TopicHub {
     private readonly skillCenterService: SkillCenterService,
     private readonly nativeIntegrationGateway: NativeIntegrationGateway,
     private readonly skillCenterHttpAdapter: SkillCenterHttpAdapter,
-  ) {}
+    deferredBridgeStarter: (() => Promise<void>) | null,
+  ) {
+    this.deferredBridgeStarter = deferredBridgeStarter;
+  }
 
   static async create(config: TopicHubConfig): Promise<TopicHub> {
     const validated = TopicHubConfigSchema.parse(config);
@@ -417,25 +434,89 @@ export class TopicHub {
     );
     const authServiceNew = new AuthService(IdentityModel, ExecutorRegistrationModel);
 
-    let bridge: OpenClawBridge | null = null;
-    let bridgeManager: BridgeManager | null = null;
+    const bridgeSlot: TopicHubBridgeSlot = {
+      bridge: null,
+      bridgeManager: null,
+      embeddedBridgePostShutdown: undefined,
+    };
+    const getBridge = () => bridgeSlot.bridge;
+    let deferredBridgeStarter: (() => Promise<void>) | null = null;
 
     if (validated.bridge) {
       const bridgeCfg = validated.bridge as TopicHubBridgeConfig;
-      bridgeManager = new BridgeManager(bridgeCfg, loggerFactory('BridgeManager'));
-      await bridgeManager.start();
-      const publicBase =
-        bridgeCfg.publicGatewayBaseUrl?.replace(/\/+$/, '') ??
-        `http://127.0.0.1:${bridgeCfg.listenPort}`;
-      const mp = bridgeCfg.mountPath.startsWith('/') ? bridgeCfg.mountPath : `/${bridgeCfg.mountPath}`;
-      const gatewayBase = `${publicBase}${mp.replace(/\/+$/, '')}`;
-      bridge = OpenClawBridge.forEmbeddedGateway({
-        gatewayBaseUrl: gatewayBase,
-        webhookSecret: bridgeManager.webhookSecret!,
-        platforms: Object.keys(bridgeCfg.channels),
-        logger: loggerFactory('OpenClawBridge'),
-      });
-      mainLogger.log('OpenClaw bridge embedded — IM messaging enabled');
+      const leaderCollection = `${p}bridge_embedded_leader`;
+
+      const runEmbeddedBridge = async () => {
+        const cluster = new EmbeddedBridgeCluster(connection, leaderCollection, loggerFactory('EmbeddedBridge'));
+        const joined = await cluster.join();
+
+        if (!joined.isLeader && !bridgeCfg.publicGatewayBaseUrl?.trim()) {
+          throw new TopicHubError(
+            'This instance is not the embedded OpenClaw lease leader. Set bridge.publicGatewayBaseUrl ' +
+              '(or TOPICHUB_PUBLIC_GATEWAY_BASE_URL) to the public HTTP origin of the leader instance ' +
+              '(the same URL IM webhooks use), e.g. http://127.0.0.1:3000 when the leader listens on 3000.',
+          );
+        }
+
+        bridgeSlot.embeddedBridgePostShutdown = joined.postGatewayShutdown;
+
+        if (joined.isLeader) {
+          try {
+            await assertLeaderImConnectivityChecks(bridgeCfg.leaderImConnectivityChecks, bridgeCfg.channels);
+          } catch (e) {
+            await joined.postGatewayShutdown();
+            if (e instanceof TopicHubError) throw e;
+            const detail = e instanceof Error ? e.message : String(e);
+            const err = new TopicHubError(
+              `Refusing embedded OpenClaw lease leader: IM connectivity checks failed (${detail}).`,
+            );
+            if (e instanceof Error) err.cause = e;
+            throw err;
+          }
+          bridgeSlot.bridgeManager = new BridgeManager(bridgeCfg, loggerFactory('BridgeManager'));
+          try {
+            await bridgeSlot.bridgeManager.start(joined.webhookSecret);
+          } catch (e) {
+            bridgeSlot.bridgeManager = null;
+            await joined.postGatewayShutdown();
+            const detail = e instanceof Error ? e.message : String(e);
+            const err = new TopicHubError(
+              `Embedded OpenClaw gateway failed to start — lease released (${detail}).`,
+            );
+            if (e instanceof Error) err.cause = e;
+            throw err;
+          }
+        }
+
+        const publicBase =
+          bridgeCfg.publicGatewayBaseUrl?.replace(/\/+$/, '') ??
+          `http://127.0.0.1:${bridgeCfg.listenPort}`;
+        const mp = bridgeCfg.mountPath.startsWith('/') ? bridgeCfg.mountPath : `/${bridgeCfg.mountPath}`;
+        const gatewayBase = `${publicBase}${mp.replace(/\/+$/, '')}`;
+        bridgeSlot.bridge = OpenClawBridge.forEmbeddedGateway({
+          gatewayBaseUrl: gatewayBase,
+          webhookSecret: joined.webhookSecret,
+          platforms: Object.keys(bridgeCfg.channels),
+          logger: loggerFactory('OpenClawBridge'),
+        });
+        mainLogger.log(
+          joined.isLeader
+            ? `OpenClaw bridge embedded — IM messaging enabled (this process runs the gateway)\n` +
+              `  gatewayBase = ${gatewayBase}\n` +
+              `  webhookUrl  = ${bridgeCfg.webhookUrl}\n` +
+              `  channels    = ${Object.keys(bridgeCfg.channels).join(', ')}`
+            : 'OpenClaw bridge client enabled — IM outbound uses the shared gateway on the lease leader',
+        );
+      };
+
+      if (validated.deferEmbeddedBridge) {
+        deferredBridgeStarter = runEmbeddedBridge;
+        mainLogger.log(
+          'OpenClaw embedded bridge startup deferred — call topicHub.startEmbeddedBridgeWhenDeferred() after HTTP listen',
+        );
+      } else {
+        await runEmbeddedBridge();
+      }
     } else {
       mainLogger.log('OpenClaw bridge not configured — IM messaging disabled');
     }
@@ -464,7 +545,7 @@ export class TopicHub {
       skillRegistry,
       dispatchService,
       loggerFactory('SkillPipeline'),
-      bridge,
+      getBridge,
       skillMdParser,
       SkillRegistrationModel,
     );
@@ -555,7 +636,7 @@ export class TopicHub {
       ingestionService,
       commandDispatcher,
       loggerFactory('WebhookHandler'),
-      bridge ?? undefined,
+      getBridge,
       webhookIdentityOps,
       webhookHeartbeatOps,
       webhookImSelfServeOps,
@@ -605,8 +686,7 @@ export class TopicHub {
       webhookHandler,
       handlers,
       mainLogger,
-      bridge,
-      bridgeManager,
+      bridgeSlot,
       identityService,
       heartbeatService,
       qaService,
@@ -616,6 +696,7 @@ export class TopicHub {
       skillCenterService,
       nativeIntegrationGateway,
       skillCenterHttpAdapter,
+      deferredBridgeStarter,
     );
 
     hubHolder.current = hub;
@@ -626,7 +707,7 @@ export class TopicHub {
   }
 
   private startReminderTimer(): void {
-    if (!this.bridge) return;
+    if (!this.bridgeSlot.bridge) return;
 
     this.reminderTimer = setInterval(
       () => this.checkUnclaimedReminders().catch((err) => this.logger.error('Unclaimed reminder check failed', String(err))),
@@ -637,6 +718,20 @@ export class TopicHub {
     }
   }
 
+  /**
+   * Finishes embedded OpenClaw when `TopicHub.create` was given `deferEmbeddedBridge: true` with `bridge`.
+   * Invoke once after the host `http.Server` emits `listening` so cold-start budgets (e.g. Goofy ~30s) are not exceeded.
+   */
+  async startEmbeddedBridgeWhenDeferred(): Promise<void> {
+    const run = this.deferredBridgeStarter;
+    if (!run) {
+      return;
+    }
+    this.deferredBridgeStarter = null;
+    await run();
+    this.startReminderTimer();
+  }
+
   /** OpenClaw `to` peer for a DM when only the platform user id is known (from identity binding). */
   private static openClawDmTarget(platformUserId: string): string {
     const id = String(platformUserId).trim();
@@ -645,7 +740,7 @@ export class TopicHub {
   }
 
   private async checkUnclaimedReminders(): Promise<void> {
-    if (!this.bridge) return;
+    if (!this.bridgeSlot.bridge) return;
 
     const stale = await this.dispatchService.findUnclaimedWithReminder(DISPATCH_UNCLAIMED_REMINDER_MS);
     for (const dispatch of stale) {
@@ -687,7 +782,7 @@ export class TopicHub {
           continue;
         }
 
-        await this.bridge.sendMessage(
+        await this.bridgeSlot.bridge.sendMessage(
           platform,
           dmTarget,
           'Your task is still waiting, but your local executor has no active heartbeat (disconnected or session out of date). Start `topichub-admin serve`, then DM the bot with `/register <code>` using the pairing code shown in the terminal.',
@@ -703,7 +798,7 @@ export class TopicHub {
   }
 
   private async checkQaReminders(): Promise<void> {
-    if (!this.bridge) return;
+    if (!this.bridgeSlot.bridge) return;
 
     const expired = await this.qaService.getExpiredForReminder();
     for (const qa of expired) {
@@ -711,7 +806,7 @@ export class TopicHub {
         const allPending = await this.qaService.findAllPendingByUser(qa.topichubUserId);
         const refIdx = allPending.findIndex((x) => String(x._id) === String(qa._id));
         const answerRef = refIdx >= 0 ? refIdx + 1 : Math.max(1, allPending.length);
-        await this.bridge.sendMessage(
+        await this.bridgeSlot.bridge.sendMessage(
           qa.sourcePlatform,
           qa.sourceChannel,
           formatQaReminderMessage(answerRef, qa),
@@ -724,7 +819,7 @@ export class TopicHub {
   }
 
   private async checkQaTimeouts(): Promise<void> {
-    if (!this.bridge) return;
+    if (!this.bridgeSlot.bridge) return;
 
     const expired = await this.qaService.getExpiredForTimeout();
     for (const qa of expired) {
@@ -734,7 +829,7 @@ export class TopicHub {
           String(qa.dispatchId),
           'QA timeout — no answer received',
         );
-        await this.bridge.sendMessage(
+        await this.bridgeSlot.bridge.sendMessage(
           qa.sourcePlatform,
           qa.sourceChannel,
           'Your agent task has been suspended due to no response.',
@@ -874,6 +969,13 @@ export class TopicHub {
     return this.nativeIntegrationGateway;
   }
 
+  /** For health checks / ops: whether this process runs the embedded OpenClaw gateway or uses a shared one. */
+  getEmbeddedBridgeClusterStatus(): { role: EmbeddedBridgeClusterRole } {
+    if (this.bridgeSlot.bridgeManager) return { role: 'leader' };
+    if (this.bridgeSlot.bridge) return { role: 'follower' };
+    return { role: 'none' };
+  }
+
   get skillCenterHttp(): SkillCenterHttpAdapter {
     return this.skillCenterHttpAdapter;
   }
@@ -881,8 +983,8 @@ export class TopicHub {
   get messaging(): MessagingOperations {
     return {
       send: async (platform, params) => {
-        if (this.bridge) {
-          await this.bridge.sendMessage(platform, params.groupId, params.message);
+        if (this.bridgeSlot.bridge) {
+          await this.bridgeSlot.bridge.sendMessage(platform, params.groupId, params.message);
           return;
         }
         throw new NotFoundError(`Platform ${platform} does not support messaging`);
@@ -948,9 +1050,9 @@ export class TopicHub {
       },
       claim: async (taskId, claimedBy, executorToken) => {
         const result = await this.dispatchService.claim(taskId, claimedBy, executorToken);
-        if (result && result.sourceChannel && result.sourcePlatform && this.bridge) {
+        if (result && result.sourceChannel && result.sourcePlatform && this.bridgeSlot.bridge) {
           const claimLine = formatImClaimRunningMessage(result.enrichedPayload);
-          this.bridge
+          this.bridgeSlot.bridge
             .sendMessage(result.sourcePlatform, result.sourceChannel, claimLine)
             .catch((err) => this.logger.error('IM claim notification failed', String(err)));
         }
@@ -969,11 +1071,11 @@ export class TopicHub {
           }
           const platform = doc.sourcePlatform as string | undefined;
           const channel = doc.sourceChannel as string | undefined;
-          if (!platform || !channel || !this.bridge) {
+          if (!platform || !channel || !this.bridgeSlot.bridge) {
             return { ok: false };
           }
           const line = formatImClaimQueuedMessage(doc.enrichedPayload);
-          const sent = await this.bridge.sendMessage(platform, channel, line);
+          const sent = await this.bridgeSlot.bridge.sendMessage(platform, channel, line);
           return { ok: sent };
         } catch (err) {
           this.logger.error('notifyExecutorQueuedIm failed', String(err));
@@ -987,8 +1089,8 @@ export class TopicHub {
             'Cannot complete dispatch: not in claimed state, wrong executor token, or claim expired.',
           );
         }
-        if (dispatch?.sourceChannel && dispatch?.sourcePlatform && this.bridge) {
-          const bridge = this.bridge;
+        if (dispatch?.sourceChannel && dispatch?.sourcePlatform && this.bridgeSlot.bridge) {
+          const bridge = this.bridgeSlot.bridge;
           const platformBudget = getImTaskCompletionBodyBudgetChars(dispatch.sourcePlatform);
           const hardCap = resolveOptionalImBodyHardCap();
           const maxBody = hardCap != null ? Math.min(platformBudget, hardCap) : platformBudget;
@@ -1025,8 +1127,8 @@ export class TopicHub {
             'Cannot fail dispatch: not in claimed state, wrong executor token, or claim expired.',
           );
         }
-        if (dispatch?.sourceChannel && dispatch?.sourcePlatform && this.bridge) {
-          this.bridge
+        if (dispatch?.sourceChannel && dispatch?.sourcePlatform && this.bridgeSlot.bridge) {
+          this.bridgeSlot.bridge
             .sendMessage(dispatch.sourcePlatform, dispatch.sourceChannel, `Task failed: ${error}`)
             .catch((err) => this.logger.error('IM fail notification failed', String(err)));
         }
@@ -1115,13 +1217,15 @@ export class TopicHub {
   }
 
   async shutdown(): Promise<void> {
+    this.deferredBridgeStarter = null;
     if (this.reminderTimer) {
       clearInterval(this.reminderTimer);
       this.reminderTimer = undefined;
     }
-    if (this.bridgeManager) {
-      await this.bridgeManager.stop();
+    if (this.bridgeSlot.bridgeManager) {
+      await this.bridgeSlot.bridgeManager.stop();
     }
+    await this.bridgeSlot.embeddedBridgePostShutdown?.();
     this.dispatchService.destroy();
     if (this.ownsConnection) {
       await this.connection.close();

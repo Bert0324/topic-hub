@@ -58,8 +58,13 @@ export class TopicHubService implements OnModuleInit, OnApplicationBootstrap, On
       ...(bridge ? { bridge } : {}),
     });
 
+    const embed = this.hub.getEmbeddedBridgeClusterStatus();
     this.logger.log(
-      bridge ? 'TopicHub initialized (embedded OpenClaw bridge)' : 'TopicHub initialized',
+      embed.role === 'leader'
+        ? 'TopicHub initialized (OpenClaw embedded gateway lease holder)'
+        : embed.role === 'follower'
+          ? 'TopicHub initialized (OpenClaw bridge follower — gateway on lease holder)'
+          : 'TopicHub initialized',
     );
   }
 
