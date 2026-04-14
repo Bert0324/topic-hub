@@ -287,7 +287,7 @@ export class OpenClawBridge {
       webhook.data;
     const normalized = normalizeImCommandMessage(message);
 
-    this.logger.debug(`Inbound webhook: channel=${channel} user=${user} message=${JSON.stringify(normalized)} sessionId=${sessionId}`);
+    this.logger.log(`Inbound webhook: channel=${channel} user=${user} message=${JSON.stringify(normalized)} sessionId=${sessionId} platform=${webhookPlatform ?? '(none)'}`);
 
     const platform =
       webhookPlatform && String(webhookPlatform).trim()
@@ -331,6 +331,8 @@ export class OpenClawBridge {
       opts?.sessionKey?.trim()
       || `agent:main:${channel}:channel:${target}`;
 
+    this.logger.log(`sendMessage: channel=${channel} target=${target} url=${url} sessionKey=${sessionKey}`);
+
     try {
       const res = await fetch(url, {
         method: 'POST',
@@ -358,6 +360,7 @@ export class OpenClawBridge {
         );
         return false;
       }
+      this.logger.log(`sendMessage OK: ${res.status}`);
       return true;
     } catch (err) {
       this.logger.error(

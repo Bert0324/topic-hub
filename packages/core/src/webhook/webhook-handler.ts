@@ -61,19 +61,27 @@ export class WebhookHandler {
     private readonly ingestionService: IngestionService,
     private readonly commandDispatcher: CommandDispatcher,
     private readonly logger: TopicHubLogger,
-    private readonly bridge?: OpenClawBridge,
+    private readonly getOpenClawBridge: () => OpenClawBridge | null = () => null,
     private readonly identityOps?: WebhookIdentityOps,
     private readonly heartbeatOps?: WebhookHeartbeatOps,
     private readonly imSelfServeOps?: WebhookImSelfServeOps,
     private readonly publishedSkillCatalog?: PublishedSkillCatalog,
   ) { }
 
+  private bridge(): OpenClawBridge | null {
+    return this.getOpenClawBridge();
+  }
+
   /**
    * Route IM replies on the same OpenClaw session as the inbound message.
    * Always pass `sessionKey` so thread/DM routing cannot drift from the triggering envelope.
    */
   private sendThreadReply(result: OpenClawInboundResult, text: string) {
-    return this.bridge!.sendMessage(result.platform, result.channel, text, {
+    const b = this.bridge();
+    if (!b) {
+      return Promise.reject(new Error('OpenClaw bridge not configured'));
+    }
+    return b.sendMessage(result.platform, result.channel, text, {
       sessionKey: result.sessionId,
     });
   }
@@ -83,11 +91,12 @@ export class WebhookHandler {
     rawBody?: Buffer | string,
     headers?: Record<string, string | string[] | undefined>,
   ): Promise<WebhookResult> {
-    if (!this.bridge) {
+    const bridge = this.bridge();
+    if (!bridge) {
       return { success: false, error: 'OpenClaw bridge not configured' };
     }
 
-    const result = this.bridge.handleInboundWebhook(payload, rawBody, headers);
+    const result = bridge.handleInboundWebhook(payload, rawBody, headers);
     if (!result) {
       return { success: true, response: { status: 'ignored' } };
     }
@@ -429,7 +438,7 @@ export class WebhookHandler {
   }
 
   private async handleImIdCommands(result: OpenClawInboundResult, cmd: string): Promise<WebhookResult> {
-    if (!this.bridge) {
+    if (!this.bridge()) {
       return { success: false, error: 'Bridge not configured' };
     }
     if (!this.imSelfServeOps) {
@@ -534,7 +543,7 @@ export class WebhookHandler {
   }
 
   private async handleHelp(result: OpenClawInboundResult): Promise<WebhookResult> {
-    if (!this.bridge) {
+    if (!this.bridge()) {
       return { success: false, error: 'Bridge not configured' };
     }
 
@@ -557,7 +566,7 @@ export class WebhookHandler {
     result: OpenClawInboundResult,
     code: string,
   ): Promise<WebhookResult> {
-    if (!this.bridge) {
+    if (!this.bridge()) {
       return { success: false, error: 'Bridge not configured' };
     }
 
@@ -611,7 +620,7 @@ export class WebhookHandler {
   }
 
   private async handleRegister(result: OpenClawInboundResult, code: string): Promise<WebhookResult> {
-    if (!this.identityOps || !this.bridge) {
+    if (!this.identityOps || !this.bridge()) {
       return { success: false, error: 'Identity operations not configured' };
     }
 
@@ -657,7 +666,7 @@ export class WebhookHandler {
   }
 
   private async handleUnregister(result: OpenClawInboundResult): Promise<WebhookResult> {
-    if (!this.identityOps || !this.bridge) {
+    if (!this.identityOps || !this.bridge()) {
       return { success: false, error: 'Identity operations not configured' };
     }
 

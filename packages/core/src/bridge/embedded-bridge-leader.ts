@@ -1,5 +1,6 @@
 import * as crypto from 'node:crypto';
 import mongoose, { Connection, Model } from 'mongoose';
+import { TopicHubError } from '../common/errors';
 import type { TopicHubLogger } from '../common/logger';
 import { generateWebhookSecret } from './bridge-config-generator';
 import { TOPICHUB_WEBHOOK_HMAC_ENV } from './bridge-manager';
@@ -15,6 +16,15 @@ function resolveLeaseMs(): number {
   if (!raw) return DEFAULT_LEASE_MS;
   const n = parseInt(raw, 10);
   if (!Number.isFinite(n) || n < 5000) return DEFAULT_LEASE_MS;
+  return Math.min(n, 120_000);
+}
+
+/** Max wall time for `join()` so serverless parents (e.g. Goofy ~30s child check) are not blocked forever. */
+function resolveJoinDeadlineMs(): number {
+  const raw = process.env.TOPICHUB_BRIDGE_EMBED_JOIN_DEADLINE_MS?.trim();
+  if (!raw) return 20_000;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 3000) return 20_000;
   return Math.min(n, 120_000);
 }
 
@@ -81,6 +91,16 @@ export class EmbeddedBridgeCluster {
     const Model = this.model();
     const LEASE_MS = resolveLeaseMs();
     const holderId = this.holderId;
+    const joinDeadlineMs = resolveJoinDeadlineMs();
+    const joinStarted = Date.now();
+    const assertJoinDeadline = () => {
+      if (Date.now() - joinStarted > joinDeadlineMs) {
+        throw new TopicHubError(
+          `Embedded OpenClaw bridge lease join timed out after ${joinDeadlineMs}ms (TOPICHUB_BRIDGE_EMBED_JOIN_DEADLINE_MS). ` +
+            'Check Mongo connectivity, follower `TOPICHUB_PUBLIC_GATEWAY_BASE_URL`, or a stuck lease doc missing `webhookSecret`.',
+        );
+      }
+    };
 
     const pickSecret = (existing: BridgeLeaderDoc | null): string => {
       const env = resolveSecretFromEnv();
@@ -90,6 +110,7 @@ export class EmbeddedBridgeCluster {
     };
 
     for (;;) {
+      assertJoinDeadline();
       const now = new Date();
       const leaseUntil = new Date(now.getTime() + LEASE_MS);
       const ping = new Date();

@@ -15,12 +15,20 @@ export const TopicHubConfigSchema = z.object({
   logger: z.custom<import('./common/logger').LoggerFactory>().optional(),
   encryption: EncryptionConfigSchema.optional(),
   bridge: TopicHubBridgeConfigSchema.optional(),
+  /**
+   * When `true` with `bridge`, lease + embedded gateway start later via
+   * {@link TopicHub.startEmbeddedBridgeWhenDeferred} (after host HTTP listen) so bootstrap stays fast.
+   */
+  deferEmbeddedBridge: z.boolean().optional().default(false),
 }).refine(
   (data) => !!(data.mongoConnection ?? data.mongoUri),
   { message: 'Either mongoConnection or mongoUri must be provided' }
 ).refine(
   (data) => !(data.mongoConnection && data.mongoUri),
   { message: 'Provide either mongoConnection or mongoUri, not both' }
+).refine(
+  (data) => !data.deferEmbeddedBridge || !!data.bridge,
+  { message: 'deferEmbeddedBridge requires bridge config', path: ['deferEmbeddedBridge'] },
 );
 
 export type TopicHubConfig = z.input<typeof TopicHubConfigSchema>;

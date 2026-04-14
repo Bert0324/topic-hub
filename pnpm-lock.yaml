@@ -660,7 +660,7 @@ importers:
         version: 10.4.22(@nestjs/common@10.4.22(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@10.4.22)
       '@topichub/core':
         specifier: file:../core
-        version: topichub-core@file:packages/core(@aws-sdk/credential-providers@3.1028.0)(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@types/express@4.17.25)(apache-arrow@18.1.0)(gcp-metadata@8.1.2)(socks@2.8.7)(typescript@5.9.3)
+        version: '@byted/topichub-core@file:packages/core(@aws-sdk/credential-providers@3.1028.0)(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@types/express@4.17.25)(apache-arrow@18.1.0)(gcp-metadata@8.1.2)(socks@2.8.7)(typescript@5.9.3)'
       mongoose:
         specifier: ^8.0.0
         version: 8.21.1(@aws-sdk/credential-providers@3.1028.0)(gcp-metadata@8.1.2)(socks@2.8.7)
@@ -1138,6 +1138,10 @@ packages:
 
   '@buape/carbon@0.15.0':
     resolution: {integrity: sha512-3V3XXIqtBzU5vSpCp4avX0RKbYyCIh493XDS/nRJvL7Num/9gB8Ylhd1ywt39gBGaNJScJW1hoWxRyN6Il6thw==}
+
+  '@byted/topichub-core@file:packages/core':
+    resolution: {directory: packages/core, type: directory}
+    engines: {node: '>=22.12.0'}
 
   '@clack/core@1.2.0':
     resolution: {integrity: sha512-qfxof/3T3t9DPU/Rj3OmcFyZInceqj/NVtO9rwIuJqCUgh32gwPjpFQQp/ben07qKlhpwq7GzfWpST4qdJ5Drg==}
@@ -2412,6 +2416,27 @@ packages:
     resolution: {integrity: sha512-BrJL2cGo0pN5xd5nw+CzTn2rFMpz9MJyZZPUY81ptGkF2uIuXT2hdCVh56i9ImQrTwBfq1YcZL/l/Qe/1+HR/Q==}
     engines: {node: '>=20.0.0'}
     cpu: [arm, x64]
+    os: [linux]
+    libc: [glibc]
+
+  '@node-llama-cpp/linux-x64-cuda-ext@3.18.1':
+    resolution: {integrity: sha512-VqyKhAVHPCpFzh0f1koCBgpThL+04QOXwv0oDQ8s8YcpfMMOXQlBhTB0plgTh0HrPExoObfTS4ohkrbyGgmztQ==}
+    engines: {node: '>=20.0.0'}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
+  '@node-llama-cpp/linux-x64-cuda@3.18.1':
+    resolution: {integrity: sha512-qOaYP4uwsUoBHQ/7xSOvyJIuXapS57Al+Sudgi00f96ldNZLKe1vuSGptAi5LTM2lIj66PKm6h8PlRWctwsZ2g==}
+    engines: {node: '>=20.0.0'}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
+  '@node-llama-cpp/linux-x64-vulkan@3.18.1':
+    resolution: {integrity: sha512-SIaNTK5pUPhwJD0gmiQfHa8OrRctVMmnqu+slJrz2Mzgg/XrwFndJlS9hvc+jSjTXCouwf7sYeQaaJWvQgBh/A==}
+    engines: {node: '>=20.0.0'}
+    cpu: [x64]
     os: [linux]
     libc: [glibc]
 
@@ -8112,10 +8137,6 @@ packages:
     resolution: {integrity: sha512-dRXchy+C0IgK8WPC6xvCHFRIWYUbqqdEIKPaKo/AcTUNzwLTK6AH7RjdLWsEZcAN/TBdtfUw3PYEgPr5VPr6ww==}
     engines: {node: '>=14.16'}
 
-  topichub-core@file:packages/core:
-    resolution: {directory: packages/core, type: directory}
-    engines: {node: '>=22.12.0'}
-
   tough-cookie@6.0.1:
     resolution: {integrity: sha512-LktZQb3IeoUWB9lqR5EWTHgW/VTITCXg4D21M+lvybRVdylLrRMnqaIONLVb5mav8vM19m44HIcGq4qASeu2Qw==}
     engines: {node: '>=16'}
@@ -9774,6 +9795,109 @@ snapshots:
       - opusscript
       - utf-8-validate
 
+  '@byted/topichub-core@file:packages/core(@aws-sdk/credential-providers@3.1028.0)(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@types/express@4.17.25)(apache-arrow@18.1.0)(gcp-metadata@8.1.2)(socks@2.8.7)(typescript@5.9.3)':
+    dependencies:
+      '@agentclientprotocol/sdk': 0.18.2(zod@4.3.6)
+      '@anthropic-ai/sdk': 0.81.0(zod@4.3.6)
+      '@anthropic-ai/vertex-sdk': 0.15.0(zod@4.3.6)
+      '@aws-sdk/client-bedrock': 3.1028.0
+      '@aws-sdk/client-bedrock-runtime': 3.1028.0
+      '@aws-sdk/credential-provider-node': 3.972.30
+      '@aws/bedrock-token-generator': 1.1.0
+      '@buape/carbon': 0.15.0(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(hono@4.12.12)(opusscript@0.1.1)
+      '@clack/prompts': 1.2.0
+      '@google/genai': 1.49.0(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))
+      '@grammyjs/runner': 2.0.3(grammy@1.42.0)
+      '@grammyjs/transformer-throttler': 1.2.1(grammy@1.42.0)
+      '@homebridge/ciao': 1.3.6
+      '@lancedb/lancedb': 0.27.2(apache-arrow@18.1.0)
+      '@larksuiteoapi/node-sdk': 1.60.0
+      '@line/bot-sdk': 11.0.0
+      '@lydell/node-pty': 1.2.0-beta.12
+      '@mariozechner/pi-agent-core': 0.66.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.66.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      '@mariozechner/pi-coding-agent': 0.66.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      '@mariozechner/pi-tui': 0.66.1
+      '@matrix-org/matrix-sdk-crypto-wasm': 18.0.0
+      '@modelcontextprotocol/sdk': 1.29.0(zod@3.25.76)
+      '@mozilla/readability': 0.6.0
+      '@sinclair/typebox': 0.34.49
+      '@slack/bolt': 4.7.0(@types/express@4.17.25)
+      '@slack/web-api': 7.15.0
+      '@typegoose/typegoose': 12.21.1(mongoose@8.21.1(@aws-sdk/credential-providers@3.1028.0)(gcp-metadata@8.1.2)(socks@2.8.7))
+      ajv: 8.18.0
+      chalk: 5.6.2
+      chokidar: 5.0.0
+      cli-highlight: 2.1.11
+      commander: 14.0.3
+      croner: 10.0.1
+      discord-api-types: 0.38.45
+      dotenv: 17.4.1
+      express: 5.2.1
+      file-type: 22.0.1
+      gaxios: 7.1.4
+      google-auth-library: 10.6.2
+      grammy: 1.42.0
+      gray-matter: 4.0.3
+      hono: 4.12.12
+      https-proxy-agent: 9.0.0
+      ipaddr.js: 2.3.0
+      jimp: 1.6.1
+      jiti: 2.6.1
+      json5: 2.2.3
+      jsonwebtoken: 9.0.3
+      jszip: 3.10.1
+      jwks-rsa: 3.2.2
+      linkedom: 0.18.12
+      long: 5.3.2
+      markdown-it: 14.1.1
+      matrix-js-sdk: 41.3.0
+      mongoose: 8.21.1(@aws-sdk/credential-providers@3.1028.0)(gcp-metadata@8.1.2)(socks@2.8.7)
+      mpg123-decoder: 1.0.3
+      node-edge-tts: 1.2.10
+      nostr-tools: 2.23.3(typescript@5.9.3)
+      openai: 6.34.0(ws@8.20.0)(zod@4.3.6)
+      opusscript: 0.1.1
+      osc-progress: 0.3.0
+      pdfjs-dist: 5.6.205
+      playwright-core: 1.59.1
+      proxy-agent: 8.0.1
+      qrcode-terminal: 0.12.0
+      sharp: 0.34.5
+      silk-wasm: 3.7.1
+      sqlite-vec: 0.1.9
+      tar: 7.5.13
+      tslog: 4.10.2
+      undici: 8.0.2
+      uuid: 13.0.0
+      ws: 8.20.0
+      yaml: 2.8.3
+      zod: 4.3.6
+    transitivePeerDependencies:
+      - '@aws-sdk/credential-providers'
+      - '@cfworker/json-schema'
+      - '@discordjs/opus'
+      - '@emnapi/core'
+      - '@emnapi/runtime'
+      - '@mongodb-js/zstd'
+      - '@types/express'
+      - apache-arrow
+      - aws-crt
+      - bufferutil
+      - canvas
+      - debug
+      - encoding
+      - ffmpeg-static
+      - gcp-metadata
+      - kerberos
+      - mongodb-client-encryption
+      - node-opus
+      - snappy
+      - socks
+      - supports-color
+      - typescript
+      - utf-8-validate
+
   '@clack/core@1.2.0':
     dependencies:
       fast-wrap-ansi: 0.1.6
@@ -11289,6 +11413,15 @@ snapshots:
     optional: true
 
   '@node-llama-cpp/linux-armv7l@3.18.1':
+    optional: true
+
+  '@node-llama-cpp/linux-x64-cuda-ext@3.18.1':
+    optional: true
+
+  '@node-llama-cpp/linux-x64-cuda@3.18.1':
+    optional: true
+
+  '@node-llama-cpp/linux-x64-vulkan@3.18.1':
     optional: true
 
   '@node-llama-cpp/linux-x64@3.18.1':
@@ -16081,6 +16214,9 @@ snapshots:
       '@node-llama-cpp/linux-arm64': 3.18.1
       '@node-llama-cpp/linux-armv7l': 3.18.1
       '@node-llama-cpp/linux-x64': 3.18.1
+      '@node-llama-cpp/linux-x64-cuda': 3.18.1
+      '@node-llama-cpp/linux-x64-cuda-ext': 3.18.1
+      '@node-llama-cpp/linux-x64-vulkan': 3.18.1
       '@node-llama-cpp/mac-arm64-metal': 3.18.1
       '@node-llama-cpp/mac-x64': 3.18.1
       '@node-llama-cpp/win-arm64': 3.18.1
@@ -16127,6 +16263,9 @@ snapshots:
       '@node-llama-cpp/linux-arm64': 3.18.1
       '@node-llama-cpp/linux-armv7l': 3.18.1
       '@node-llama-cpp/linux-x64': 3.18.1
+      '@node-llama-cpp/linux-x64-cuda': 3.18.1
+      '@node-llama-cpp/linux-x64-cuda-ext': 3.18.1
+      '@node-llama-cpp/linux-x64-vulkan': 3.18.1
       '@node-llama-cpp/mac-arm64-metal': 3.18.1
       '@node-llama-cpp/mac-x64': 3.18.1
       '@node-llama-cpp/win-arm64': 3.18.1
@@ -17864,109 +18003,6 @@ snapshots:
       '@borewit/text-codec': 0.2.2
       '@tokenizer/token': 0.3.0
       ieee754: 1.2.1
-
-  topichub-core@file:packages/core(@aws-sdk/credential-providers@3.1028.0)(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@types/express@4.17.25)(apache-arrow@18.1.0)(gcp-metadata@8.1.2)(socks@2.8.7)(typescript@5.9.3):
-    dependencies:
-      '@agentclientprotocol/sdk': 0.18.2(zod@4.3.6)
-      '@anthropic-ai/sdk': 0.81.0(zod@4.3.6)
-      '@anthropic-ai/vertex-sdk': 0.15.0(zod@4.3.6)
-      '@aws-sdk/client-bedrock': 3.1028.0
-      '@aws-sdk/client-bedrock-runtime': 3.1028.0
-      '@aws-sdk/credential-provider-node': 3.972.30
-      '@aws/bedrock-token-generator': 1.1.0
-      '@buape/carbon': 0.15.0(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(hono@4.12.12)(opusscript@0.1.1)
-      '@clack/prompts': 1.2.0
-      '@google/genai': 1.49.0(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))
-      '@grammyjs/runner': 2.0.3(grammy@1.42.0)
-      '@grammyjs/transformer-throttler': 1.2.1(grammy@1.42.0)
-      '@homebridge/ciao': 1.3.6
-      '@lancedb/lancedb': 0.27.2(apache-arrow@18.1.0)
-      '@larksuiteoapi/node-sdk': 1.60.0
-      '@line/bot-sdk': 11.0.0
-      '@lydell/node-pty': 1.2.0-beta.12
-      '@mariozechner/pi-agent-core': 0.66.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
-      '@mariozechner/pi-ai': 0.66.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
-      '@mariozechner/pi-coding-agent': 0.66.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
-      '@mariozechner/pi-tui': 0.66.1
-      '@matrix-org/matrix-sdk-crypto-wasm': 18.0.0
-      '@modelcontextprotocol/sdk': 1.29.0(zod@3.25.76)
-      '@mozilla/readability': 0.6.0
-      '@sinclair/typebox': 0.34.49
-      '@slack/bolt': 4.7.0(@types/express@4.17.25)
-      '@slack/web-api': 7.15.0
-      '@typegoose/typegoose': 12.21.1(mongoose@8.21.1(@aws-sdk/credential-providers@3.1028.0)(gcp-metadata@8.1.2)(socks@2.8.7))
-      ajv: 8.18.0
-      chalk: 5.6.2
-      chokidar: 5.0.0
-      cli-highlight: 2.1.11
-      commander: 14.0.3
-      croner: 10.0.1
-      discord-api-types: 0.38.45
-      dotenv: 17.4.1
-      express: 5.2.1
-      file-type: 22.0.1
-      gaxios: 7.1.4
-      google-auth-library: 10.6.2
-      grammy: 1.42.0
-      gray-matter: 4.0.3
-      hono: 4.12.12
-      https-proxy-agent: 9.0.0
-      ipaddr.js: 2.3.0
-      jimp: 1.6.1
-      jiti: 2.6.1
-      json5: 2.2.3
-      jsonwebtoken: 9.0.3
-      jszip: 3.10.1
-      jwks-rsa: 3.2.2
-      linkedom: 0.18.12
-      long: 5.3.2
-      markdown-it: 14.1.1
-      matrix-js-sdk: 41.3.0
-      mongoose: 8.21.1(@aws-sdk/credential-providers@3.1028.0)(gcp-metadata@8.1.2)(socks@2.8.7)
-      mpg123-decoder: 1.0.3
-      node-edge-tts: 1.2.10
-      nostr-tools: 2.23.3(typescript@5.9.3)
-      openai: 6.34.0(ws@8.20.0)(zod@4.3.6)
-      opusscript: 0.1.1
-      osc-progress: 0.3.0
-      pdfjs-dist: 5.6.205
-      playwright-core: 1.59.1
-      proxy-agent: 8.0.1
-      qrcode-terminal: 0.12.0
-      sharp: 0.34.5
-      silk-wasm: 3.7.1
-      sqlite-vec: 0.1.9
-      tar: 7.5.13
-      tslog: 4.10.2
-      undici: 8.0.2
-      uuid: 13.0.0
-      ws: 8.20.0
-      yaml: 2.8.3
-      zod: 4.3.6
-    transitivePeerDependencies:
-      - '@aws-sdk/credential-providers'
-      - '@cfworker/json-schema'
-      - '@discordjs/opus'
-      - '@emnapi/core'
-      - '@emnapi/runtime'
-      - '@mongodb-js/zstd'
-      - '@types/express'
-      - apache-arrow
-      - aws-crt
-      - bufferutil
-      - canvas
-      - debug
-      - encoding
-      - ffmpeg-static
-      - gcp-metadata
-      - kerberos
-      - mongodb-client-encryption
-      - node-opus
-      - snappy
-      - socks
-      - supports-color
-      - typescript
-      - utf-8-validate
 
   tough-cookie@6.0.1:
     dependencies:

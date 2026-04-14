@@ -15,7 +15,7 @@ describe('Relay published skill routing payload', () => {
       {} as any,
       dispatchService as any,
       { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } as any,
-      null,
+      () => null,
     );
     const topicId = new mongoose.Types.ObjectId();
     const topic = {

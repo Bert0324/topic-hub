@@ -51,7 +51,7 @@ describe('WebhookHandler /id commands', () => {
       {} as any,
       jest.fn(),
       logger as any,
-      bridge as any,
+      () => bridge as any,
       identityOps as any,
       undefined,
       imSelfServeOps as any,

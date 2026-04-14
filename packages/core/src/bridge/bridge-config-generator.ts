@@ -133,6 +133,16 @@ function buildOpenClawJson(
     plugins['openclaw-weixin'] = { enabled: true };
   }
 
+  const pluginsLoadPaths: string[] = [];
+  const bundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  if (bundledDir) {
+    const channelKeys = Object.keys(channels);
+    for (const key of channelKeys) {
+      const extPath = path.join(bundledDir, key);
+      if (fs.existsSync(extPath)) pluginsLoadPaths.push(extPath);
+    }
+  }
+
   const config = {
     gateway: {
       port,
@@ -174,7 +184,10 @@ function buildOpenClawJson(
       },
     },
     channels,
-    ...(Object.keys(plugins).length > 0 ? { plugins: { entries: plugins } } : {}),
+    plugins: {
+      ...(pluginsLoadPaths.length > 0 ? { load: { paths: pluginsLoadPaths } } : {}),
+      ...(Object.keys(plugins).length > 0 ? { entries: plugins } : {}),
+    },
     hooks: {
       enabled: true,
       token: crypto.randomBytes(32).toString('hex'),
@@ -237,6 +250,8 @@ function buildRelayHandler(webhookUrl: string, secret: string): string {
 const WEBHOOK_URL = ${JSON.stringify(webhookUrl)};
 // Prefer env (set by BridgeManager on the OpenClaw child) so HMAC always matches Topic Hub.
 const SECRET = process.env.TOPICHUB_WEBHOOK_HMAC_SECRET ?? ${JSON.stringify(secret)};
+
+console.log("[topichub-relay] hook loaded — WEBHOOK_URL=" + WEBHOOK_URL);
 
 function normalizeImCommandMessage(raw) {
   let s = String(raw ?? "").trim();
@@ -364,6 +379,8 @@ const handler = async (event) => {
 
   const imChannel = replyTarget || (senderId ? "user:" + senderId : "");
 
+  const senderDisplayName = String(ctx.metadata?.senderName ?? ctx.metadata?.displayName ?? "").trim();
+
   const body = {
     event: "message.received",
     timestamp: new Date().toISOString(),
@@ -374,13 +391,14 @@ const handler = async (event) => {
       sessionId: sk,
       ...(platformOut ? { platform: platformOut } : {}),
       isDm,
+      ...(senderDisplayName ? { displayName: senderDisplayName } : {}),
     },
   };
 
   const bodyStr = JSON.stringify(body);
   const sig = "sha256=" + crypto.createHmac("sha256", SECRET).update(bodyStr).digest("hex");
 
-  console.log("[topichub-relay] forwarding:", JSON.stringify({ platform: platformOut, target: imChannel, content }));
+  console.log("[topichub-relay] forwarding:", JSON.stringify({ platform: platformOut, target: imChannel, content, isDm, sessionKey: sk }));
 
   try {
     const res = await fetch(WEBHOOK_URL, {
@@ -394,6 +412,8 @@ const handler = async (event) => {
     });
     if (!res.ok) {
       console.error("[topichub-relay] webhook POST failed:", res.status, await res.text().catch(() => ""));
+    } else {
+      console.log("[topichub-relay] webhook POST OK:", res.status);
     }
   } catch (err) {
     console.error("[topichub-relay] webhook POST error:", err?.message ?? err);

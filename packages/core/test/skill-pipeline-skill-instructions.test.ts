@@ -70,7 +70,7 @@ describe('SkillPipeline skillInstructions (server B)', () => {
       registry,
       dispatchService as any,
       { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } as any,
-      null,
+      () => null,
       parser,
       regModel as any,
     );
