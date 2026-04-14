@@ -37,7 +37,7 @@ export class BridgeManager {
   constructor(
     private readonly bridge: TopicHubBridgeConfig,
     private readonly logger: TopicHubLogger,
-  ) {}
+  ) { }
 
   get webhookSecret(): string | null {
     return this._webhookSecret;
@@ -93,7 +93,7 @@ export class BridgeManager {
     if (!existsSync(bundledPluginsDir)) {
       throw new Error(
         `Missing vendored OpenClaw bundled plugins directory: ${bundledPluginsDir}\n` +
-          'From repo root run: node packages/core/scripts/sync-bridge-vendor.mjs --bridge',
+        'From repo root run: node packages/core/scripts/sync-bridge-vendor.mjs --bridge',
       );
     }
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;

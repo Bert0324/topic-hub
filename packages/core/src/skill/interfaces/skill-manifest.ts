@@ -22,7 +22,7 @@ export const SkillManifestSchema = z.object({
     platform: z.string().optional(),
     sourceSystem: z.string().optional(),
     hooks: z.array(z.string()).optional(),
-    schema: z.record(z.string()).optional(),
+    schema: z.record(z.string(), z.string()).optional(),
     capabilities: z.array(z.string()).optional(),
     webhookPath: z.string().optional(),
     auth: z
@@ -43,11 +43,11 @@ export const PublishSkillItemSchema = z.object({
   name: z.string().regex(SKILL_NAME_REGEX),
   category: z.enum(['type', 'platform', 'adapter']),
   version: z.string().optional(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   skillMdRaw: z.string(),
   entryPoint: z.string(),
-  files: z.record(z.string()).optional(),
-  manifest: z.record(z.unknown()),
+  files: z.record(z.string(), z.string()).optional(),
+  manifest: z.record(z.string(), z.unknown()),
 });
 
 export const PublishPayloadSchema = z.object({

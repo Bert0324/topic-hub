@@ -12,7 +12,7 @@ export function createMdOnlyTypeSkill(
     name,
     topicType,
     version: '0.0.0',
-    fieldSchema: z.record(z.unknown()),
+    fieldSchema: z.record(z.string(), z.unknown()),
     groupNamingTemplate: `[${topicType}] {title}`,
     cardTemplate: {
       headerTemplate: '{title}',

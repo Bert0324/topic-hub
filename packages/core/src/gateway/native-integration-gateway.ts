@@ -44,7 +44,7 @@ function extractIdentityBearer(headers: Record<string, string | string[] | undef
 function mapError(op: string, v: number, err: unknown): { status: number; body: NativeGatewayFailure } {
   const base = { ok: false as const, v, op, error: { code: 'INTERNAL', message: 'Unexpected error' } };
   if (err instanceof ZodError) {
-    const msg = err.errors[0]?.message ?? err.message;
+    const msg = err.issues[0]?.message ?? err.message;
     return { status: 400, body: { ...base, error: { code: 'VALIDATION_ERROR', message: msg } } };
   }
   if (err instanceof UnauthorizedError) {

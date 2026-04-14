@@ -7,7 +7,7 @@ export const SkillPublishPayloadSchema = z.object({
   description: z.string().min(1).max(500),
   version: z.string().optional().default('0.0.0'),
   skillMdRaw: z.string().min(1, 'SKILL.md content is required'),
-  metadata: z.record(z.unknown()).optional().default({}),
+  metadata: z.record(z.string(), z.unknown()).optional().default({}),
 });
 
 export type SkillPublishPayload = z.infer<typeof SkillPublishPayloadSchema>;

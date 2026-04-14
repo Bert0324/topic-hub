@@ -22,9 +22,9 @@ function resolvePublishedCorePackageRoot(): string {
   } catch {
     throw new Error(`@topichub/core: unreadable package.json at ${pkgPath}`);
   }
-  if (name !== '@topichub/core') {
+  if (!name || !name.includes('topichub-core')) {
     throw new Error(
-      `@topichub/core: wrong package at ${pkgPath} (name was "${name ?? ''}", expected @topichub/core).`,
+      `@topichub/core: wrong package at ${pkgPath} (name was "${name ?? ''}", expected package name to include "topichub-core").`,
     );
   }
   cachedCorePackageRoot = candidate;
@@ -56,11 +56,11 @@ const embedOverrideEnv = 'TOPICHUB_OPENCLAW_EMBED';
  */
 export async function loadOpenclawGatewayEmbed(): Promise<{ startGatewayServer: StartGatewayServerFn }> {
   const override = process.env[embedOverrideEnv]?.trim();
-  const bundled = join(
-    resolvePublishedCorePackageRoot(),
-    'vendor/bridge/dist/gateway/embed-export.js',
-  );
-  const candidates = override && override.length > 0 ? [override] : [bundled];
+  const bundledRel = 'vendor/bridge/dist/gateway/embed-export.js';
+  const candidates =
+    override && override.length > 0
+      ? [override]
+      : [join(resolvePublishedCorePackageRoot(), bundledRel)];
 
   let resolved: string | undefined;
   for (const c of candidates) {
@@ -72,12 +72,12 @@ export async function loadOpenclawGatewayEmbed(): Promise<{ startGatewayServer: 
   if (!resolved) {
     throw new Error(
       'OpenClaw embed runtime not found under @topichub/core (expected vendor/bridge).\n' +
-        'From monorepo root:\n' +
-        '  pnpm bridge:build-vendor\n' +
-        '  node packages/core/scripts/sync-bridge-vendor.mjs --bridge\n' +
-        `Or set ${embedOverrideEnv}=</abs/path/to/embed-export.js> for a custom build.\n` +
-        'Expected:\n' +
-        candidates.map((c) => `  - ${c}`).join('\n'),
+      'From monorepo root:\n' +
+      '  pnpm bridge:build-vendor\n' +
+      '  node packages/core/scripts/sync-bridge-vendor.mjs --bridge\n' +
+      `Or set ${embedOverrideEnv}=</abs/path/to/embed-export.js> for a custom build.\n` +
+      'Expected:\n' +
+      candidates.map((c) => `  - ${c}`).join('\n'),
     );
   }
   const mod = await importEsm(pathToFileURL(resolved).href);
