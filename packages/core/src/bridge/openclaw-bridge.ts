@@ -125,24 +125,22 @@ export class OpenClawBridge {
     private readonly logger: TopicHubLogger,
   ) {}
 
-  /**
-   * Create an OpenClawBridge configured for an auto-managed (embedded) gateway.
-   * The gatewayUrl, token, and webhookSecret are derived from the BridgeManager's state.
-   */
-  static fromBridgeManager(
-    port: number,
-    webhookSecret: string,
-    platforms: string[],
-    logger: TopicHubLogger,
-  ): OpenClawBridge {
+  /** Outbound tool calls against an embedded gateway (same host port + mount path). */
+  static forEmbeddedGateway(params: {
+    gatewayBaseUrl: string;
+    webhookSecret: string;
+    platforms: string[];
+    logger: TopicHubLogger;
+  }): OpenClawBridge {
+    const base = params.gatewayBaseUrl.replace(/\/+$/, '');
     return new OpenClawBridge(
       {
-        gatewayUrl: `http://127.0.0.1:${port}`,
-        token: webhookSecret,
-        webhookSecret,
-        platforms,
+        gatewayUrl: base,
+        token: params.webhookSecret,
+        webhookSecret: params.webhookSecret,
+        platforms: params.platforms,
       },
-      logger,
+      params.logger,
     );
   }
 

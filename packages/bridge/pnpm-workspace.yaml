@@ -1,0 +1,4 @@
+# Topic Hub: only the gateway workspace + bundled IM extensions (no control-ui / nested packages).
+packages:
+  - .
+  - extensions/*

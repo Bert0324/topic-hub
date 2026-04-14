@@ -1,3 +1,4 @@
+import type { Server as HttpServer } from 'node:http';
 import { z } from 'zod';
 
 export const OpenClawConfigSchema = z.object({
@@ -60,6 +61,25 @@ export const BridgeConfigSchema = z.object({
 });
 
 export type BridgeConfig = z.infer<typeof BridgeConfigSchema>;
+
+const BridgeHostEmbedSchema = z.object({
+  httpServer: z.custom<HttpServer>(
+    (v) => v != null && typeof (v as HttpServer).listen === 'function',
+  ),
+  listenPort: z.number().int().min(1).max(65535),
+  mountPath: z.string().min(1).default('/openclaw'),
+  publicGatewayBaseUrl: z.string().url().optional(),
+});
+
+/** Channels + webhook + OpenClaw JSON tuning, plus the host HTTP server embed target. */
+export const TopicHubBridgeConfigSchema = BridgeConfigSchema.merge(BridgeHostEmbedSchema);
+export type TopicHubBridgeConfig = z.infer<typeof TopicHubBridgeConfigSchema>;
+
+/** Strip host-only fields for `openclaw.json` generation. */
+export function toBridgeFileConfig(b: TopicHubBridgeConfig): BridgeConfig {
+  const { httpServer: _h, listenPort: _l, mountPath: _m, publicGatewayBaseUrl: _p, ...rest } = b;
+  return rest;
+}
 
 /** Coerce JSON numbers (Discord snowflakes) to strings so HMAC matches topichub-relay. */
 const jsonString = (minLen: number) =>

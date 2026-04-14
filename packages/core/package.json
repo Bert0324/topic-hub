@@ -4,15 +4,30 @@
   "description": "Framework-agnostic core library for TopicHub - event topic management, skill pipeline, and AI-driven workflows",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "files": [
     "dist/",
+    "vendor/bridge/package.json",
+    "vendor/bridge/dist/",
+    "vendor/bridge/docs/",
+    "vendor/bridge/extensions/",
+    "vendor/bridge/node_modules/",
     "README.md"
   ],
   "scripts": {
+    "prepublishOnly": "node ./scripts/sync-bridge-vendor.mjs --bridge && pnpm build",
     "build": "tsc",
     "test": "jest",
-    "lint": "eslint src/",
-    "prepublishOnly": "pnpm build"
+    "lint": "eslint src/"
   },
   "dependencies": {
     "@typegoose/typegoose": "^12.0.0",
@@ -20,7 +35,6 @@
     "jsonwebtoken": "^9.0.0",
     "jwks-rsa": "^3.1.0",
     "mongoose": "^8.0.0",
-    "openclaw": ">=2026.3.22",
     "zod": "^3.23.0"
   },
   "devDependencies": {

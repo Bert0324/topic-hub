@@ -10,6 +10,8 @@ export {
   OpenClawWebhookPayloadSchema,
   OpenClawWebhookUnsignedPayloadSchema,
   BridgeConfigSchema,
+  TopicHubBridgeConfigSchema,
+  toBridgeFileConfig,
 } from './openclaw-types';
 export type {
   OpenClawConfig,
@@ -18,4 +20,5 @@ export type {
   OpenClawInboundResult,
   OpenClawSendParams,
   BridgeConfig,
+  TopicHubBridgeConfig,
 } from './openclaw-types';
