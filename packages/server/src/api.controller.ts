@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Get,
   OnModuleInit,
   Post,
   Req,
@@ -60,6 +61,11 @@ export class TopicHubController implements OnModuleInit {
       ...(noopId ? { id: noopId } : {}),
       ...(noopModel ? { model: noopModel } : {}),
     };
+  }
+
+  @Get('health/embedded-bridge')
+  embeddedBridgeHealth() {
+    return this.hub.getHub().getEmbeddedBridgeClusterStatus();
   }
 
   onModuleInit() {

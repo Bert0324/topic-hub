@@ -24,7 +24,7 @@
     "README.md"
   ],
   "scripts": {
-    "prepublishOnly": "node ./scripts/sync-bridge-vendor.mjs --bridge && pnpm build",
+    "prepack": "node ./scripts/sync-bridge-vendor.mjs --bridge && pnpm build",
     "build": "tsc",
     "test": "jest",
     "lint": "eslint src/"

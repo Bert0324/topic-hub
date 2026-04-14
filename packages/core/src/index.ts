@@ -16,6 +16,7 @@ export type {
   QaOperations,
   SuperadminOperations,
   IdentityAuthOperations,
+  EmbeddedBridgeClusterRole,
 } from './topichub';
 
 export { NATIVE_INTEGRATION_SEGMENT } from './gateway/constants';

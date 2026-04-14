@@ -81,6 +81,7 @@ import {
 } from './webhook/webhook-handler';
 import { OpenClawBridge } from './bridge/openclaw-bridge';
 import { BridgeManager } from './bridge/bridge-manager';
+import { EmbeddedBridgeCluster } from './bridge/embedded-bridge-leader';
 import type { TopicHubBridgeConfig } from './bridge/openclaw-types';
 import { NativeIntegrationGateway } from './gateway/native-integration-gateway';
 import { SkillCenterHttpAdapter } from './gateway/skill-center-http-adapter';
@@ -154,6 +155,9 @@ export interface NativeGatewayOperations {
     headers: Record<string, string | string[] | undefined>,
   ): Promise<{ status: number; body: unknown }>;
 }
+
+/** How this process participates in the cluster-wide embedded OpenClaw gateway lease. */
+export type EmbeddedBridgeClusterRole = 'leader' | 'follower' | 'none';
 
 export interface MessagingOperations {
   send(platform: string, params: {
@@ -343,6 +347,7 @@ export class TopicHub {
     private readonly skillCenterService: SkillCenterService,
     private readonly nativeIntegrationGateway: NativeIntegrationGateway,
     private readonly skillCenterHttpAdapter: SkillCenterHttpAdapter,
+    private readonly embeddedBridgePostShutdown: (() => Promise<void>) | undefined,
   ) {}
 
   static async create(config: TopicHubConfig): Promise<TopicHub> {
@@ -419,11 +424,29 @@ export class TopicHub {
 
     let bridge: OpenClawBridge | null = null;
     let bridgeManager: BridgeManager | null = null;
+    let embeddedBridgePostShutdown: (() => Promise<void>) | undefined;
 
     if (validated.bridge) {
       const bridgeCfg = validated.bridge as TopicHubBridgeConfig;
-      bridgeManager = new BridgeManager(bridgeCfg, loggerFactory('BridgeManager'));
-      await bridgeManager.start();
+      const leaderCollection = `${p}bridge_embedded_leader`;
+      const cluster = new EmbeddedBridgeCluster(connection, leaderCollection, loggerFactory('EmbeddedBridge'));
+      const joined = await cluster.join();
+
+      if (!joined.isLeader && !bridgeCfg.publicGatewayBaseUrl?.trim()) {
+        throw new TopicHubError(
+          'This instance is not the embedded OpenClaw lease leader. Set bridge.publicGatewayBaseUrl ' +
+            '(or TOPICHUB_PUBLIC_GATEWAY_BASE_URL) to the public HTTP origin of the leader instance ' +
+            '(the same URL IM webhooks use), e.g. http://127.0.0.1:3000 when the leader listens on 3000.',
+        );
+      }
+
+      embeddedBridgePostShutdown = joined.postGatewayShutdown;
+
+      if (joined.isLeader) {
+        bridgeManager = new BridgeManager(bridgeCfg, loggerFactory('BridgeManager'));
+        await bridgeManager.start(joined.webhookSecret);
+      }
+
       const publicBase =
         bridgeCfg.publicGatewayBaseUrl?.replace(/\/+$/, '') ??
         `http://127.0.0.1:${bridgeCfg.listenPort}`;
@@ -431,11 +454,15 @@ export class TopicHub {
       const gatewayBase = `${publicBase}${mp.replace(/\/+$/, '')}`;
       bridge = OpenClawBridge.forEmbeddedGateway({
         gatewayBaseUrl: gatewayBase,
-        webhookSecret: bridgeManager.webhookSecret!,
+        webhookSecret: joined.webhookSecret,
         platforms: Object.keys(bridgeCfg.channels),
         logger: loggerFactory('OpenClawBridge'),
       });
-      mainLogger.log('OpenClaw bridge embedded — IM messaging enabled');
+      mainLogger.log(
+        joined.isLeader
+          ? 'OpenClaw bridge embedded — IM messaging enabled (this process runs the gateway)'
+          : 'OpenClaw bridge client enabled — IM outbound uses the shared gateway on the lease leader',
+      );
     } else {
       mainLogger.log('OpenClaw bridge not configured — IM messaging disabled');
     }
@@ -616,6 +643,7 @@ export class TopicHub {
       skillCenterService,
       nativeIntegrationGateway,
       skillCenterHttpAdapter,
+      embeddedBridgePostShutdown,
     );
 
     hubHolder.current = hub;
@@ -874,6 +902,13 @@ export class TopicHub {
     return this.nativeIntegrationGateway;
   }
 
+  /** For health checks / ops: whether this process runs the embedded OpenClaw gateway or uses a shared one. */
+  getEmbeddedBridgeClusterStatus(): { role: EmbeddedBridgeClusterRole } {
+    if (this.bridgeManager) return { role: 'leader' };
+    if (this.bridge) return { role: 'follower' };
+    return { role: 'none' };
+  }
+
   get skillCenterHttp(): SkillCenterHttpAdapter {
     return this.skillCenterHttpAdapter;
   }
@@ -1122,6 +1157,7 @@ export class TopicHub {
     if (this.bridgeManager) {
       await this.bridgeManager.stop();
     }
+    await this.embeddedBridgePostShutdown?.();
     this.dispatchService.destroy();
     if (this.ownsConnection) {
       await this.connection.close();

@@ -67,12 +67,17 @@ export class BridgeManager {
    * Call while the host `http.Server` exists and before it accepts traffic
    * (e.g. Nest `OnApplicationBootstrap` during `app.listen()`).
    */
-  async start(): Promise<void> {
+  /**
+   * @param webhookSecretOverride When set (e.g. from {@link EmbeddedBridgeCluster}), all instances
+   * share this HMAC secret for relay verification and outbound gateway auth.
+   */
+  async start(webhookSecretOverride?: string): Promise<void> {
     this.shuttingDown = false;
 
     const { httpServer, listenPort, mountPath } = this.bridge;
 
-    this._webhookSecret = generateWebhookSecret();
+    const trimmed = webhookSecretOverride?.trim();
+    this._webhookSecret = trimmed && trimmed.length > 0 ? trimmed : generateWebhookSecret();
     this._listenPort = listenPort;
     this._mountPath = mountPath;
 
