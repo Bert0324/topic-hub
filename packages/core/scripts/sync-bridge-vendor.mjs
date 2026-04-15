@@ -139,6 +139,9 @@ function copyBridgeNodeModulesBundle(vendorBridgeRoot) {
       const rel = path.relative(from, src);
       if (!rel) return true; // root dir
       const parts = rel.split(path.sep);
+      // pnpm may leave a `.ignored/` tree with optional/native deps (e.g. @discordjs/opus)
+      // containing broken `.bin` symlinks; copying it breaks cpSync even with dereference.
+      if (parts.includes('.ignored')) return false;
       let name;
       if (parts[0].startsWith('@') && parts.length >= 2) {
         name = `${parts[0]}/${parts[1]}`;
