@@ -1,0 +1,39 @@
+import type { TopicService } from '../../services/topic.service';
+import { formatImShowTopicReply } from '../../im/im-topic-read-replies';
+import type { CommandContext } from '../command-router';
+
+export class ShowHandler {
+  constructor(private readonly topicService: TopicService) {}
+
+  async execute(_parsed: unknown, context: CommandContext) {
+    const topic = await this.topicService.findActiveTopicByGroup(
+      context.platform,
+      context.groupId,
+    );
+
+    if (!topic) {
+      return { success: false, error: 'No active topic in this group.' };
+    }
+
+    return {
+      success: true,
+      data: {
+        id: topic._id.toString(),
+        type: topic.type,
+        title: topic.title,
+        status: topic.status,
+        sourceUrl: topic.sourceUrl,
+        signals: topic.signals,
+        assignees: topic.assignees,
+        groups: topic.groups,
+        tags: topic.tags,
+        metadata: topic.metadata,
+        createdBy: topic.createdBy,
+        createdAt: topic.createdAt,
+        updatedAt: topic.updatedAt,
+        closedAt: topic.closedAt,
+      },
+      message: formatImShowTopicReply(topic as any),
+    };
+  }
+}

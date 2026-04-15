@@ -1,0 +1,22 @@
+node_modules/
+**/bundled_modules/
+# Machine-specific symlink; runtime + sync create `node_modules` → `bundled_modules`
+packages/core/vendor/bridge/node_modules
+dist/
+build/
+*.log
+.env
+.env.*
+!.env.example
+coverage/
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+.vscode/
+.idea/
+*.tsbuildinfo
+.turbo/
+cert/**
+!cert/.gitkeep
+start-remote.sh

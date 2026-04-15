@@ -1,0 +1,28 @@
+{
+  "name": "topic-hub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Event Topic Hub - aggregate events into trackable, searchable, collaborative topics",
+  "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "bridge:ensure-extensions": "node packages/bridge/scripts/ensure-bridge-bundled-extensions.mjs",
+    "bridge:build-vendor": "node packages/bridge/scripts/build-bridge-vendor.mjs",
+    "dev": "turbo run dev --filter=@topichub/server",
+    "start": "pm2 start ecosystem.config.cjs",
+    "pm2": "pm2"
+  },
+  "dependencies": {
+    "pm2": "^5.4.3"
+  },
+  "devDependencies": {
+    "tsdown": "0.21.7",
+    "turbo": "^2.9.6",
+    "typescript": "^5.9.3"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

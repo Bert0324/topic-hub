@@ -1,0 +1,6 @@
+{
+  "name": "@openclaw/speech-core",
+  "version": "2026.4.12",
+  "description": "OpenClaw bundled TTS runtime (speech-core)",
+  "type": "module"
+}

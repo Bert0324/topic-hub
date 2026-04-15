@@ -1,0 +1,8 @@
+packages:
+  - 'packages/bridge'
+  - 'packages/core'
+  - 'packages/server'
+  - 'packages/cli'
+  - 'packages/skills/platforms/*'
+  - 'packages/skills/adapters/*'
+  - 'packages/skills/topics/*'
