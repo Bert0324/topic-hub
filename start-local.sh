@@ -8,11 +8,6 @@ cd "$REPO_ROOT"
 
 export MONGODB_URI='mongodb://localhost:27017/topichub'
 
-export TOPICHUB_BRIDGE_FEISHU_APP_ID="cli_a95365b29439dbdb"
-export TOPICHUB_BRIDGE_FEISHU_APP_SECRET="aag41c4UxntBWJVHr4QfjcNT1pNEAxEa"
-export TOPICHUB_BRIDGE_FEISHU_DOMAIN="feishu"
-
-
 if [[ -f "$REPO_ROOT/.env.local" ]]; then
   set -a
   # shellcheck disable=SC1091
