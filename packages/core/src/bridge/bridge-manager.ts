@@ -1,5 +1,17 @@
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  unlinkSync,
+} from 'node:fs';
+import { join, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { TopicHubLogger } from '../common/logger';
 import type { TopicHubBridgeConfig } from './openclaw-types';
@@ -105,17 +117,51 @@ function resolveVendoredModulesDir(bridgeRoot: string): string | null {
  * target directory (original vendor root or /tmp copy) so Node.js can resolve
  * the imports.
  */
+function openclawResolvableViaNodeModules(vendorBridgeRoot: string): boolean {
+  return existsSync(join(vendorBridgeRoot, 'node_modules', 'openclaw', 'package.json'));
+}
+
+/**
+ * Remove a broken `node_modules` entry (e.g. a symlink committed from another machine
+ * pointing at an absolute path that does not exist here).
+ */
+function removeNodeModulesEntry(nmDir: string): void {
+  try {
+    const st = lstatSync(nmDir);
+    if (st.isSymbolicLink() || st.isFile()) {
+      unlinkSync(nmDir);
+      return;
+    }
+  } catch {
+    /* fall through */
+  }
+  try {
+    rmSync(nmDir, { recursive: true, force: true });
+  } catch { /* best-effort */ }
+}
+
 function ensureNodeModulesLink(dir: string): void {
   const nmDir = join(dir, 'node_modules');
-  if (existsSync(nmDir)) return;
-
   const bundled = join(dir, 'bundled_modules');
   if (!existsSync(bundled)) return;
 
+  if (existsSync(nmDir) && openclawResolvableViaNodeModules(dir)) return;
+
+  if (existsSync(nmDir)) {
+    removeNodeModulesEntry(nmDir);
+  }
+
+  const relTarget = relative(dir, bundled) || '.';
   try {
-    symlinkSync(bundled, nmDir, 'junction');
+    symlinkSync(relTarget, nmDir);
   } catch {
-    try { cpSync(bundled, nmDir, { recursive: true }); } catch { /* best-effort */ }
+    try {
+      symlinkSync(bundled, nmDir, 'junction');
+    } catch {
+      try {
+        cpSync(bundled, nmDir, { recursive: true });
+      } catch { /* best-effort */ }
+    }
   }
 }
 

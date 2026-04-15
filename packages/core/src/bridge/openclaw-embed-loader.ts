@@ -22,9 +22,9 @@ function resolvePublishedCorePackageRoot(): string {
   } catch {
     throw new Error(`@topichub/core: unreadable package.json at ${pkgPath}`);
   }
-  if (!name || !name.includes('topichub-core')) {
+  if (!name || name !== '@topichub/core') {
     throw new Error(
-      `@topichub/core: wrong package at ${pkgPath} (name was "${name ?? ''}", expected package name to include "topichub-core").`,
+      `@topichub/core: wrong package at ${pkgPath} (name was "${name ?? ''}", expected "@topichub/core").`,
     );
   }
   cachedCorePackageRoot = candidate;

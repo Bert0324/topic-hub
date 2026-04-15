@@ -1,8 +1,8 @@
 {
-  "name": "@byted/topichub-cli",
-  "version": "0.0.1",
+  "name": "@topichub/cli",
+  "version": "0.0.3",
   "bin": {
-    "byted-topichub": "./dist/bin/topichub-admin.js"
+    "topichub": "./dist/bin/topichub-admin.js"
   },
   "scripts": {
     "build": "tsc",
@@ -11,7 +11,7 @@
     "lint": "eslint src/"
   },
   "dependencies": {
-    "@topichub/core": "file:../core",
+    "@topichub/core": "^0.0.29",
     "@inquirer/prompts": "^8.4.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "eventsource": "^4.1.0",

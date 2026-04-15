@@ -14,7 +14,17 @@
  *
  * Run from repo root: node packages/core/scripts/sync-bridge-vendor.mjs [--bridge]
  */
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -292,6 +302,21 @@ function copyWorkspaceTemplatesToVendorRoots(vendorBridgeRoot) {
   console.log('Copied workspace templates ->', path.join(vendorBridgeRoot, 'docs', 'reference', 'templates'));
 }
 
+/** Relative symlink so clones on any machine resolve `openclaw/plugin-sdk/…` from extensions. */
+function ensureVendorBridgeNodeModulesSymlink(vendorBridgeRoot) {
+  const nm = path.join(vendorBridgeRoot, 'node_modules');
+  const bundled = path.join(vendorBridgeRoot, 'bundled_modules');
+  if (!existsSync(bundled)) return;
+  if (existsSync(nm) && existsSync(path.join(nm, 'openclaw', 'package.json'))) return;
+  if (existsSync(nm)) rmSync(nm, { recursive: true, force: true });
+  try {
+    symlinkSync(path.relative(vendorBridgeRoot, bundled), nm);
+    console.log('Linked vendor/bridge/node_modules -> bundled_modules');
+  } catch (e) {
+    console.warn('Could not create vendor/bridge/node_modules symlink (runtime will retry):', e?.message ?? e);
+  }
+}
+
 function installOpenclawAliasHostIntoVendorNodeModules(vendorBridgeRoot) {
   const dest = path.join(vendorBridgeRoot, 'bundled_modules', 'openclaw');
   const distFrom = path.join(bridgeRoot, 'dist');
@@ -337,3 +362,4 @@ copyBundledExtensions(vendorBridgeRoot);
 copyBridgeNodeModulesBundle(vendorBridgeRoot);
 installOpenclawAliasHostIntoVendorNodeModules(vendorBridgeRoot);
 copyWorkspaceTemplatesToVendorRoots(vendorBridgeRoot);
+ensureVendorBridgeNodeModulesSymlink(vendorBridgeRoot);
