@@ -18,6 +18,15 @@ describe('formatImClaimRunningMessage', () => {
     );
   });
 
+  it('uses /agent wording when only document-level imAgentControlOp is set', () => {
+    expect(
+      formatImClaimRunningMessage({
+        enrichedPayload: { event: { payload: {} } },
+        imAgentControlOp: 'list',
+      }),
+    ).toBe('Your executor is running this **/agent** request.');
+  });
+
   it('uses /agent wording for agent control ops', () => {
     expect(
       formatImClaimRunningMessage({

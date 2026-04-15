@@ -15,6 +15,8 @@ export interface DispatchEvent {
   createdAt: string;
   /** IM bridge channel (e.g. discord, feishu); used for per-platform completion limits. */
   sourcePlatform?: string;
+  /** Survives claim/SSE when nested `enrichedPayload.event.payload` loses `topichubAgentOp`. */
+  imAgentControlOp?: 'list' | 'create' | 'delete';
   enrichedPayload?: unknown;
 }
 
@@ -38,20 +40,62 @@ export interface EventConsumerOptions {
 /** When `eventsource` fails the handshake (non-200, wrong content-type, …) it sets `readyState` to CLOSED and does not retry; we reconnect so `serve` keeps running. */
 const SSE_RECONNECT_MS = 3_000;
 
+/**
+ * Delay before flipping the TUI to "disconnected" after SSE closes. Avoids a visible flash when
+ * the socket drops and a new connection reaches `open` within this window (proxy blip / idle reset).
+ */
+const DISCONNECT_UI_DEBOUNCE_MS = 550;
+
+/**
+ * Poll interval for `dispatches.list` (Mongo-backed unclaimed rows for this executor).
+ * Fills the gap when SSE `newDispatch` fires on a different server instance than the one
+ * this client’s EventSource is connected to (e.g. FaaS multi-replica).
+ * Set `TOPICHUB_DISPATCH_POLL_MS=0` to disable (SSE-only).
+ */
+const DEFAULT_DISPATCH_POLL_MS = 5_000;
+
+/** Exported for `serve` status line and startup hints. */
+export function getDispatchPollIntervalMs(): number {
+  const raw = process.env.TOPICHUB_DISPATCH_POLL_MS?.trim();
+  if (raw === '0') return 0;
+  if (!raw) return DEFAULT_DISPATCH_POLL_MS;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_DISPATCH_POLL_MS;
+  if (n === 0) return 0;
+  return Math.max(2_000, n);
+}
+
 export class EventConsumer {
   private es: EventSource | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  private disconnectUiTimer?: ReturnType<typeof setTimeout>;
+  private pollTimer?: ReturnType<typeof setInterval>;
+  private pollInFlight = false;
   private closed = false;
 
   constructor(private readonly options: EventConsumerOptions) {}
 
   async start(): Promise<void> {
-    await this.catchUp();
     this.connectSse();
+    const pollMs = getDispatchPollIntervalMs();
+    if (pollMs > 0) {
+      this.pollTimer = setInterval(() => {
+        void this.pollUnclaimedFromMongo();
+      }, pollMs);
+      (this.pollTimer as NodeJS.Timeout).unref?.();
+    }
   }
 
   stop(): void {
     this.closed = true;
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = undefined;
+    }
+    if (this.disconnectUiTimer) {
+      clearTimeout(this.disconnectUiTimer);
+      this.disconnectUiTimer = undefined;
+    }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
@@ -62,19 +106,38 @@ export class EventConsumer {
     }
   }
 
-  private async catchUp(): Promise<void> {
+  /**
+   * Lists unclaimed dispatches for this executor from Mongo (any API instance).
+   * Safe to call from timers or SSE `heartbeat` (dedupe in `serve` prevents double work).
+   */
+  async pollDispatchBacklog(): Promise<void> {
+    return this.pollUnclaimedFromMongo();
+  }
+
+  /** Lists unclaimed dispatches for this executor from Mongo (any API instance). */
+  private async pollUnclaimedFromMongo(): Promise<void> {
+    if (this.closed || this.pollInFlight) return;
+    this.pollInFlight = true;
     try {
-      const data = await postNativeGateway<{ dispatches: DispatchEvent[] }>(
+      const data = await postNativeGateway<{ dispatches?: DispatchEvent[] }>(
         this.options.serverUrl,
         'dispatches.list',
         { status: 'unclaimed', limit: 50 },
         { authorization: this.options.token },
       );
-      for (const dispatch of data.dispatches) {
-        this.options.onDispatch(dispatch);
+      const list = Array.isArray(data.dispatches) ? data.dispatches : [];
+      for (const dispatch of list) {
+        if (dispatch && typeof dispatch === 'object') {
+          this.options.onDispatch(dispatch);
+        }
       }
-    } catch {
-      // Catch-up failure is non-fatal; SSE will deliver new events
+    } catch (err) {
+      console.warn(
+        '[topic-hub serve] dispatches.list poll failed:',
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      this.pollInFlight = false;
     }
   }
 
@@ -84,6 +147,10 @@ export class EventConsumer {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
+    }
+    if (this.disconnectUiTimer) {
+      clearTimeout(this.disconnectUiTimer);
+      this.disconnectUiTimer = undefined;
     }
     if (this.es) {
       this.es.close();
@@ -105,7 +172,14 @@ export class EventConsumer {
     this.es = es;
 
     es.addEventListener('open', () => {
-      this.options.onConnected();
+      if (this.disconnectUiTimer) {
+        clearTimeout(this.disconnectUiTimer);
+        this.disconnectUiTimer = undefined;
+      }
+      void (async () => {
+        await this.pollUnclaimedFromMongo();
+        this.options.onConnected();
+      })();
     });
 
     es.addEventListener('dispatch', ((evt: any) => {
@@ -141,15 +215,20 @@ export class EventConsumer {
     }
 
     es.addEventListener('error', () => {
-      this.options.onDisconnected(
-        new Error('SSE connection error'),
-      );
       if (this.closed) return;
       // Transient errors use the library's internal CONNECTING + timer; permanent handshake failures leave CLOSED.
       queueMicrotask(() => {
         if (this.closed) return;
         if (this.es !== es || es.readyState !== EventSource.CLOSED) return;
         this.es = null;
+        clearTimeout(this.disconnectUiTimer);
+        this.disconnectUiTimer = setTimeout(() => {
+          this.disconnectUiTimer = undefined;
+          if (this.closed) return;
+          const cur = this.es;
+          if (cur != null && cur.readyState === EventSource.OPEN) return;
+          this.options.onDisconnected(new Error('SSE connection error'));
+        }, DISCONNECT_UI_DEBOUNCE_MS);
         this.reconnectTimer = setTimeout(() => {
           this.reconnectTimer = undefined;
           this.connectSse();

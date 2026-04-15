@@ -119,6 +119,39 @@ export function canonicalOpenClawWebhookSigningString(webhook: {
   });
 }
 
+/**
+ * JSON bytes signed by the embedded `topichub-relay` (`bridge-config-generator` `buildRelayHandler`).
+ * Hosts that re-`JSON.stringify` parsed bodies (e.g. some HTTP stacks) break raw-byte HMAC; this
+ * reproduces the relay's key order and optional `platform` / `displayName` fields.
+ */
+export function embeddedRelayOpenClawWebhookSigningString(webhook: OpenClawWebhookUnsignedPayload): string {
+  const d = webhook.data;
+  const data: Record<string, unknown> = {
+    channel: String(d.channel ?? ''),
+    user: String(d.user ?? ''),
+    message: String(d.message ?? ''),
+    sessionId: String(d.sessionId ?? ''),
+  };
+  const platform = d.platform;
+  if (platform != null && String(platform).trim() !== '') {
+    data.platform = String(platform).trim();
+  }
+  const isDm =
+    typeof d.isDm === 'boolean'
+      ? d.isDm
+      : d.isDm === 'true' || d.isDm === '1' || d.isDm === 1;
+  data.isDm = isDm;
+  const displayName = d.displayName;
+  if (displayName != null && String(displayName).trim() !== '') {
+    data.displayName = String(displayName).trim();
+  }
+  return JSON.stringify({
+    event: String(webhook.event),
+    timestamp: String(webhook.timestamp),
+    data,
+  });
+}
+
 export class OpenClawBridge {
   constructor(
     private readonly config: OpenClawConfig,
@@ -161,17 +194,18 @@ export class OpenClawBridge {
     body: Omit<OpenClawWebhookPayload, 'signature'>,
     signature: string,
   ): boolean {
-    const canonical = canonicalOpenClawWebhookSigningString(body);
-    const computed = crypto
-      .createHmac('sha256', this.config.webhookSecret)
-      .update(canonical)
-      .digest('hex');
     const expected = signature.startsWith('sha256=') ? signature.slice(7) : signature;
-    if (computed.length !== expected.length) return false;
-    return crypto.timingSafeEqual(
-      Buffer.from(computed, 'hex'),
-      Buffer.from(expected, 'hex'),
-    );
+    const candidates = [
+      embeddedRelayOpenClawWebhookSigningString(body as OpenClawWebhookUnsignedPayload),
+      canonicalOpenClawWebhookSigningString(body),
+    ];
+    for (const s of candidates) {
+      const computed = crypto.createHmac('sha256', this.config.webhookSecret).update(s).digest('hex');
+      if (computed.length === expected.length && crypto.timingSafeEqual(Buffer.from(computed, 'hex'), Buffer.from(expected, 'hex'))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static readTopicHubSignatureHeader(
@@ -224,6 +258,9 @@ export class OpenClawBridge {
       }
       if (fromParsedBody.success) {
         signingCandidates.push(
+          Buffer.from(embeddedRelayOpenClawWebhookSigningString(fromParsedBody.data), 'utf8'),
+        );
+        signingCandidates.push(
           Buffer.from(
             canonicalOpenClawWebhookSigningString(fromParsedBody.data),
             'utf8',
@@ -234,7 +271,7 @@ export class OpenClawBridge {
       const matched = signingCandidates.find((b) => this.verifyRawBodyHmac(b, sigHeader));
       if (!matched) {
         this.logger.warn(
-          'OpenClaw webhook signature verification failed (X-TopicHub-Signature; tried raw body and canonical JSON)',
+          'OpenClaw webhook signature verification failed (X-TopicHub-Signature; tried raw body, relay-shaped JSON, and legacy canonical JSON)',
         );
         return null;
       }

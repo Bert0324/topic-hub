@@ -1,4 +1,4 @@
-import { chmodSync, cpSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { TopicHubLogger } from '../common/logger';
@@ -84,26 +84,61 @@ function copyToSafeTempDir(srcDir: string): { dir: string; log: string; tempDir:
 }
 
 /**
- * Extensions import from `openclaw/plugin-sdk/...`. In the original vendored layout,
- * Node.js resolution walks up from `vendor/bridge/extensions/` to
- * `vendor/bridge/node_modules/openclaw/`. After copying to `/tmp/`, that parent
- * chain is broken. Symlink the vendored `node_modules` into the temp dir so jiti
- * can still resolve `openclaw` (and any other gateway-internal packages).
+ * Resolve the vendored modules directory.  npm strips directories named
+ * `node_modules` from published tarballs, so `sync-bridge-vendor` stores
+ * them as `bundled_modules`.  Check both names for backwards compatibility.
+ */
+function resolveVendoredModulesDir(bridgeRoot: string): string | null {
+  const bundled = join(bridgeRoot, 'bundled_modules');
+  if (existsSync(bundled)) return bundled;
+  const legacy = join(bridgeRoot, 'node_modules');
+  if (existsSync(legacy)) return legacy;
+  return null;
+}
+
+/**
+ * Extensions import from `openclaw/plugin-sdk/...`.  Node.js bare-specifier
+ * resolution requires a `node_modules` directory in the ancestor chain.
+ *
+ * The vendored deps live in `bundled_modules/` (so npm doesn't strip them).
+ * This function creates a `node_modules` symlink → `bundled_modules` in the
+ * target directory (original vendor root or /tmp copy) so Node.js can resolve
+ * the imports.
+ */
+function ensureNodeModulesLink(dir: string): void {
+  const nmDir = join(dir, 'node_modules');
+  if (existsSync(nmDir)) return;
+
+  const bundled = join(dir, 'bundled_modules');
+  if (!existsSync(bundled)) return;
+
+  try {
+    symlinkSync(bundled, nmDir, 'junction');
+  } catch {
+    try { cpSync(bundled, nmDir, { recursive: true }); } catch { /* best-effort */ }
+  }
+}
+
+/**
+ * After copying the extensions dir to /tmp for permission repair, the
+ * parent `bundled_modules` (or legacy `node_modules`) is no longer in the
+ * ancestor chain.  Symlink a `node_modules` into the temp dir pointing to
+ * the original vendored modules so jiti can resolve `openclaw`.
  */
 function linkVendoredNodeModules(srcDir: string, tempDir: string): void {
-  const vendoredNM = resolve(srcDir, '..', 'node_modules');
-  if (!existsSync(vendoredNM)) return;
+  const parentDir = resolve(srcDir, '..');
+  const vendoredNM = resolveVendoredModulesDir(parentDir);
+  if (!vendoredNM) return;
   const dest = join(tempDir, 'node_modules');
+  if (existsSync(dest)) return;
   try {
     symlinkSync(vendoredNM, dest, 'junction');
   } catch {
-    // Fallback: if symlink fails (rare), try copying just the `openclaw` package
-    // which is the critical one for extension resolution.
     try {
       const openclawSrc = join(vendoredNM, 'openclaw');
       if (existsSync(openclawSrc)) {
-        const openclawDest = join(dest, 'openclaw');
-        cpSync(openclawSrc, openclawDest, { recursive: true });
+        mkdirSync(dest, { recursive: true });
+        cpSync(openclawSrc, join(dest, 'openclaw'), { recursive: true });
       }
     } catch { /* best-effort */ }
   }
@@ -132,6 +167,10 @@ function chmodRecursiveDirs(dir: string): void {
 let _modulePluginsTempDir: string | undefined;
 const _vendoredPluginsDir = resolveVendoredBundledPluginsDir();
 if (existsSync(_vendoredPluginsDir) && !process.env.OPENCLAW_BUNDLED_PLUGINS_DIR) {
+  // Create node_modules → bundled_modules symlink so Node.js can resolve
+  // bare specifiers like `openclaw/plugin-sdk/…` from extensions.
+  ensureNodeModulesLink(resolve(_vendoredPluginsDir, '..'));
+
   const dirNames = readdirSync(_vendoredPluginsDir, { withFileTypes: true })
     .filter((d) => d.isDirectory()).map((d) => d.name);
   const safe = ensureSafeBundledPluginsDir(_vendoredPluginsDir, dirNames);
@@ -150,6 +189,7 @@ function assertPluginDepsResolvable(pluginsDir: string, logger: TopicHubLogger):
   const candidates = [
     join(pluginsDir, 'node_modules', 'openclaw', 'package.json'),
     resolve(pluginsDir, '..', 'node_modules', 'openclaw', 'package.json'),
+    resolve(pluginsDir, '..', 'bundled_modules', 'openclaw', 'package.json'),
   ];
   if (candidates.some((c) => existsSync(c))) return;
 
@@ -159,15 +199,15 @@ function assertPluginDepsResolvable(pluginsDir: string, logger: TopicHubLogger):
     return;
   } catch { /* not resolvable */ }
 
-  const vendoredNM = resolve(pluginsDir, '..', 'node_modules');
+  const vendoredNM = resolveVendoredModulesDir(resolve(pluginsDir, '..'));
   logger.error(
     `[BridgeManager] openclaw package not resolvable from plugins dir ${pluginsDir}. ` +
-    `Extensions will fail to load. vendored node_modules expected at ${vendoredNM}`,
+    `Extensions will fail to load. vendored modules dir: ${vendoredNM ?? '(not found)'}`,
   );
   throw new Error(
     `openclaw package is not resolvable from plugin extensions directory (${pluginsDir}). ` +
-    'This usually means the permission-repair copy to /tmp lost the node_modules symlink. ' +
-    'Upgrade @byted/topichub-core to get the automatic symlink fix.',
+    'Ensure vendor/bridge/bundled_modules/ exists in the published package. ' +
+    'npm strips node_modules/ — use bundled_modules/ instead.',
   );
 }
 
@@ -255,6 +295,9 @@ export class BridgeManager {
         'From repo root run: node packages/core/scripts/sync-bridge-vendor.mjs --bridge',
       );
     }
+
+    // Ensure node_modules symlink exists for bare-specifier resolution
+    ensureNodeModulesLink(resolve(vendoredDir, '..'));
 
     const pluginDirs = readdirSync(vendoredDir, { withFileTypes: true })
       .filter((d) => d.isDirectory())

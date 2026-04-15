@@ -44,6 +44,7 @@ export {
 // Config
 export { TopicHubConfigSchema } from './config';
 export type { TopicHubConfig, EncryptionConfig } from './config';
+export type { TopicHubMongoAdapter, TopicHubMongoModels } from './persistence/topic-hub-mongo-adapter';
 
 // Built-in skills
 export { getBuiltinSkills } from './builtin-skills';
@@ -89,6 +90,7 @@ export {
   OpenClawBridge,
   normalizeImCommandMessage,
   canonicalOpenClawWebhookSigningString,
+  embeddedRelayOpenClawWebhookSigningString,
 } from './bridge/openclaw-bridge';
 export { BridgeManager, TOPICHUB_WEBHOOK_HMAC_ENV } from './bridge/bridge-manager';
 export type { BridgeManagerState } from './bridge/bridge-manager';
@@ -124,6 +126,7 @@ export {
   IM_PAYLOAD_AGENT_SLOT_KEY,
   IM_PAYLOAD_AGENT_OP_KEY,
   IM_PAYLOAD_AGENT_DELETE_SLOT_KEY,
+  IM_ENRICHED_ROOT_AGENT_OP_KEY,
 } from './im/agent-slot-constants';
 export {
   stripLeadingAgentSlotFromPlainRelay,
@@ -137,6 +140,7 @@ export {
 } from './im/im-agent-list-format';
 export {
   parseImAgentControlOpFromEnrichedPayload,
+  resolveImAgentControlOp,
   type ImAgentControlOp,
 } from './im/im-agent-control-dispatch';
 export {
@@ -163,12 +167,21 @@ export { AuthService } from './services/auth.service';
 export type { ResolvedAuth } from './services/auth.service';
 
 // Entities
+export { Topic } from './entities/topic.entity';
+export { TimelineEntry } from './entities/timeline-entry.entity';
+export { SkillRegistration } from './entities/skill-registration.entity';
+export { TaskDispatch } from './entities/task-dispatch.entity';
+export { ImIdentityLink } from './entities/im-identity-link.entity';
+export { SkillLike } from './entities/skill-like.entity';
+export { SkillUsage } from './entities/skill-usage.entity';
 export { UserIdentityBinding } from './entities/user-identity-binding.entity';
 export { ExecutorHeartbeat } from './entities/executor-heartbeat.entity';
 export { QaExchange } from './entities/qa-exchange.entity';
 export { Identity } from './entities/identity.entity';
 export { ExecutorRegistration } from './entities/executor-registration.entity';
 export { ImBinding } from './entities/im-binding.entity';
+export { OpenClawSendQueueEntry } from './entities/openclaw-send-queue.entity';
+export type { OpenClawSendQueueStatus } from './entities/openclaw-send-queue.entity';
 
 // Identity
 export { PairingCode } from './identity/pairing-code.entity';

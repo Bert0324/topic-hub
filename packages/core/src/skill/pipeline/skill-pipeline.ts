@@ -7,6 +7,7 @@ import type { DispatchMeta } from '../../services/dispatch.service';
 import { OpenClawBridge } from '../../bridge/openclaw-bridge';
 import type { TopicHubLogger } from '../../common/logger';
 import type { SkillPipelinePort } from '../../command/handlers/create.handler';
+import { IM_ENRICHED_ROOT_AGENT_OP_KEY, IM_PAYLOAD_AGENT_OP_KEY } from '../../im/agent-slot-constants.js';
 import { buildSkillInstructionsSnapshot } from './skill-instructions-snapshot';
 
 export class SkillPipeline implements SkillPipelinePort {
@@ -122,6 +123,15 @@ export class SkillPipeline implements SkillPipelinePort {
         },
       };
 
+      let imAgentControlOp: 'list' | 'create' | 'delete' | undefined;
+      if (extra && typeof extra === 'object' && !Array.isArray(extra)) {
+        const rawOp = (extra as Record<string, unknown>)[IM_PAYLOAD_AGENT_OP_KEY];
+        if (rawOp === 'list' || rawOp === 'create' || rawOp === 'delete') {
+          enrichedPayload[IM_ENRICHED_ROOT_AGENT_OP_KEY] = rawOp;
+          imAgentControlOp = rawOp;
+        }
+      }
+
       if (this.skillMdParser) {
         try {
           const parsed = await this.resolveParsedSkillMd(operation, topicData, extra, options);
@@ -138,6 +148,7 @@ export class SkillPipeline implements SkillPipelinePort {
         eventType: operation,
         skillName: options?.dispatchSkillName ?? topicData.type ?? 'unknown',
         enrichedPayload,
+        imAgentControlOp,
         targetUserId: dispatchMeta.targetUserId,
         targetExecutorToken: dispatchMeta.targetExecutorToken,
         sourceChannel: dispatchMeta.sourceChannel,

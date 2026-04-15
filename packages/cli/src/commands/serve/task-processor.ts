@@ -24,6 +24,7 @@ import {
   formatAgentDeleteAck,
   formatAgentRosterListMarkdown,
   parseImAgentControlOpFromEnrichedPayload,
+  resolveImAgentControlOp,
 } from '@topichub/core';
 import { resolveAgentWorkingDir } from './resolve-agent-cwd.js';
 import {
@@ -121,6 +122,29 @@ function mongoIdToString(value: unknown): string {
   return String(value);
 }
 
+/**
+ * After `dispatches.claim`, the gateway JSON may carry an `enrichedPayload` that lost nested
+ * `event.payload` keys (host serializers / mongoose shape). Prefer whichever copy still has
+ * {@link IM_PAYLOAD_AGENT_OP_KEY} so `/agent list` never falls through to headless Claude.
+ */
+function pickEnrichedPayloadAfterClaim(
+  dispatch: { enrichedPayload?: unknown },
+  claimed: unknown,
+): unknown {
+  const fromDispatch = dispatch.enrichedPayload;
+  const fromClaimed =
+    claimed != null && typeof claimed === 'object' && 'enrichedPayload' in claimed
+      ? (claimed as { enrichedPayload?: unknown }).enrichedPayload
+      : undefined;
+  if (parseImAgentControlOpFromEnrichedPayload(fromDispatch) != null) {
+    return fromDispatch;
+  }
+  if (parseImAgentControlOpFromEnrichedPayload(fromClaimed) != null) {
+    return fromClaimed;
+  }
+  return fromClaimed ?? fromDispatch;
+}
+
 function getDispatchId(dispatch: DispatchEvent & { _id?: unknown }): string {
   const raw = dispatch.id ?? (dispatch as { _id?: unknown })._id;
   const id = mongoIdToString(raw);
@@ -204,8 +228,9 @@ export class TaskProcessor {
       return;
     }
 
-    const imControlFromSse = parseImAgentControlOpFromEnrichedPayload(
-      (dispatch as { enrichedPayload?: unknown }).enrichedPayload,
+    const imControlFromSse = resolveImAgentControlOp(
+      dispatch as { imAgentControlOp?: unknown; enrichedPayload?: unknown },
+      null,
     );
 
     this.activeDispatches.add(dispatchId);
@@ -257,9 +282,7 @@ export class TaskProcessor {
   }
 
   private async runDispatchPipeline(dispatch: DispatchEvent, dispatchId: string): Promise<void> {
-    const imControlFromSse = parseImAgentControlOpFromEnrichedPayload(
-      (dispatch as { enrichedPayload?: unknown }).enrichedPayload,
-    );
+    const imControlFromSse = resolveImAgentControlOp(dispatch as { imAgentControlOp?: unknown; enrichedPayload?: unknown }, null);
     const reservesConcurrency = imControlFromSse == null;
     if (reservesConcurrency) {
       this.activeCount++;
@@ -295,13 +318,11 @@ export class TaskProcessor {
 
       console.log(`[CLAIM]    Claimed dispatch ${dispatchId}`);
 
+      const mergedEp = pickEnrichedPayloadAfterClaim(dispatch, claimed);
       const promptPayloadEarly = {
         ...(typeof claimed === 'object' && claimed !== null ? claimed : {}),
-        enrichedPayload:
-          (claimed as any)?.enrichedPayload ??
-          (dispatch as any).enrichedPayload,
+        enrichedPayload: mergedEp,
       };
-      const mergedEp = (promptPayloadEarly as { enrichedPayload?: unknown }).enrichedPayload;
       const evEarly = (promptPayloadEarly as { enrichedPayload?: { event?: { payload?: unknown } } })
         .enrichedPayload?.event;
       const pRaw = evEarly?.payload;
@@ -309,7 +330,18 @@ export class TaskProcessor {
         pRaw != null && typeof pRaw === 'object' && !Array.isArray(pRaw)
           ? (pRaw as Record<string, unknown>)
           : {};
-      const agentCtlOp = parseImAgentControlOpFromEnrichedPayload(mergedEp);
+      const agentCtlOp = resolveImAgentControlOp(
+        dispatch as { imAgentControlOp?: unknown; enrichedPayload?: unknown },
+        claimed as { imAgentControlOp?: unknown; enrichedPayload?: unknown } | null,
+      );
+      if (agentCtlOp == null && String(dispatch.skillName) === 'topichub-im-agent') {
+        const hint =
+          'IM `/agent` control payload was lost after claim (missing topichubAgentOp). Retry the command; if it persists, report a gateway/serialization bug.';
+        await this.failDispatch(dispatchId, hint, false);
+        logEntry.status = 'failed';
+        logEntry.error = truncateOneLine(hint, 200);
+        return;
+      }
       if (agentCtlOp != null) {
         const token = this.options.token;
         /** Same body as `/agent list` (bootstrap **#1** when needed). */
@@ -371,12 +403,10 @@ export class TaskProcessor {
       renew();
       claimRenewTimer = setInterval(renew, CLAIM_RENEW_INTERVAL_MS);
 
-      // Claim API historically omitted `enrichedPayload`; SSE payload may still carry it — merge so the agent always sees topic + event.
+      // Claim API may omit or truncate nested `enrichedPayload.event.payload`; keep SSE copy when it still carries IM agent ops.
       const promptPayload = {
         ...(typeof claimed === 'object' && claimed !== null ? claimed : {}),
-        enrichedPayload:
-          (claimed as any)?.enrichedPayload ??
-          (dispatch as any).enrichedPayload,
+        enrichedPayload: pickEnrichedPayloadAfterClaim(dispatch, claimed),
       };
 
       ensureAtLeastOneAgent(this.options.token);

@@ -1,6 +1,7 @@
 import mongoose, { Model } from 'mongoose';
 import { ForbiddenError, NotFoundError, ValidationError } from '../common/errors';
 import type { TopicHubLogger } from '../common/logger';
+import { safeCreate } from '../common/safe-create';
 import { PublishPayloadSchema } from '../skill/interfaces/skill-manifest';
 import { SkillMdParser } from '../skill/registry/skill-md-parser';
 import { resolvePublishedSkillVersion } from './publish-version';
@@ -335,7 +336,7 @@ export class SkillCenterService {
     }
 
     try {
-      await this.skillLikeModel.create({ skillId, identityId });
+      await safeCreate(this.skillLikeModel, { skillId, identityId });
     } catch (err: any) {
       if (err?.code !== 11000) {
         throw err;

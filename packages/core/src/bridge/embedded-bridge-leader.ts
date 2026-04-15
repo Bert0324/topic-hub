@@ -2,6 +2,7 @@ import * as crypto from 'node:crypto';
 import mongoose, { Connection, Model } from 'mongoose';
 import { TopicHubError } from '../common/errors';
 import type { TopicHubLogger } from '../common/logger';
+import { safeCreate } from '../common/safe-create';
 import { generateWebhookSecret } from './bridge-config-generator';
 import { TOPICHUB_WEBHOOK_HMAC_ENV } from './bridge-manager';
 
@@ -97,7 +98,7 @@ export class EmbeddedBridgeCluster {
       if (Date.now() - joinStarted > joinDeadlineMs) {
         throw new TopicHubError(
           `Embedded OpenClaw bridge lease join timed out after ${joinDeadlineMs}ms (TOPICHUB_BRIDGE_EMBED_JOIN_DEADLINE_MS). ` +
-            'Check Mongo connectivity, follower `TOPICHUB_PUBLIC_GATEWAY_BASE_URL`, or a stuck lease doc missing `webhookSecret`.',
+            'Check Mongo connectivity, the openclaw_send_queue collection (embedded outbound), or a stuck lease doc missing `webhookSecret`.',
         );
       }
     };
@@ -158,7 +159,7 @@ export class EmbeddedBridgeCluster {
       if (!any) {
         try {
           const secret = pickSecret(null);
-          await Model.create({
+          await safeCreate(Model, {
             _id: DOC_ID,
             holderId,
             leaseUntil,

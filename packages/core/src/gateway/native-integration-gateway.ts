@@ -268,6 +268,7 @@ export class NativeIntegrationGateway {
             status: 'claimed',
             claimedBy,
             enrichedPayload: plain.enrichedPayload,
+            imAgentControlOp: plain.imAgentControlOp,
             skillName: plain.skillName,
             eventType: plain.eventType,
             topicId: plain.topicId != null ? String(plain.topicId) : undefined,
@@ -421,6 +422,10 @@ export class NativeIntegrationGateway {
             result.executorToken,
             true,
             meta,
+          );
+          await hub().identity.repointActiveBindingsClaimToken(
+            result.identityId,
+            result.executorToken,
           );
           return ok(v, op, result);
         }

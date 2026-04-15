@@ -2,6 +2,7 @@ import { Model } from 'mongoose';
 import mongoose from 'mongoose';
 import { QaExchangeStatus } from '../common/enums';
 import type { TopicHubLogger } from '../common/logger';
+import { safeCreate } from '../common/safe-create';
 import { QA_REMINDER_MS, QA_TIMEOUT_MS } from '../identity/identity-types';
 
 export class QaService {
@@ -19,7 +20,7 @@ export class QaService {
     sourcePlatform: string,
   ): Promise<any> {
     const now = new Date();
-    const doc = await this.qaModel.create({
+    const doc = await safeCreate(this.qaModel, {
       dispatchId: new mongoose.Types.ObjectId(dispatchId),
       topichubUserId,
       questionText,

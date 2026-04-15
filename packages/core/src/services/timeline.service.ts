@@ -2,6 +2,7 @@ import { Model } from 'mongoose';
 import mongoose from 'mongoose';
 import { TimelineActionType } from '../common/enums';
 import type { TopicHubLogger } from '../common/logger';
+import { safeCreate } from '../common/safe-create';
 
 export class TimelineService {
   constructor(
@@ -15,7 +16,7 @@ export class TimelineService {
     actionType: TimelineActionType,
     payload: Record<string, unknown> = {},
   ) {
-    return this.timelineModel.create({
+    return safeCreate(this.timelineModel, {
       topicId,
       actor,
       actionType,

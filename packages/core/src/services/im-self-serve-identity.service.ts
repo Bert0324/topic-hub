@@ -1,6 +1,7 @@
 import type { Model } from 'mongoose';
 import type { TopicHubLogger } from '../common/logger';
 import { ConflictError } from '../common/errors';
+import { safeCreate } from '../common/safe-create';
 import { generateIdentityToken } from '../common/token-utils';
 import { generateImSelfServeUniqueId } from '../identity/generate-im-self-serve-unique-id';
 import { IDENTITY_STATUS } from '../identity/identity-types';
@@ -49,7 +50,7 @@ export class ImSelfServeIdentityService {
 
     let createdIdentityId: string | null = null;
     try {
-      const created = await this.identityModel.create({
+      const created = await safeCreate(this.identityModel, {
         uniqueId,
         displayName,
         token,
@@ -62,7 +63,7 @@ export class ImSelfServeIdentityService {
       }
       createdIdentityId = idStr;
 
-      await this.linkModel.create({
+      await safeCreate(this.linkModel, {
         platform,
         platformUserId,
         identityId: idStr,
