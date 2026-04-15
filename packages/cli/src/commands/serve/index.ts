@@ -2,13 +2,13 @@ import os from 'node:os';
 import {
   HEARTBEAT_INTERVAL_MS,
   DEFAULT_MAX_CONCURRENT_AGENTS,
-  parseImAgentControlOpFromEnrichedPayload,
+  resolveImAgentControlOp,
 } from '@topichub/core';
 import { postNativeGateway } from '../../api-client/native-gateway.js';
 import { loadConfig } from '../../config/config.js';
 import { loadAdminToken, loadIdentityToken } from '../../auth/auth.js';
 import { detectAgents, isAgentAvailable } from '../../executors/detector.js';
-import { EventConsumer, type DispatchEvent } from './event-consumer.js';
+import { EventConsumer, getDispatchPollIntervalMs, type DispatchEvent } from './event-consumer.js';
 import { TaskProcessor } from './task-processor.js';
 import { renderStatus, type ServeStatus, type EventLogEntry } from './status-display.js';
 import { resolveServeExecutorArgs } from './resolve-executor-args.js';
@@ -148,6 +148,12 @@ export async function handleServeCommand(args: string[]): Promise<void> {
   }, HEARTBEAT_INTERVAL_MS);
   heartbeatTimer.unref();
 
+  const dispatchPollMs = getDispatchPollIntervalMs();
+  const dispatchBacklogHint =
+    dispatchPollMs > 0
+      ? `Multi-replica: Mongo backlog every ${dispatchPollMs}ms + each SSE heartbeat (TOPICHUB_DISPATCH_POLL_MS)`
+      : `Multi-replica: Mongo backlog each SSE heartbeat (~${Math.round(HEARTBEAT_INTERVAL_MS / 1000)}s); set TOPICHUB_DISPATCH_POLL_MS=5000 for faster poll`;
+
   const status: ServeStatus = {
     connected: false,
     serverUrl: config.serverUrl,
@@ -162,6 +168,7 @@ export async function handleServeCommand(args: string[]): Promise<void> {
     pairingExpiresAt,
     pairingWarning,
     pairingRotatedNotice: null,
+    dispatchBacklogHint,
     events: [],
     startedAt: new Date(),
     counters: { completed: 0, running: 0, failed: 0 },
@@ -175,7 +182,24 @@ export async function handleServeCommand(args: string[]): Promise<void> {
 
   let drainQueue: () => void = () => {};
 
+  /** Deduplicate REST catch-up vs SSE (incl. Mongo poll) for the same dispatch id in one serve session. */
+  const sessionDispatchDedupe = new Set<string>();
+
+  function dispatchEventKey(ev: DispatchEvent): string {
+    const raw = ev.id ?? ev._id;
+    if (raw == null) return '';
+    if (typeof raw === 'string') return raw;
+    if (typeof raw === 'object' && typeof (raw as { toString?: () => string }).toString === 'function') {
+      const s = (raw as { toString: () => string }).toString();
+      if (s && s !== '[object Object]') return s;
+    }
+    return String(raw);
+  }
+
   const onEventUpdate = (entry: EventLogEntry) => {
+    if (entry.dispatchId && (entry.status === 'completed' || entry.status === 'failed')) {
+      sessionDispatchDedupe.delete(entry.dispatchId);
+    }
     // Only merge by stable dispatch id. A fuzzy (skill + topic + running) match would collapse
     // parallel runs (e.g. two `chat` dispatches on different agent slots) into one row and undercount RUN.
     const idx =
@@ -218,16 +242,22 @@ export async function handleServeCommand(args: string[]): Promise<void> {
   };
 
   const enqueueIncomingDispatch = async (event: DispatchEvent) => {
-    if (parseImAgentControlOpFromEnrichedPayload(event.enrichedPayload) != null) {
+    if (resolveImAgentControlOp(event as { imAgentControlOp?: unknown; enrichedPayload?: unknown }, null) != null) {
       void processor.process(event).finally(() => {
         drainQueue();
       });
       return;
     }
+    const key = dispatchEventKey(event);
+    if (key) {
+      if (sessionDispatchDedupe.has(key)) return;
+      sessionDispatchDedupe.add(key);
+    }
     taskQueue.push(event);
     drainQueue();
   };
 
+  const consumerHolder: { ref: EventConsumer | null } = { ref: null };
   const consumer = new EventConsumer({
     serverUrl: config.serverUrl,
     token: executorToken,
@@ -243,6 +273,7 @@ export async function handleServeCommand(args: string[]): Promise<void> {
       updateDisplay();
     },
     onHeartbeat: () => {
+      void consumerHolder.ref?.pollDispatchBacklog();
       updateDisplay();
     },
     onPairingRotated: (payload) => {
@@ -263,6 +294,7 @@ export async function handleServeCommand(args: string[]): Promise<void> {
       updateDisplay();
     },
   });
+  consumerHolder.ref = consumer;
 
   // Graceful shutdown (T025)
   const shutdown = async () => {

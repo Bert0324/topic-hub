@@ -1,4 +1,5 @@
 node_modules/
+**/bundled_modules/
 dist/
 build/
 *.log

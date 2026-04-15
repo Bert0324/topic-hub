@@ -7,8 +7,9 @@
  * - `docs/reference/templates/` ← workspace bootstrap templates (AGENTS.md, …) for embedded gateway
  * - Root `package.json` stub (`name: @topichub/bridge`) for gateway package-root resolution
  * - `extensions/{discord,feishu,telegram,slack}/`
- * - `node_modules/` ← full `packages/bridge/node_modules` (dereferenced)
- * - `node_modules/openclaw/` ← shim: same `dist/` + `exports` as @topichub/bridge but `name: openclaw`
+ * - `bundled_modules/` ← full `packages/bridge/node_modules` (dereferenced, renamed to
+ *   avoid npm's unconditional `node_modules` exclusion during publish)
+ * - `bundled_modules/openclaw/` ← shim: same `dist/` + `exports` as @topichub/bridge but `name: openclaw`
  *   so bundled extensions keep `import "openclaw/plugin-sdk/…"`.
  *
  * Run from repo root: node packages/core/scripts/sync-bridge-vendor.mjs [--bridge]
@@ -115,7 +116,11 @@ function shouldExcludeVendorEntry(name) {
 
 function copyBridgeNodeModulesBundle(vendorBridgeRoot) {
   const from = path.join(bridgeRoot, 'node_modules');
-  const destRoot = path.join(vendorBridgeRoot, 'node_modules');
+  // npm unconditionally excludes directories named `node_modules` from
+  // published tarballs.  Use `bundled_modules` so the files survive publish.
+  // At runtime, bridge-manager creates a `node_modules` symlink pointing here
+  // for Node.js bare-specifier resolution.
+  const destRoot = path.join(vendorBridgeRoot, 'bundled_modules');
   if (!existsSync(from)) {
     console.error(
       'Missing packages/bridge/node_modules (run `pnpm install` from repo root with workspace packages/bridge).',
@@ -273,7 +278,7 @@ function copyWorkspaceTemplatesToVendorRoots(vendorBridgeRoot) {
   }
   const destRoots = [
     vendorBridgeRoot,
-    path.join(vendorBridgeRoot, 'node_modules', 'openclaw'),
+    path.join(vendorBridgeRoot, 'bundled_modules', 'openclaw'),
   ];
   for (const root of destRoots) {
     if (!existsSync(root)) {
@@ -288,7 +293,7 @@ function copyWorkspaceTemplatesToVendorRoots(vendorBridgeRoot) {
 }
 
 function installOpenclawAliasHostIntoVendorNodeModules(vendorBridgeRoot) {
-  const dest = path.join(vendorBridgeRoot, 'node_modules', 'openclaw');
+  const dest = path.join(vendorBridgeRoot, 'bundled_modules', 'openclaw');
   const distFrom = path.join(bridgeRoot, 'dist');
   if (!existsSync(distFrom)) {
     console.error('Missing packages/bridge/dist — build bridge before sync:', distFrom);

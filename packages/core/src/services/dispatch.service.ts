@@ -3,6 +3,7 @@ import { Model } from 'mongoose';
 import mongoose from 'mongoose';
 import { DispatchStatus } from '../common/enums';
 import type { TopicHubLogger } from '../common/logger';
+import { safeCreate } from '../common/safe-create';
 
 /** Minimum configurable claim TTL (ms). */
 const MIN_DISPATCH_CLAIM_TTL_MS = 60_000;
@@ -37,6 +38,8 @@ export interface CreateDispatchDto {
   eventType: string;
   skillName: string;
   enrichedPayload: any;
+  /** When set, duplicated from IM control `extra` — survives strict nested serialization on some stacks. */
+  imAgentControlOp?: 'list' | 'create' | 'delete';
   targetUserId?: string;
   targetExecutorToken?: string;
   sourceChannel?: string;
@@ -78,7 +81,7 @@ export class DispatchService {
    * `enrichedPayload.event.payload` only.
    */
   async create(dto: CreateDispatchDto): Promise<any> {
-    const dispatch = await this.dispatchModel.create({
+    const row: Record<string, unknown> = {
       topicId: new mongoose.Types.ObjectId(dto.topicId),
       eventType: dto.eventType,
       skillName: dto.skillName,
@@ -89,7 +92,15 @@ export class DispatchService {
       targetExecutorToken: dto.targetExecutorToken ?? null,
       sourceChannel: dto.sourceChannel ?? null,
       sourcePlatform: dto.sourcePlatform ?? null,
-    });
+    };
+    if (
+      dto.imAgentControlOp === 'list' ||
+      dto.imAgentControlOp === 'create' ||
+      dto.imAgentControlOp === 'delete'
+    ) {
+      row.imAgentControlOp = dto.imAgentControlOp;
+    }
+    const dispatch = await safeCreate(this.dispatchModel, row);
 
     this.emitter.emit('newDispatch', dispatch);
     this.logger.log(
@@ -167,6 +178,7 @@ export class DispatchService {
       .find(filter)
       .sort({ createdAt: 1 })
       .limit(options?.limit ?? 20)
+      .lean()
       .exec();
   }
 

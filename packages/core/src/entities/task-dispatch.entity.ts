@@ -104,6 +104,10 @@ export class EnrichedPayload {
 
   @prop({ type: () => SkillInstructions })
   skillInstructions?: SkillInstructions;
+
+  /** Mirrors `event.payload.topichubAgentOp` for IM `/agent` dispatches — survives strict nested persistence. */
+  @prop({ type: String, enum: ['list', 'create', 'delete'] })
+  imAgentControlOp?: 'list' | 'create' | 'delete';
 }
 
 @modelOptions({ schemaOptions: { _id: false } })
@@ -149,6 +153,13 @@ export class TaskDispatch {
 
   @prop({ required: true, index: true })
   skillName!: string;
+
+  /**
+   * IM `/agent list|create|delete` — stored at document root so SSE/claim JSON never loses the op
+   * when nested `enrichedPayload.event.payload` is dropped or flattened by a host stack.
+   */
+  @prop({ type: String, enum: ['list', 'create', 'delete'] })
+  imAgentControlOp?: 'list' | 'create' | 'delete';
 
   @prop({ required: true, enum: DispatchStatus, default: DispatchStatus.UNCLAIMED })
   status!: DispatchStatus;

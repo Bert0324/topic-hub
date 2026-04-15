@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { Model } from 'mongoose';
 import type { TopicHubLogger } from '../common/logger';
+import { safeCreate } from '../common/safe-create';
 import { generatePairingCode } from './identity-types';
 
 export interface PairingRotatedPayload {
@@ -21,6 +22,15 @@ export interface ResolvedPlatformUser {
 
 export interface ResolvedClaimTokenUser {
   topichubUserId: string;
+}
+
+/** OpenClaw / IM may label ByteDance chat as `feishu` or `lark`; bindings must resolve either way. */
+function feishuFamilyPlatformFilter(platform: string): { platform: string } | { platform: { $in: string[] } } {
+  const p = platform.trim().toLowerCase();
+  if (p === 'feishu' || p === 'lark') {
+    return { platform: { $in: ['feishu', 'lark'] } };
+  }
+  return { platform };
 }
 
 export class IdentityService {
@@ -60,7 +70,7 @@ export class IdentityService {
     }
 
     const code = generatePairingCode();
-    await this.pairingCodeModel.create({
+    await safeCreate(this.pairingCodeModel, {
       code,
       topichubUserId,
       executorClaimToken,
@@ -135,27 +145,62 @@ export class IdentityService {
     const topichubUserId = pairingCode.topichubUserId;
     const claimToken = pairingCode.executorClaimToken;
 
-    await this.bindingModel
-      .findOneAndUpdate(
-        { platform, platformUserId },
-        {
-          $set: {
-            topichubUserId,
-            claimToken,
-            active: true,
+    const pLo = platform.trim().toLowerCase();
+    const feishuFamily = pLo === 'feishu' || pLo === 'lark';
+    if (feishuFamily) {
+      const existing = await this.bindingModel
+        .findOne({
+          platform: { $in: ['feishu', 'lark'] },
+          platformUserId,
+        })
+        .exec();
+      if (existing) {
+        await this.bindingModel
+          .updateOne(
+            { _id: existing._id },
+            {
+              $set: {
+                topichubUserId,
+                claimToken,
+                active: true,
+                platform: 'feishu',
+              },
+            },
+          )
+          .exec();
+      } else {
+        await safeCreate(this.bindingModel, {
+          platform: 'feishu',
+          platformUserId,
+          topichubUserId,
+          claimToken,
+          active: true,
+        });
+      }
+    } else {
+      await this.bindingModel
+        .findOneAndUpdate(
+          { platform, platformUserId },
+          {
+            $set: {
+              topichubUserId,
+              claimToken,
+              active: true,
+            },
           },
-        },
-        { upsert: true, new: true },
-      )
-      .exec();
+          { upsert: true, new: true },
+        )
+        .exec();
+    }
 
+    const storedPlatform = feishuFamily ? 'feishu' : platform;
     this.logger.log(
-      `Pairing code used for binding: code=${code} user=${topichubUserId} platform=${platform}:${platformUserId}`,
+      `Pairing code used for binding: code=${code} user=${topichubUserId} platform=${storedPlatform}:${platformUserId}`,
     );
 
     return {
       topichubUserId,
-      platform,
+      platform: storedPlatform,
       platformUserId,
     };
   }
@@ -165,7 +210,11 @@ export class IdentityService {
     platformUserId: string,
   ): Promise<ResolvedPlatformUser | undefined> {
     const binding = await this.bindingModel
-      .findOne({ platform, platformUserId, active: true })
+      .findOne({
+        ...feishuFamilyPlatformFilter(platform),
+        platformUserId,
+        active: true,
+      })
       .exec();
 
     if (!binding) return undefined;
@@ -196,7 +245,11 @@ export class IdentityService {
   ): Promise<boolean> {
     const result = await this.bindingModel
       .findOneAndUpdate(
-        { platform, platformUserId, active: true },
+        {
+          ...feishuFamilyPlatformFilter(platform),
+          platformUserId,
+          active: true,
+        },
         { $set: { active: false } },
       )
       .exec();
@@ -229,5 +282,25 @@ export class IdentityService {
     return this.bindingModel
       .find({ topichubUserId, active: true })
       .exec();
+  }
+
+  /**
+   * When `serve` registers a new executor session, IM dispatches use the binding document's `claimToken`
+   * as `targetExecutorToken`. Without updating bindings, a restart would leave them on the old token and
+   * `dispatches.list` for the new token would stay empty until the user runs `/register` again.
+   */
+  async repointActiveBindingsClaimToken(
+    topichubUserId: string,
+    claimToken: string,
+  ): Promise<number> {
+    const r = await this.bindingModel
+      .updateMany({ topichubUserId, active: true }, { $set: { claimToken } })
+      .exec();
+    if (r.modifiedCount > 0) {
+      this.logger.log(
+        `Repointed ${r.modifiedCount} IM binding(s) to new executor token for identity ${topichubUserId}`,
+      );
+    }
+    return r.modifiedCount;
   }
 }

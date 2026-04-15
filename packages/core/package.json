@@ -1,6 +1,6 @@
 {
   "name": "topichub-core",
-  "version": "0.0.21",
+  "version": "0.0.29",
   "description": "Framework-agnostic core library for TopicHub - event topic management, skill pipeline, and AI-driven workflows",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -20,7 +20,7 @@
     "vendor/bridge/dist/",
     "vendor/bridge/docs/",
     "vendor/bridge/extensions/",
-    "vendor/bridge/node_modules/",
+    "vendor/bridge/bundled_modules/",
     "README.md"
   ],
   "scripts": {

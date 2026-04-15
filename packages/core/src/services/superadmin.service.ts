@@ -1,6 +1,7 @@
 import { Model } from 'mongoose';
 import type { TopicHubLogger } from '../common/logger';
 import { ConflictError, NotFoundError, UnauthorizedError } from '../common/errors';
+import { safeCreate, safeSave } from '../common/safe-create';
 import {
   generateSuperadminToken,
   generateIdentityToken,
@@ -37,7 +38,7 @@ export class SuperadminService {
     }
 
     const token = generateSuperadminToken();
-    const identity = await this.identityModel.create({
+    const identity = await safeCreate(this.identityModel, {
       uniqueId: 'superadmin',
       displayName: 'Super Admin',
       token,
@@ -78,7 +79,7 @@ export class SuperadminService {
     }
 
     const token = generateIdentityToken();
-    const identity = await this.identityModel.create({
+    const identity = await safeCreate(this.identityModel, {
       uniqueId: input.uniqueId,
       displayName: input.displayName,
       token,
@@ -133,7 +134,7 @@ export class SuperadminService {
     }
 
     identity.status = IDENTITY_STATUS.REVOKED;
-    await identity.save();
+    await safeSave(identity);
 
     const result = await this.executorModel.updateMany(
       { identityId, status: EXECUTOR_STATUS.ACTIVE },
@@ -156,7 +157,7 @@ export class SuperadminService {
       : generateIdentityToken();
 
     identity.token = newToken;
-    await identity.save();
+    await safeSave(identity);
 
     const result = await this.executorModel.updateMany(
       { identityId, status: EXECUTOR_STATUS.ACTIVE },
@@ -180,9 +181,22 @@ export class SuperadminService {
       throw new UnauthorizedError('Invalid or revoked identity token');
     }
 
+    const idStr = identity._id.toString();
+    const revoked = await this.executorModel
+      .updateMany(
+        { identityId: idStr, status: EXECUTOR_STATUS.ACTIVE },
+        { $set: { status: EXECUTOR_STATUS.REVOKED } },
+      )
+      .exec();
+    if (revoked.modifiedCount > 0) {
+      this.logger.log(
+        `Revoked ${revoked.modifiedCount} prior executor session(s) for identity ${identity.uniqueId}`,
+      );
+    }
+
     const executorToken = generateExecutorToken();
-    await this.executorModel.create({
-      identityId: identity._id.toString(),
+    await safeCreate(this.executorModel, {
+      identityId: idStr,
       executorToken,
       status: EXECUTOR_STATUS.ACTIVE,
       lastSeenAt: new Date(),
@@ -193,7 +207,7 @@ export class SuperadminService {
 
     return {
       executorToken,
-      identityId: identity._id.toString(),
+      identityId: idStr,
       identityUniqueId: identity.uniqueId,
     };
   }

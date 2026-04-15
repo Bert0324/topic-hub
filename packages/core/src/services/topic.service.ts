@@ -2,6 +2,7 @@ import { Model } from 'mongoose';
 import { TopicStatus, TimelineActionType } from '../common/enums';
 import { ConflictError, ValidationError } from '../common/errors';
 import type { TopicHubLogger } from '../common/logger';
+import { safeCreate, safeSave } from '../common/safe-create';
 
 export interface CreateTopicData {
   type: string;
@@ -43,7 +44,7 @@ export class TopicService {
       }
     }
 
-    const topic = await this.topicModel.create({
+    const topic = await safeCreate(this.topicModel, {
       type: data.type,
       title: data.title,
       sourceUrl: data.sourceUrl,
@@ -60,7 +61,7 @@ export class TopicService {
         : [],
     });
 
-    await this.timelineModel.create({
+    await safeCreate(this.timelineModel, {
       topicId: topic._id,
       actor: data.createdBy,
       actionType: TimelineActionType.CREATED,
@@ -105,9 +106,9 @@ export class TopicService {
       topic.closedAt = undefined;
     }
 
-    await topic.save();
+    await safeSave(topic);
 
-    await this.timelineModel.create({
+    await safeCreate(this.timelineModel, {
       topicId: topic._id,
       actor,
       actionType:
@@ -134,7 +135,7 @@ export class TopicService {
       .exec();
 
     if (topic) {
-      await this.timelineModel.create({
+      await safeCreate(this.timelineModel, {
         topicId: topic._id,
         actor,
         actionType: TimelineActionType.ASSIGNED,
@@ -155,7 +156,7 @@ export class TopicService {
       .exec();
 
     if (topic) {
-      await this.timelineModel.create({
+      await safeCreate(this.timelineModel, {
         topicId: topic._id,
         actor,
         actionType: TimelineActionType.TAG_ADDED,
@@ -176,7 +177,7 @@ export class TopicService {
       .exec();
 
     if (topic) {
-      await this.timelineModel.create({
+      await safeCreate(this.timelineModel, {
         topicId: topic._id,
         actor,
         actionType: TimelineActionType.TAG_REMOVED,
@@ -201,7 +202,7 @@ export class TopicService {
       .exec();
 
     if (topic) {
-      await this.timelineModel.create({
+      await safeCreate(this.timelineModel, {
         topicId: topic._id,
         actor,
         actionType: TimelineActionType.SIGNAL_ATTACHED,

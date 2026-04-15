@@ -29,6 +29,8 @@ export interface ServeStatus {
   pairingWarning: string | null;
   /** Ephemeral banner after server-side pairing rotation (e.g. code exposed in a group). */
   pairingRotatedNotice: string | null;
+  /** How local `serve` pulls dispatches from Mongo when API has multiple replicas (see TOPICHUB_DISPATCH_POLL_MS). */
+  dispatchBacklogHint?: string;
   events: EventLogEntry[];
   startedAt: Date;
   counters: { completed: number; running: number; failed: number };
@@ -150,6 +152,9 @@ export function renderStatus(status: ServeStatus): void {
     );
   } else if (status.pairingWarning) {
     console.log(`  ${warn}IM bind: ${status.pairingWarning}${rst}`);
+  }
+  if (status.dispatchBacklogHint) {
+    console.log(`${dim}  ${status.dispatchBacklogHint}${rst}`);
   }
   console.log();
 

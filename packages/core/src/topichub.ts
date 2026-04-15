@@ -82,6 +82,8 @@ import {
 import { OpenClawBridge } from './bridge/openclaw-bridge';
 import { BridgeManager } from './bridge/bridge-manager';
 import { EmbeddedBridgeCluster } from './bridge/embedded-bridge-leader';
+import { OpenClawQueuedSendBridge, startOpenClawSendQueuePoller } from './bridge/openclaw-send-queue';
+import { OpenClawSendQueueEntry } from './entities/openclaw-send-queue.entity';
 import { assertLeaderImConnectivityChecks } from './bridge/leader-im-connectivity';
 import type { TopicHubBridgeConfig } from './bridge/openclaw-types';
 import { NativeIntegrationGateway } from './gateway/native-integration-gateway';
@@ -264,6 +266,7 @@ export interface IdentityOperations {
   deactivateBinding(platform: string, platformUserId: string): Promise<boolean>;
   deactivateAllBindings(claimToken: string): Promise<number>;
   getBindingsForUser(topichubUserId: string): Promise<any[]>;
+  repointActiveBindingsClaimToken(topichubUserId: string, claimToken: string): Promise<number>;
   subscribePairingRotations(
     executorToken: string,
     handler: (payload: PairingRotatedPayload) => void,
@@ -370,41 +373,99 @@ export class TopicHub {
 
     let connection: mongoose.Connection;
     let ownsConnection: boolean;
-    if (validated.mongoConnection) {
+    let TopicModel: mongoose.Model<any>;
+    let TimelineEntryModel: mongoose.Model<any>;
+    let SkillRegistrationModel: mongoose.Model<any>;
+    let TaskDispatchModel: mongoose.Model<any>;
+    let UserIdentityBindingModel: mongoose.Model<any>;
+    let PairingCodeModel: mongoose.Model<any>;
+    let ExecutorHeartbeatModel: mongoose.Model<any>;
+    let QaExchangeModel: mongoose.Model<any>;
+    let IdentityModel: mongoose.Model<any>;
+    let ImIdentityLinkModel: mongoose.Model<any>;
+    let ExecutorRegistrationModel: mongoose.Model<any>;
+    let ImBindingModel: mongoose.Model<any>;
+    let SkillLikeModel: mongoose.Model<any>;
+    let SkillUsageModel: mongoose.Model<any>;
+    let OpenClawSendQueueModel: mongoose.Model<any>;
+
+    const p = validated.collectionPrefix ?? '';
+
+    if (validated.mongoAdapter) {
+      const a = validated.mongoAdapter;
+      connection = a.connection;
+      ownsConnection = a.ownsConnection === true;
+      const { host, port, name: dbName } = connection;
+      mainLogger.log(`MongoDB (host adapter): ${host}:${port}/${dbName}`);
+      TopicModel = a.models.TopicModel;
+      TimelineEntryModel = a.models.TimelineEntryModel;
+      SkillRegistrationModel = a.models.SkillRegistrationModel;
+      TaskDispatchModel = a.models.TaskDispatchModel;
+      UserIdentityBindingModel = a.models.UserIdentityBindingModel;
+      PairingCodeModel = a.models.PairingCodeModel;
+      ExecutorHeartbeatModel = a.models.ExecutorHeartbeatModel;
+      QaExchangeModel = a.models.QaExchangeModel;
+      IdentityModel = a.models.IdentityModel;
+      ImIdentityLinkModel = a.models.ImIdentityLinkModel;
+      ExecutorRegistrationModel = a.models.ExecutorRegistrationModel;
+      ImBindingModel = a.models.ImBindingModel;
+      SkillLikeModel = a.models.SkillLikeModel;
+      SkillUsageModel = a.models.SkillUsageModel;
+      OpenClawSendQueueModel = a.models.OpenClawSendQueueModel;
+    } else if (validated.mongoConnection) {
       connection = validated.mongoConnection;
       ownsConnection = false;
+      const { host, port, name: dbName } = connection;
+      mainLogger.log(`MongoDB connected: ${host}:${port}/${dbName}`);
+      const model = <T extends new (...args: any[]) => any>(cls: T, collection: string) =>
+        getModelForClass(cls, {
+          existingConnection: connection,
+          schemaOptions: { collection: `${p}${collection}` },
+        });
+      TopicModel = model(Topic, 'topics');
+      TimelineEntryModel = model(TimelineEntry, 'timeline_entries');
+      SkillRegistrationModel = model(SkillRegistration, 'skill_registrations');
+      TaskDispatchModel = model(TaskDispatch, 'task_dispatches');
+      UserIdentityBindingModel = model(UserIdentityBinding, 'user_identity_bindings');
+      PairingCodeModel = model(PairingCode, 'pairing_codes');
+      ExecutorHeartbeatModel = model(ExecutorHeartbeat, 'executor_heartbeats');
+      QaExchangeModel = model(QaExchange, 'qa_exchanges');
+      IdentityModel = model(Identity, 'identities');
+      ImIdentityLinkModel = model(ImIdentityLink, 'im_identity_links');
+      ExecutorRegistrationModel = model(ExecutorRegistration, 'executor_registrations');
+      ImBindingModel = model(ImBinding, 'im_bindings');
+      SkillLikeModel = model(SkillLike, 'skill_likes');
+      SkillUsageModel = model(SkillUsage, 'skill_usages');
+      OpenClawSendQueueModel = model(OpenClawSendQueueEntry, 'openclaw_send_queue');
     } else {
       const masked = validated.mongoUri!.replace(/:\/\/([^:]+):([^@]+)@/, '://$1:***@');
       mainLogger.log(`MongoDB connecting: ${masked}`);
       connection = mongoose.createConnection(validated.mongoUri!);
       await connection.asPromise();
       ownsConnection = true;
+      const { host, port, name: dbName } = connection;
+      mainLogger.log(`MongoDB connected: ${host}:${port}/${dbName}`);
+      const model = <T extends new (...args: any[]) => any>(cls: T, collection: string) =>
+        getModelForClass(cls, {
+          existingConnection: connection,
+          schemaOptions: { collection: `${p}${collection}` },
+        });
+      TopicModel = model(Topic, 'topics');
+      TimelineEntryModel = model(TimelineEntry, 'timeline_entries');
+      SkillRegistrationModel = model(SkillRegistration, 'skill_registrations');
+      TaskDispatchModel = model(TaskDispatch, 'task_dispatches');
+      UserIdentityBindingModel = model(UserIdentityBinding, 'user_identity_bindings');
+      PairingCodeModel = model(PairingCode, 'pairing_codes');
+      ExecutorHeartbeatModel = model(ExecutorHeartbeat, 'executor_heartbeats');
+      QaExchangeModel = model(QaExchange, 'qa_exchanges');
+      IdentityModel = model(Identity, 'identities');
+      ImIdentityLinkModel = model(ImIdentityLink, 'im_identity_links');
+      ExecutorRegistrationModel = model(ExecutorRegistration, 'executor_registrations');
+      ImBindingModel = model(ImBinding, 'im_bindings');
+      SkillLikeModel = model(SkillLike, 'skill_likes');
+      SkillUsageModel = model(SkillUsage, 'skill_usages');
+      OpenClawSendQueueModel = model(OpenClawSendQueueEntry, 'openclaw_send_queue');
     }
-
-    const { host, port, name: dbName } = connection;
-    mainLogger.log(`MongoDB connected: ${host}:${port}/${dbName}`);
-
-    const p = validated.collectionPrefix ?? '';
-    const model = <T extends new (...args: any[]) => any>(cls: T, collection: string) =>
-      getModelForClass(cls, {
-        existingConnection: connection,
-        schemaOptions: { collection: `${p}${collection}` },
-      });
-
-    const TopicModel = model(Topic, 'topics');
-    const TimelineEntryModel = model(TimelineEntry, 'timeline_entries');
-    const SkillRegistrationModel = model(SkillRegistration, 'skill_registrations');
-    const TaskDispatchModel = model(TaskDispatch, 'task_dispatches');
-    const UserIdentityBindingModel = model(UserIdentityBinding, 'user_identity_bindings');
-    const PairingCodeModel = model(PairingCode, 'pairing_codes');
-    const ExecutorHeartbeatModel = model(ExecutorHeartbeat, 'executor_heartbeats');
-    const QaExchangeModel = model(QaExchange, 'qa_exchanges');
-    const IdentityModel = model(Identity, 'identities');
-    const ImIdentityLinkModel = model(ImIdentityLink, 'im_identity_links');
-    const ExecutorRegistrationModel = model(ExecutorRegistration, 'executor_registrations');
-    const ImBindingModel = model(ImBinding, 'im_bindings');
-    const SkillLikeModel = model(SkillLike, 'skill_likes');
-    const SkillUsageModel = model(SkillUsage, 'skill_usages');
 
     const publishedSkillCatalog = new PublishedSkillCatalog(
       SkillRegistrationModel,
@@ -450,15 +511,13 @@ export class TopicHub {
         const cluster = new EmbeddedBridgeCluster(connection, leaderCollection, loggerFactory('EmbeddedBridge'));
         const joined = await cluster.join();
 
-        if (!joined.isLeader && !bridgeCfg.publicGatewayBaseUrl?.trim()) {
-          throw new TopicHubError(
-            'This instance is not the embedded OpenClaw lease leader. Set bridge.publicGatewayBaseUrl ' +
-              '(or TOPICHUB_PUBLIC_GATEWAY_BASE_URL) to the public HTTP origin of the leader instance ' +
-              '(the same URL IM webhooks use), e.g. http://127.0.0.1:3000 when the leader listens on 3000.',
-          );
-        }
-
         bridgeSlot.embeddedBridgePostShutdown = joined.postGatewayShutdown;
+
+        const mp = bridgeCfg.mountPath.startsWith('/') ? bridgeCfg.mountPath : `/${bridgeCfg.mountPath}`;
+        const trimmedMount = mp.replace(/\/+$/, '');
+        const localGatewayBase = `http://127.0.0.1:${bridgeCfg.listenPort}${trimmedMount}`;
+
+        let stopSendQueuePoller: (() => void) | undefined;
 
         if (joined.isLeader) {
           try {
@@ -486,26 +545,47 @@ export class TopicHub {
             if (e instanceof Error) err.cause = e;
             throw err;
           }
+          stopSendQueuePoller = startOpenClawSendQueuePoller({
+            queueModel: OpenClawSendQueueModel,
+            gatewayBaseUrl: localGatewayBase,
+            token: joined.webhookSecret,
+            logger: loggerFactory('OpenClawSendQueue'),
+          });
         }
 
-        const publicBase =
-          bridgeCfg.publicGatewayBaseUrl?.replace(/\/+$/, '') ??
-          `http://127.0.0.1:${bridgeCfg.listenPort}`;
-        const mp = bridgeCfg.mountPath.startsWith('/') ? bridgeCfg.mountPath : `/${bridgeCfg.mountPath}`;
-        const gatewayBase = `${publicBase}${mp.replace(/\/+$/, '')}`;
-        bridgeSlot.bridge = OpenClawBridge.forEmbeddedGateway({
-          gatewayBaseUrl: gatewayBase,
-          webhookSecret: joined.webhookSecret,
-          platforms: Object.keys(bridgeCfg.channels),
-          logger: loggerFactory('OpenClawBridge'),
-        });
+        const innerPostShutdown = bridgeSlot.embeddedBridgePostShutdown;
+        bridgeSlot.embeddedBridgePostShutdown = async () => {
+          stopSendQueuePoller?.();
+          stopSendQueuePoller = undefined;
+          await innerPostShutdown();
+        };
+
+        if (joined.isLeader) {
+          bridgeSlot.bridge = OpenClawBridge.forEmbeddedGateway({
+            gatewayBaseUrl: localGatewayBase,
+            webhookSecret: joined.webhookSecret,
+            platforms: Object.keys(bridgeCfg.channels),
+            logger: loggerFactory('OpenClawBridge'),
+          });
+        } else {
+          bridgeSlot.bridge = OpenClawQueuedSendBridge.forFollower({
+            gatewayBaseUrl: localGatewayBase,
+            webhookSecret: joined.webhookSecret,
+            platforms: Object.keys(bridgeCfg.channels),
+            logger: loggerFactory('OpenClawBridge'),
+            queueModel: OpenClawSendQueueModel,
+          });
+        }
+
         mainLogger.log(
           joined.isLeader
             ? `OpenClaw bridge embedded — IM messaging enabled (this process runs the gateway)\n` +
-              `  gatewayBase = ${gatewayBase}\n` +
-              `  webhookUrl  = ${bridgeCfg.webhookUrl}\n` +
-              `  channels    = ${Object.keys(bridgeCfg.channels).join(', ')}`
-            : 'OpenClaw bridge client enabled — IM outbound uses the shared gateway on the lease leader',
+              `  gatewayBase (local) = ${localGatewayBase}\n` +
+              `  send queue           = ${p}openclaw_send_queue (followers enqueue; leader drains)\n` +
+              `  webhookUrl           = ${bridgeCfg.webhookUrl}\n` +
+              `  channels             = ${Object.keys(bridgeCfg.channels).join(', ')}`
+            : `OpenClaw bridge client (follower) — outbound sends via Mongo queue → lease leader\n` +
+              `  queue collection = ${p}openclaw_send_queue`,
         );
       };
 
@@ -1051,7 +1131,10 @@ export class TopicHub {
       claim: async (taskId, claimedBy, executorToken) => {
         const result = await this.dispatchService.claim(taskId, claimedBy, executorToken);
         if (result && result.sourceChannel && result.sourcePlatform && this.bridgeSlot.bridge) {
-          const claimLine = formatImClaimRunningMessage(result.enrichedPayload);
+          const claimLine = formatImClaimRunningMessage({
+            enrichedPayload: result.enrichedPayload,
+            imAgentControlOp: (result as { imAgentControlOp?: unknown }).imAgentControlOp,
+          });
           this.bridgeSlot.bridge
             .sendMessage(result.sourcePlatform, result.sourceChannel, claimLine)
             .catch((err) => this.logger.error('IM claim notification failed', String(err)));
@@ -1074,7 +1157,10 @@ export class TopicHub {
           if (!platform || !channel || !this.bridgeSlot.bridge) {
             return { ok: false };
           }
-          const line = formatImClaimQueuedMessage(doc.enrichedPayload);
+          const line = formatImClaimQueuedMessage({
+            enrichedPayload: doc.enrichedPayload,
+            imAgentControlOp: (doc as { imAgentControlOp?: unknown }).imAgentControlOp,
+          });
           const sent = await this.bridgeSlot.bridge.sendMessage(platform, channel, line);
           return { ok: sent };
         } catch (err) {
@@ -1152,6 +1238,8 @@ export class TopicHub {
         this.identityService.deactivateAllBindings(claimToken),
       getBindingsForUser: (topichubUserId) =>
         this.identityService.getBindingsForUser(topichubUserId),
+      repointActiveBindingsClaimToken: (topichubUserId, claimToken) =>
+        this.identityService.repointActiveBindingsClaimToken(topichubUserId, claimToken),
       subscribePairingRotations: (executorToken, handler) =>
         this.identityService.subscribePairingRotations(executorToken, handler),
     };
